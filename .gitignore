@@ -1,0 +1,16 @@
+# Secrets / lokale Konfiguration
+.env
+.env.*
+!.env.example
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Temp
+tmp/
+*.log
