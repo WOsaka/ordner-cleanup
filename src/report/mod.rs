@@ -2,11 +2,14 @@
 
 mod build;
 pub mod csv;
+pub mod html;
 pub mod json;
 pub mod terminal;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_html;
 #[cfg(test)]
 mod tests_more;
 
@@ -306,7 +309,7 @@ pub fn write_all(report: &Report, formats: &[Format], dir: &Path) -> Result<Vec<
         match format {
             Format::Json => written.push(json::write(report, dir)?),
             Format::Csv => written.extend(csv::write(report, dir)?),
-            Format::Html => {}
+            Format::Html => written.push(html::write(report, dir)?),
         }
     }
     Ok(written)

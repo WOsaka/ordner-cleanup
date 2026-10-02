@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+askama = "0.16.1"
 bytesize = "2.7.0"
 chrono = "0.4.45"
 clap = { version = "4", features = ["derive"] }
