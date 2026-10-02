@@ -1,6 +1,6 @@
 ---
 title: "Scan & Analyse-Bericht (Phase 1)"
-status: draft          # draft | approved | implemented
+status: approved       # draft | approved | implemented
 created: 2026-10-02
 updated: 2026-10-02
 ---
