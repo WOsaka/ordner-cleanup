@@ -21,6 +21,7 @@ fn run(index: &mut Index, source: &dyn DirSource, cancel: bool) -> ScanOutcome {
         default_paths: &DefaultPaths::default(),
         cancel: &AtomicBool::new(cancel),
         progress: &Progress::default(),
+        find_duplicates: false,
         now: "t",
     };
     scan(index, Path::new(r"C:\R"), &env).unwrap()

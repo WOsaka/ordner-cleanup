@@ -1,7 +1,11 @@
 pub mod classify;
+pub mod duplicates;
+pub mod hasher;
 pub mod source;
 pub mod walker;
 
+#[cfg(test)]
+mod duplicates_tests;
 #[cfg(test)]
 mod incremental_tests;
 
@@ -15,6 +19,7 @@ use crate::config::Config;
 use crate::index::{DirRecord, FileRecord, Index, RootRun, RootStatus};
 use crate::paths;
 use classify::{Classifier, DefaultPaths};
+use duplicates::HashStats;
 use source::DirSource;
 use walker::{Progress, ScanEvent, WalkCtx};
 
@@ -28,6 +33,7 @@ pub struct ScanOutcome {
     pub bytes: u64,
     pub errors: u64,
     pub aborted: bool,
+    pub hash: HashStats,
 }
 
 /// Umgebung eines Scans (alles außer Index und Wurzel).
@@ -37,6 +43,8 @@ pub struct ScanEnv<'a> {
     pub default_paths: &'a DefaultPaths,
     pub cancel: &'a AtomicBool,
     pub progress: &'a Progress,
+    /// Nach dem Scan Duplikat-Kandidaten hashen.
+    pub find_duplicates: bool,
     pub now: &'a str,
 }
 
@@ -49,6 +57,7 @@ pub fn scan(index: &mut Index, root: &Path, env: &ScanEnv<'_>) -> Result<ScanOut
         default_paths,
         cancel,
         progress,
+        find_duplicates,
         now,
     } = *env;
     let classifier = Classifier::new(root, config, default_paths)?;
@@ -86,12 +95,19 @@ pub fn scan(index: &mut Index, root: &Path, env: &ScanEnv<'_>) -> Result<ScanOut
     };
     index.finish_root(&run, status, errors as i64, now)?;
     written?;
+    // Hash-Phase erst nach dem Prune, damit verschwundene Dateien nicht gehasht werden.
+    let hash = if find_duplicates && !aborted {
+        duplicates::run(index, &pool, &run, cancel)?
+    } else {
+        HashStats::default()
+    };
     Ok(ScanOutcome {
         files: progress.files.load(Ordering::Relaxed),
         dirs: progress.dirs.load(Ordering::Relaxed),
         bytes: progress.bytes.load(Ordering::Relaxed),
-        errors,
-        aborted,
+        errors: errors + hash.locked + hash.changed + hash.errors,
+        aborted: aborted || cancel.load(Ordering::Relaxed),
+        hash,
     })
 }
 
@@ -174,6 +190,7 @@ mod tests {
             default_paths: &DefaultPaths::default(),
             cancel,
             progress: &Progress::default(),
+            find_duplicates: false,
             now: "t",
         };
         scan(index, Path::new(root), &env).unwrap()

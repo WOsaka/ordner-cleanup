@@ -1,9 +1,11 @@
+mod dups;
 mod store;
 
 use std::path::Path;
 
 use rusqlite::Connection;
 
+pub use dups::{DupFile, DupGroup, HashCandidate, HashUpdate};
 pub use store::{DirRecord, FileRecord, PrevFile, RootInfo, RootRun, RootStatus, ScanErrorRecord};
 
 pub const SCHEMA_VERSION: i64 = 1;
