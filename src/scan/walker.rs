@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -7,7 +8,7 @@ use crossbeam_channel::Sender;
 
 use super::classify::{Classifier, DirMode};
 use super::source::{DirSource, EntryKind, RawEntry};
-use crate::index::{DirRecord, FileRecord, ScanErrorRecord};
+use crate::index::{DirRecord, FileRecord, PrevFile, ScanErrorRecord};
 use crate::paths;
 
 pub enum ScanEvent {
@@ -31,6 +32,8 @@ pub struct WalkCtx<'a> {
     pub classifier: &'a Classifier,
     pub cancel: &'a AtomicBool,
     pub progress: &'a Progress,
+    /// Vorzustand aus dem Index; unveränderte Dateien behalten ihre Hashes.
+    pub prev: &'a HashMap<String, PrevFile>,
     pub tx: &'a Sender<ScanEvent>,
 }
 
@@ -124,10 +127,10 @@ fn visit<'s>(
                 if ctx.classifier.is_excluded_file(&child) {
                     continue;
                 }
-                files.push(file_record(&dir_key, &child, entry, false));
+                files.push(file_record(ctx, &dir_key, &child, entry, false));
             }
             EntryKind::Link { dir: false } => {
-                files.push(file_record(&dir_key, &child, entry, true))
+                files.push(file_record(ctx, &dir_key, &child, entry, true))
             }
             EntryKind::Link { dir: true } => ctx.send(ScanEvent::Dir(DirRecord {
                 path: paths::display(&child),
@@ -178,24 +181,41 @@ fn visit<'s>(
     ctx.send(ScanEvent::Dir(record));
 }
 
-fn file_record(dir_key: &str, path: &Path, entry: &RawEntry, is_link: bool) -> FileRecord {
+fn file_record(
+    ctx: &WalkCtx<'_>,
+    dir_key: &str,
+    path: &Path,
+    entry: &RawEntry,
+    is_link: bool,
+) -> FileRecord {
+    let path_key = paths::path_key(path);
+    let size = if is_link { 0 } else { entry.size as i64 };
+    // Hashes nur übernehmen, wenn Größe und Änderungsdatum gleich sind und der letzte
+    // Versuch nicht fehlgeschlagen ist (gesperrte Dateien werden erneut versucht).
+    let carried = ctx.prev.get(&path_key).filter(|p| {
+        p.size == size
+            && p.mtime == entry.mtime
+            && matches!(p.hash_status.as_deref(), None | Some("ok"))
+    });
     let name = entry.name.to_string_lossy().into_owned();
     FileRecord {
         dir_key: dir_key.to_string(),
         path: paths::display(path),
-        path_key: paths::path_key(path),
+        path_key,
         ext: Path::new(&name)
             .extension()
             .map(|e| e.to_string_lossy().to_lowercase()),
         name,
-        size: if is_link { 0 } else { entry.size as i64 },
+        size,
         mtime: entry.mtime,
         ctime: Some(entry.ctime),
         attrs: entry.attrs.0,
         cloud_only: !is_link && entry.attrs.is_cloud_only(),
         is_link,
         link_target: entry.link_target.clone(),
-        ..FileRecord::default()
+        partial_hash: carried.and_then(|p| p.partial_hash.clone()),
+        full_hash: carried.and_then(|p| p.full_hash.clone()),
+        hash_status: carried.and_then(|p| p.hash_status.clone()),
     }
 }
 

@@ -254,4 +254,34 @@ mod tests {
         let z = listing.entries.iter().find(|e| e.name == "ziel").unwrap();
         assert_eq!(z.kind, EntryKind::Dir);
     }
+
+    /// Manueller Spike (`ORDNER_CLEANUP_SPIKE_DIR=<pfad> cargo test spike -- --ignored --nocapture`):
+    /// zeigt, wie `std` Cloud-Platzhalter und Links in einem echten OneDrive-Ordner einordnet.
+    #[test]
+    #[ignore]
+    fn spike_onedrive_einordnung() {
+        let Some(dir) = std::env::var_os("ORDNER_CLEANUP_SPIKE_DIR") else {
+            return;
+        };
+        let listing = StdDirSource.read_dir(Path::new(&dir)).unwrap();
+        let (mut cloud, mut links, mut files, mut dirs) = (0, 0, 0, 0);
+        for e in &listing.entries {
+            match e.kind {
+                EntryKind::Link { .. } => links += 1,
+                EntryKind::Dir => dirs += 1,
+                EntryKind::File => files += 1,
+            }
+            if e.attrs.is_cloud_only() {
+                cloud += 1;
+                println!(
+                    "cloud-only: {:?} kind={:?} attrs={:#x}",
+                    e.name, e.kind, e.attrs.0
+                );
+            }
+        }
+        println!(
+            "files={files} dirs={dirs} links={links} cloud_only={cloud} errors={}",
+            listing.errors.len()
+        );
+    }
 }

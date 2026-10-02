@@ -2,6 +2,9 @@ pub mod classify;
 pub mod source;
 pub mod walker;
 
+#[cfg(test)]
+mod incremental_tests;
+
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -49,6 +52,7 @@ pub fn scan(index: &mut Index, root: &Path, env: &ScanEnv<'_>) -> Result<ScanOut
         now,
     } = *env;
     let classifier = Classifier::new(root, config, default_paths)?;
+    let prev = index.load_previous(&paths::dir_key(root))?;
     let run = index.begin_root(&paths::display(root), &paths::dir_key(root), now)?;
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(config.threads)
@@ -64,6 +68,7 @@ pub fn scan(index: &mut Index, root: &Path, env: &ScanEnv<'_>) -> Result<ScanOut
                 classifier: &classifier,
                 cancel,
                 progress,
+                prev: &prev,
                 tx: &tx,
             };
             pool.install(|| walker::walk(&ctx, root));
