@@ -1,17 +1,15 @@
 # ordner-cleanup — Claude Code Instructions
 
-> TODO: Abschnitt „Tech-Stack & Befehle“ ausfüllen, sobald der Stack feststeht.
-
 ## Projekt
 
 Strukturierung und Bereinigung von Ordnersystemen auf dem PC (Analyse, Aufräumen, Neuorganisation von Verzeichnissen). Details und Scope werden per `/feature:spec` festgelegt.
 
 ## Tech-Stack & Befehle
 
-- Sprache/Framework: <…>
-- Tests: `<Befehl>`
-- Lint/Format: `<Befehl>`
-- Start lokal: `<Befehl>`
+- Sprache/Framework: Rust (CLI), nur Windows 10/11
+- Tests: `cargo test`
+- Lint/Format: `cargo clippy -- -D warnings` / `cargo fmt`
+- Start lokal: `cargo run -- <scan|report> …`
 
 ## Projektstruktur
 
@@ -22,6 +20,7 @@ Strukturierung und Bereinigung von Ordnersystemen auf dem PC (Analyse, Aufräume
     debug/          # Debugging-Workflow
   templates/        # MD-Vorlagen für die Skills
 docs/
+  roadmap.md              # Feature-Ideen & Priorisierung
   features/               # Feature-Specs (.md)
   implementation-plans/   # Implementierungspläne (.md)
   bugs/                   # Bug-Analysen und Fix-Pläne (.md)
