@@ -1,10 +1,10 @@
-# <Projektname> — Claude Code Instructions
+# ordner-cleanup — Claude Code Instructions
 
-> Template: Platzhalter `<…>` ersetzen und Abschnitte „Projekt“ und „Tech-Stack“ ausfüllen.
+> TODO: Abschnitt „Tech-Stack & Befehle“ ausfüllen, sobald der Stack feststeht.
 
 ## Projekt
 
-<Ein bis zwei Sätze: Was macht das Projekt, für wen?>
+Strukturierung und Bereinigung von Ordnersystemen auf dem PC (Analyse, Aufräumen, Neuorganisation von Verzeichnissen). Details und Scope werden per `/feature:spec` festgelegt.
 
 ## Tech-Stack & Befehle
 
