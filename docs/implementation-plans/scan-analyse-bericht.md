@@ -1,12 +1,19 @@
 ---
 title: "Implementation Plan: Scan & Analyse-Bericht (Phase 1)"
 feature_spec: docs/features/scan-analyse-bericht.md
-status: pending-approval   # pending-approval | approved | implemented
+status: approved           # pending-approval | approved | implemented
 created: 2026-10-02
 updated: 2026-10-02
 ---
 
 # Implementation Plan: Scan & Analyse-Bericht (Phase 1)
+
+## Entscheidungen (2026-10-02)
+- **Toolchain:** MSVC (`x86_64-pc-windows-msvc`) + Visual Studio Build Tools. Die Nutzung ist durch das öffentliche Open-Source-Repo abgedeckt.
+- **Installation:** Claude installiert Rust und die Build Tools per `winget` (Schritt 0).
+- **Cloud-only-Ordner:** Ordner werden aufgelistet. Dass OneDrive dabei die Dateiliste (nur Metadaten) nachlädt, ist akzeptiert. Es gibt kein `--skip-cloud-dirs`.
+- **CSV:** `;`-getrennt, UTF-8 mit BOM, ohne Flag für das Trennzeichen.
+- **Umsetzung:** schrittweise mit Checkpoints nach den Meilensteinen Gerüst (Schritt 1), Scan (Schritt 6), Duplikate (Schritt 7) und Bericht (Schritt 10).
 
 ## Summary
 Neues Rust-Projekt (Cargo, Binary + Library-Crate für Testbarkeit), nur für Windows. `scan` läuft den Baum parallel ab: Die Worker lesen Verzeichnisse über `std::fs::read_dir`, das unter Windows die Find-Daten liefert, ohne Dateien zu öffnen. Ein einzelner Writer-Thread schreibt die Ergebnisse in Batches und Transaktionen in einen SQLite-Index (`rusqlite`, gebündeltes SQLite).
@@ -175,7 +182,7 @@ Umsetzung testgetrieben (Skill `test-driven-development`): pro Schritt zuerst di
 0. **Toolchain bereitstellen** (einmalig, auf dem Rechner)
    - Visual Studio Build Tools mit Workload „Desktopentwicklung mit C++“ (MSVC-Linker + Windows SDK). Wird für das MSVC-Target und das gebündelte SQLite (C-Code) gebraucht. Installation: `winget install Microsoft.VisualStudio.2022.BuildTools` mit Workload `Microsoft.VisualStudio.Workload.VCTools`.
    - Rust: `winget install Rustlang.Rustup`, danach `rustup default stable`
-   - Depends on: nichts. **Lizenz vorher klären, siehe Open Questions.**
+   - Depends on: nichts
 1. **Projektgerüst + CI**
    - `cargo init`, `Cargo.toml`, `rust-toolchain.toml`, `.cargo/config.toml`, `.gitignore`, leere Module, `cli.rs` mit allen Befehlen (die Befehle tun noch nichts), `ci.yml`
    - Test: `--help` und `--version` laufen
@@ -277,16 +284,14 @@ Umsetzung testgetrieben (Skill `test-driven-development`): pro Schritt zuerst di
 - **Risiko: `std` liefert bei Reparse-Points falsche Link-Infos.**
   - Die Annahme ist, dass `DirEntry::file_type()` und `DirEntry::metadata()` unter Windows aus den Find-Daten kommen, ohne die Datei zu öffnen, und Cloud-Tags nicht als Symlink melden.
   - Mitigation: Ein früher Spike in Schritt 5 auf echtem OneDrive. Falls die Annahme nicht hält, wird `FindFirstFileExW` direkt über `windows-sys` in `StdDirSource` gelesen. Der Trait macht diesen Austausch lokal.
-- **Risiko: Verzeichnisse, die nur in der Cloud liegen.**
-  - Beim Auflisten eines noch nicht befüllten OneDrive-Ordners lädt der Client die *Dateiliste* nach (nur Metadaten, keine Inhalte).
-  - Annahme: Das ist akzeptabel, weil es kein Inhaltsdownload ist. Wenn nicht, käme ein Flag `--skip-cloud-dirs` hinzu.
+- **Verzeichnisse, die nur in der Cloud liegen:** Beim Auflisten lädt der OneDrive-Client die *Dateiliste* nach (nur Metadaten, keine Inhalte). Das ist entschieden und akzeptiert.
 - **Risiko: Performance bei großen Bäumen bzw. SQLite-Writer als Engpass.**
   - Mitigation: Batches von etwa 5.000 Zeilen pro Transaktion, WAL, Prepared Statements, ein Writer-Thread. Messung in Schritt 12.
 - **Risiko: Der Last-Access-Zeitstempel ändert sich durchs Hashen.**
   - Die Spec nimmt das ausdrücklich aus. Unter Windows ist das Aktualisieren standardmäßig weitgehend deaktiviert, das wird im README erwähnt.
 - **Risiko: HTML wird bei sehr vielen Duplikatgruppen groß.**
   - Mitigation: Der Größenbaum bettet nur Ordner-Aggregate ein, keine Einzeldateien. Listen werden lazy gerendert. Vollständige Daten stehen immer in JSON und CSV.
-- [ ] **Lizenz der Visual Studio Build Tools:** Bei Nutzung im Unternehmen (NOVONDO GmbH) kann eine Visual-Studio-Lizenz nötig sein. Kostenlos sind sie u. a. für Open-Source-Entwicklung oder kleine Organisationen (≤ 250 PCs/Nutzer und < 1 Mio. USD Umsatz). Das Repo ist öffentlich. Bitte klären, ob die Nutzung so abgedeckt ist. Alternative: Target `x86_64-pc-windows-gnu` mit MSYS2/MinGW-GCC. Das hat keine Lizenzfrage, ist unter Windows aber etwas weniger verbreitet.
+- [x] Lizenz der Visual Studio Build Tools: abgedeckt (öffentliches Open-Source-Repo), MSVC-Toolchain gesetzt
 - [ ] Muster für OneDrive-Konfliktdateien gegen echte Beispiele aus dem eigenen OneDrive prüfen (Schritt 12)
 - [ ] Schwellwerte (Tiefe 8, 1000 Einträge, Top 50) nach dem ersten echten Scan ggf. anpassen
-- [ ] CSV-Format: `;`-getrennt mit BOM (deutsches Excel) ist gesetzt. Falls die CSVs auch maschinell weiterverarbeitet werden sollen, wäre ein Flag `--csv-delimiter` denkbar.
+- [x] CSV-Format: `;`-getrennt mit BOM (deutsches Excel), ohne Flag

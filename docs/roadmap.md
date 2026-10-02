@@ -83,4 +83,4 @@ Ideensammlung und grobe Priorisierung für ordner-cleanup. Einzelne Features wer
 
 | Feature | Spec | Status |
 |---|---|---|
-| Phase 1: Scan & Analyse-Bericht | [`features/scan-analyse-bericht.md`](features/scan-analyse-bericht.md), Plan: [`implementation-plans/scan-analyse-bericht.md`](implementation-plans/scan-analyse-bericht.md) | Spec approved, Plan wartet auf Freigabe |
+| Phase 1: Scan & Analyse-Bericht | [`features/scan-analyse-bericht.md`](features/scan-analyse-bericht.md), Plan: [`implementation-plans/scan-analyse-bericht.md`](implementation-plans/scan-analyse-bericht.md) | Spec + Plan approved, Umsetzung ausstehend |
