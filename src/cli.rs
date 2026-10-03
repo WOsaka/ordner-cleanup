@@ -89,6 +89,8 @@ pub enum PlanCommand {
     Junk(PlanJunkArgs),
     /// Leere Ordner (rekursiv, von unten nach oben) zum Entfernen planen
     EmptyDirs(PlanEmptyDirsArgs),
+    /// Lange unberührte Ordner nach `_Archiv\<Jahr>\…` verschieben
+    Archive(PlanArchiveArgs),
 }
 
 #[derive(Debug, Args)]
@@ -120,6 +122,19 @@ pub struct PlanJunkArgs {
 pub struct PlanEmptyDirsArgs {
     /// Bereits gescannter Ordner
     pub path: PathBuf,
+    /// Zieldatei für den Plan (Default: plan-<Zeitstempel>.json im aktuellen Ordner)
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct PlanArchiveArgs {
+    /// Bereits gescannter Ordner
+    pub path: PathBuf,
+    /// Ab welchem Alter der jüngsten Datei ein Ordner archiviert wird, z. B. 2y, 18m, 90d
+    /// (Default: `archive_older_than` aus der Config, sonst 2y)
+    #[arg(long)]
+    pub older_than: Option<String>,
     /// Zieldatei für den Plan (Default: plan-<Zeitstempel>.json im aktuellen Ordner)
     #[arg(long)]
     pub out: Option<PathBuf>,

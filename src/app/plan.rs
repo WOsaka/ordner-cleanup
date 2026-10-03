@@ -11,13 +11,15 @@ use super::{
     index_age_note, index_path, load_config, now_rfc3339, onedrive_roots_from_env,
     onedrive_warning, resolve_root,
 };
+use crate::analysis::age::parse_old_after;
+use crate::change::archive::{plan_archive, ArchiveOptions};
 use crate::change::dedupe::plan_dedupe;
 use crate::change::empty_dirs::plan_empty_dirs;
 use crate::change::junk::{plan_junk, JunkOptions};
 use crate::change::limits;
 use crate::change::plan::Plan;
 use crate::change::protect::{ProtectPaths, Protector};
-use crate::cli::{PlanDedupeArgs, PlanEmptyDirsArgs, PlanJunkArgs};
+use crate::cli::{PlanArchiveArgs, PlanDedupeArgs, PlanEmptyDirsArgs, PlanJunkArgs};
 use crate::config::{Config, BUILTIN_JUNK_CATEGORIES};
 use crate::index::Index;
 use crate::paths;
@@ -187,6 +189,34 @@ pub(super) fn plan_empty_dirs_command(args: &PlanEmptyDirsArgs) -> Result<i32> {
         "{} leere Ordner, {} übersprungen",
         plan.actions.len(),
         plan.skipped.len()
+    );
+    finish(plan, &p.config, args.out.as_ref(), &headline, &result.notes)
+}
+
+pub(super) fn plan_archive_command(args: &PlanArchiveArgs) -> Result<i32> {
+    let p = prepare(&args.path)?;
+    let older_than = args
+        .older_than
+        .clone()
+        .unwrap_or_else(|| p.config.archive_older_than.clone());
+    let older_than_days = parse_old_after(&older_than).map_err(anyhow::Error::msg)?;
+    let result = plan_archive(
+        &p.index,
+        &p.root,
+        &p.protector,
+        &now_rfc3339(),
+        &ArchiveOptions {
+            older_than: &older_than,
+            older_than_days,
+            now_ticks: now_ticks(),
+        },
+    )?;
+    let plan = &result.plan;
+    let headline = format!(
+        "{} Ordner zum Archivieren, {} betroffen, {} übersprungen (älter als {older_than})",
+        plan.actions.len(),
+        ByteSize::b(result.bytes),
+        plan.skipped.len(),
     );
     finish(plan, &p.config, args.out.as_ref(), &headline, &result.notes)
 }

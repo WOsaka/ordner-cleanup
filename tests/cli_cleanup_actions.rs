@@ -572,3 +572,204 @@ fn empty_dirs_geschuetzter_ordner_kommt_nicht_in_den_plan() {
         .iter()
         .any(|s| s["reason"] == "protected"));
 }
+
+// ---------------------------------------------------------------------------------------------
+// archive
+// ---------------------------------------------------------------------------------------------
+
+impl Env {
+    /// Setzt die Änderungszeit aller Dateien unterhalb von `rel` auf „vor `days` Tagen“.
+    fn age_tree(&self, rel: &str, days: u64) {
+        fn walk(dir: &Path, files: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(paths::extended(dir)).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, files);
+                } else {
+                    files.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(&self.root().join(rel), &mut files);
+        for file in files {
+            self.age_days(&file, days);
+        }
+    }
+}
+
+const THREE_YEARS: u64 = 3 * 365;
+
+fn archive_tree(env: &Env) {
+    env.write("Projekt2019/a.txt", "alpha");
+    env.write("Projekt2019/sub/b.txt", "bravo bravo");
+    env.write("Aktiv/neu.txt", "frisch");
+    env.write("Aktiv/alt/x.txt", "alt");
+    env.write("lose-alt.txt", "einzeldatei");
+    env.age_tree("Projekt2019", THREE_YEARS);
+    env.age_tree("Aktiv/alt", THREE_YEARS);
+    env.age_days(&env.root().join("lose-alt.txt"), 5 * 365);
+}
+
+/// Jahr der jüngsten mtime eines vor `days` Tagen geänderten Ordners (Ziel unter `_Archiv`).
+fn year_ago(days: u64) -> i32 {
+    use chrono::Datelike;
+    (chrono::Utc::now() - chrono::Duration::days(days as i64)).year()
+}
+
+#[test]
+fn archive_plan_apply_undo_verschiebt_nur_oberste_alte_ordner_und_stellt_alles_her() {
+    let env = Env::new();
+    archive_tree(&env);
+    let before = env.snapshot();
+
+    let plan = env.plan("archive", "plan.json", &[]);
+    assert_eq!(env.snapshot(), before, "plan darf nichts verändern");
+
+    let json = plan_json(&plan);
+    assert_eq!(json["kind"], "archive");
+    assert_eq!(json["params"]["older_than"], "2y");
+    assert_eq!(
+        action_paths(&json, env.root()),
+        [r"Aktiv\alt", "Projekt2019"],
+        "Einzeldatei und aktiver Elternordner nicht"
+    );
+    let year = year_ago(THREE_YEARS);
+    for action in json["actions"].as_array().unwrap() {
+        assert_eq!(action["type"], "move");
+        assert_eq!(action["is_dir"], true);
+        assert_eq!(action["reason"], "archive:older-than-2y");
+        let target = action["target"].as_str().unwrap();
+        assert!(target.contains(&format!(r"\_Archiv\{year}\")), "{target}");
+    }
+    let projekt = json["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["path"].as_str().unwrap().ends_with("Projekt2019"))
+        .unwrap();
+    assert_eq!(projekt["files"], 2);
+    assert_eq!(projekt["size"], 16);
+
+    let out = stdout(env.apply(&plan).success());
+    assert!(!env.exists("Projekt2019") && !env.exists(r"Aktiv\alt"));
+    assert!(env.exists(r"Aktiv\neu.txt") && env.exists("lose-alt.txt"));
+    let archived = env.root().join("_Archiv").join(year.to_string());
+    assert_eq!(
+        std::fs::read_to_string(archived.join(r"Projekt2019\sub\b.txt")).unwrap(),
+        "bravo bravo"
+    );
+
+    env.undo(&run_id(&out)).success();
+
+    assert_eq!(env.snapshot(), before, "byteidentisch inkl. mtime");
+    assert!(!env.exists("_Archiv"), "leeres Archiv wird aufgeräumt");
+}
+
+#[test]
+fn archive_older_than_und_config_bestimmen_die_schwelle() {
+    let env = Env::new();
+    archive_tree(&env);
+    // 3 Jahre alt: bei 5 Jahren nichts, bei 2 Jahren (Default) beides.
+    let strict = env.plan("archive", "strict.json", &["--older-than", "5y"]);
+    assert!(plan_json(&strict)["actions"].as_array().unwrap().is_empty());
+
+    env.config("archive_older_than = \"4y\"\n");
+    let by_config = env.plan("archive", "config.json", &[]);
+    assert!(plan_json(&by_config)["actions"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let flag_wins = env.plan("archive", "flag.json", &["--older-than", "1y"]);
+    let json = plan_json(&flag_wins);
+    assert_eq!(json["params"]["older_than"], "1y");
+    assert_eq!(json["actions"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn archive_ungueltige_dauer_wird_klar_abgelehnt() {
+    let env = Env::new();
+    archive_tree(&env);
+    env.scan();
+    env.bin()
+        .args(["plan", "archive"])
+        .arg(env.root())
+        .args(["--older-than", "bald"])
+        .assert()
+        .failure()
+        .stderr(contains("bald"));
+}
+
+#[test]
+fn archive_ist_idempotent_nach_apply_ist_der_naechste_plan_leer() {
+    let env = Env::new();
+    archive_tree(&env);
+    let plan = env.plan("archive", "plan1.json", &[]);
+    env.apply(&plan).success();
+
+    let second = env.plan("archive", "plan2.json", &[]);
+
+    assert!(plan_json(&second)["actions"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn archive_ordner_der_zwischen_plan_und_apply_veraendert_wurde_ist_stale() {
+    let env = Env::new();
+    archive_tree(&env);
+    let plan = env.plan("archive", "plan.json", &[]);
+    env.write("Projekt2019/neu.txt", "inzwischen angelegt");
+
+    env.apply(&plan).code(2);
+
+    assert!(env.exists(r"Projekt2019\neu.txt"), "stale Ordner bleibt");
+    assert!(!env.exists(r"Aktiv\alt"), "der Rest läuft");
+}
+
+#[test]
+fn archive_geschuetzter_unterordner_verhindert_das_verschieben() {
+    let env = Env::new();
+    archive_tree(&env);
+    env.config(&format!(
+        "protected_paths = [{:?}]\n",
+        env.root().join("Projekt2019").join("sub").to_string_lossy()
+    ));
+    let plan = env.plan("archive", "plan.json", &[]);
+    let json = plan_json(&plan);
+    assert_eq!(action_paths(&json, env.root()), [r"Aktiv\alt"]);
+    assert!(json["skipped"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["reason"] == "protected"));
+}
+
+#[test]
+fn archive_zaehlt_dateien_im_ordner_fuer_die_onedrive_obergrenze() {
+    let env = Env::new();
+    archive_tree(&env);
+    env.config("onedrive_max_move_files = 2\n");
+    let plan = env.plan("archive", "plan.json", &[]);
+    let before = env.snapshot();
+
+    // Projekt2019 (2 Dateien) + Aktiv\alt (1 Datei) = 3 > 2
+    env.bin()
+        .env("OneDrive", env.root())
+        .arg("apply")
+        .arg(&plan)
+        .arg("--yes")
+        .assert()
+        .code(1)
+        .stderr(contains("--allow-large"));
+    assert_eq!(env.snapshot(), before);
+
+    env.bin()
+        .env("OneDrive", env.root())
+        .arg("apply")
+        .arg(&plan)
+        .arg("--yes")
+        .arg("--allow-large")
+        .assert()
+        .success();
+    assert!(!env.exists("Projekt2019"));
+}
