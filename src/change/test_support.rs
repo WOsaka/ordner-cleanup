@@ -118,6 +118,49 @@ impl Fx {
         }
     }
 
+    pub fn mkdir(&self, rel: &str) -> PathBuf {
+        let path = self.root.join(rel);
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    /// `remove-dir`-Plan in der angegebenen Reihenfolge (wie `plan empty-dirs`: tiefste zuerst).
+    pub fn dir_plan(&self, rels: &[&str]) -> Plan {
+        let actions = rels
+            .iter()
+            .zip(1u32..)
+            .map(|(rel, id)| {
+                let path = self.root.join(rel);
+                let meta = RealFs.metadata(&path).unwrap();
+                PlannedAction {
+                    id,
+                    action: ActionType::RemoveDir,
+                    path: paths::display(&path),
+                    size: 0,
+                    mtime_ticks: meta.mtime_ticks,
+                    mtime: String::new(),
+                    hash: None,
+                    keep: None,
+                    keep_hash: None,
+                    reason: "empty-dir".into(),
+                    target: None,
+                    is_dir: true,
+                    files: None,
+                }
+            })
+            .collect();
+        Plan {
+            version: PLAN_VERSION,
+            created: "t".into(),
+            kind: PlanKind::EmptyDirs,
+            root: paths::display(&self.root),
+            keep_strategy: None,
+            params: Default::default(),
+            actions,
+            skipped: vec![],
+        }
+    }
+
     pub fn protector(&self) -> Protector {
         Protector::new(&self.root, &Config::default(), &ProtectPaths::default())
     }

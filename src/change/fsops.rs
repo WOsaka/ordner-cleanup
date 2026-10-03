@@ -153,6 +153,8 @@ pub mod testing {
         Hash,
         Rename,
         RemoveDir,
+        /// `remove_dir` scheitert mit „Ordner nicht leer“ (Rennen nach der Vorprüfung).
+        RemoveDirNotEmpty,
         CreateDir,
     }
 
@@ -234,6 +236,9 @@ pub mod testing {
         fn remove_dir(&self, path: &Path) -> io::Result<()> {
             if self.is_failing(Op::RemoveDir, path) {
                 return Err(locked());
+            }
+            if self.is_failing(Op::RemoveDirNotEmpty, path) {
+                return Err(io::Error::from_raw_os_error(145)); // ERROR_DIR_NOT_EMPTY
             }
             RealFs.remove_dir(path)
         }

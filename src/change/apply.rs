@@ -307,6 +307,84 @@ fn process_quarantine(
     finish_rename(env, journal, a, &target)
 }
 
+/// Vorprüfung von `remove-dir`: Schutz, Existenz, Link/Platzhalter, wirklich ein leerer Ordner.
+/// Der Ordner-mtime wird bewusst nicht verglichen: Das Entfernen von Kindern ändert ihn selbst.
+fn verify_remove_dir(a: &PlannedAction, env: &ApplyEnv) -> Result<FileMeta, Verdict> {
+    let path = Path::new(&a.path);
+    if env.protector.check(path).is_some() {
+        return Err(Verdict::Skip(SkipReason::Protected));
+    }
+    let meta = match env.fs.metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(Verdict::Skip(SkipReason::AlreadyDone))
+        }
+        Err(e) => return Err(Verdict::Fail(io_message(&e))),
+    };
+    if meta.is_cloud_only() {
+        return Err(Verdict::Skip(SkipReason::CloudPlaceholder));
+    }
+    if meta.is_link || meta.is_reparse_point() {
+        return Err(Verdict::Skip(SkipReason::Link));
+    }
+    if !meta.is_dir {
+        return Err(Verdict::Skip(SkipReason::Stale));
+    }
+    match env.fs.read_dir(path) {
+        Ok(entries) if entries.is_empty() => Ok(meta),
+        Ok(_) => Err(Verdict::Skip(SkipReason::Stale)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            Err(Verdict::Skip(SkipReason::AlreadyDone))
+        }
+        Err(e) => Err(Verdict::Fail(io_message(&e))),
+    }
+}
+
+fn process_remove_dir(
+    a: &PlannedAction,
+    env: &ApplyEnv,
+    journal: &mut JournalWriter,
+) -> Result<ActionStatus, ApplyError> {
+    let run = env.run.clone();
+    let meta = match verify_remove_dir(a, env) {
+        Ok(meta) => meta,
+        Err(verdict) => return record_verdict(verdict, run, a.id, journal),
+    };
+    // Write-ahead: Attribute und Zeiten stammen vom Zustand unmittelbar vor dem Entfernen.
+    journal.append(&Entry::IntentRemoveDir {
+        run: run.clone(),
+        action: a.id,
+        path: a.path.clone(),
+        attrs: meta.attrs.0,
+        mtime_ticks: meta.mtime_ticks,
+        ctime_ticks: meta.ctime_ticks,
+    })?;
+    match env.fs.remove_dir(Path::new(&a.path)) {
+        Ok(()) => {
+            journal.append(&Entry::Done { run, action: a.id })?;
+            Ok(ActionStatus::Done)
+        }
+        // Zwischen Vorprüfung und Entfernen wurde etwas hineingelegt: nichts ist passiert.
+        Err(e) if e.kind() == io::ErrorKind::DirectoryNotEmpty => {
+            journal.append(&Entry::Skip {
+                run,
+                action: a.id,
+                reason: SkipReason::Stale,
+            })?;
+            Ok(ActionStatus::Skipped(SkipReason::Stale))
+        }
+        Err(e) => {
+            let error = io_message(&e);
+            journal.append(&Entry::Fail {
+                run,
+                action: a.id,
+                error: error.clone(),
+            })?;
+            Ok(ActionStatus::Failed(error))
+        }
+    }
+}
+
 fn process(
     a: &PlannedAction,
     root: &Path,
@@ -316,7 +394,8 @@ fn process(
 ) -> Result<ActionStatus, ApplyError> {
     match a.action {
         ActionType::Quarantine => process_quarantine(a, root, env, journal, keeps),
-        ActionType::RemoveDir | ActionType::Move => record_verdict(
+        ActionType::RemoveDir => process_remove_dir(a, env, journal),
+        ActionType::Move => record_verdict(
             Verdict::Fail("Aktionstyp wird von dieser Version noch nicht ausgeführt".into()),
             env.run.clone(),
             a.id,
@@ -562,6 +641,263 @@ mod tests {
             (out.executed(), out.already_done(), out.exit_code()),
             (0, 1, 0)
         );
+    }
+
+    fn remove_dir_intents(entries: &[Entry]) -> Vec<(String, u32, i64)> {
+        entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::IntentRemoveDir {
+                    path,
+                    attrs,
+                    mtime_ticks,
+                    ..
+                } => Some((path.clone(), *attrs, *mtime_ticks)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn leere_ordner_werden_von_unten_nach_oben_entfernt_und_journalisiert() {
+        let fx = fx();
+        fx.mkdir("a/b/c");
+        fx.mkdir("d");
+        let plan = fx.dir_plan(&["a/b/c", "a/b", "a", "d"]);
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!((out.executed(), out.exit_code()), (4, 0));
+        assert!(!fx.exists("a") && !fx.exists("d"));
+        assert!(fx.root.exists(), "die Wurzel bleibt");
+        let entries = fx.journal(RUN);
+        assert_eq!(remove_dir_intents(&entries).len(), 4);
+        let order: Vec<bool> = entries
+            .iter()
+            .filter(|e| matches!(e, Entry::IntentRemoveDir { .. } | Entry::Done { .. }))
+            .map(|e| matches!(e, Entry::IntentRemoveDir { .. }))
+            .collect();
+        assert_eq!(
+            order,
+            [true, false, true, false, true, false, true, false],
+            "intent immer vor done"
+        );
+        assert!(matches!(
+            entries.last(),
+            Some(Entry::RunEnd {
+                status: EndStatus::Complete,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn journal_haelt_attribute_und_zeiten_unmittelbar_vor_dem_entfernen_fest() {
+        let fx = fx();
+        let a = fx.mkdir("a");
+        fx.mkdir("a/b");
+        let long_ago = 1_600_000_000 * crate::scan::source::TICKS_PER_SEC;
+        let created = 1_500_000_000 * crate::scan::source::TICKS_PER_SEC;
+        RealFs
+            .set_dir_meta(&a, 0x10 | 0x2, long_ago, created)
+            .unwrap();
+        let b = fx.root.join("a/b");
+        RealFs.set_dir_meta(&b, 0x10, long_ago, created).unwrap();
+        // Plan *nach* dem Setzen der Zeiten; das Entfernen von `a\b` ändert die mtime von `a`.
+        let plan = fx.dir_plan(&["a/b", "a"]);
+
+        apply(&fx, &plan);
+
+        let intents = remove_dir_intents(&fx.journal(RUN));
+        assert_eq!(intents.len(), 2);
+        let (b_path, b_attrs, b_mtime) = &intents[0];
+        assert!(b_path.ends_with(r"a\b"));
+        assert_eq!(*b_mtime, long_ago);
+        assert_eq!(b_attrs & 0x2, 0, "b ist nicht versteckt");
+        let (a_path, a_attrs, a_mtime) = &intents[1];
+        assert!(a_path.ends_with(r"\a"), "{a_path}");
+        assert_ne!(a_attrs & 0x2, 0, "a ist versteckt");
+        assert!(
+            *a_mtime > long_ago,
+            "mtime stammt vom Zustand vor dem Entfernen (nach dem Entfernen von b), nicht aus dem Plan"
+        );
+        let Some(Entry::IntentRemoveDir { ctime_ticks, .. }) = fx
+            .journal(RUN)
+            .into_iter()
+            .find(|e| matches!(e, Entry::IntentRemoveDir { .. }))
+        else {
+            panic!("kein Intent");
+        };
+        assert_eq!(ctime_ticks, created);
+    }
+
+    #[test]
+    fn ordner_der_inzwischen_nicht_mehr_leer_ist_gilt_als_stale() {
+        let fx = fx();
+        fx.mkdir("a");
+        fx.mkdir("b");
+        let plan = fx.dir_plan(&["a", "b"]);
+        fx.write("a/neu.txt", "inhalt");
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!((out.executed(), out.stale(), out.exit_code()), (1, 1, 2));
+        assert!(fx.exists("a/neu.txt") && !fx.exists("b"));
+        assert!(
+            remove_dir_intents(&fx.journal(RUN)).len() == 1,
+            "stale schreibt kein intent"
+        );
+    }
+
+    #[test]
+    fn versteckte_und_system_dateien_zaehlen_als_inhalt() {
+        let fx = fx();
+        fx.mkdir("a");
+        let plan = fx.dir_plan(&["a"]);
+        let hidden = fx.write("a/versteckt.txt", "x");
+        std::process::Command::new("attrib")
+            .args(["+H", "+S"])
+            .arg(&hidden)
+            .output()
+            .unwrap();
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(out.stale(), 1);
+        assert!(fx.exists("a"));
+    }
+
+    #[test]
+    fn nicht_mehr_vorhandener_ordner_ist_bereits_erledigt_und_zweiter_lauf_aendert_nichts() {
+        let fx = fx();
+        fx.mkdir("a");
+        let plan = fx.dir_plan(&["a"]);
+        assert_eq!(apply(&fx, &plan).executed(), 1);
+
+        let second =
+            run_with(&fx, &plan, &RealFs, &fx.protector(), "20261003-130000-cd34").unwrap();
+
+        assert_eq!((second.executed(), second.already_done()), (0, 1));
+        assert_eq!(second.exit_code(), 0);
+        assert!(remove_dir_intents(&fx.journal("20261003-130000-cd34")).is_empty());
+    }
+
+    #[test]
+    fn datei_statt_ordner_ist_stale_und_bleibt() {
+        let fx = fx();
+        fx.mkdir("a");
+        let plan = fx.dir_plan(&["a"]);
+        std::fs::remove_dir(fx.root.join("a")).unwrap();
+        fx.write("a", "jetzt eine datei");
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(out.stale(), 1);
+        assert_eq!(fx.read("a"), "jetzt eine datei");
+    }
+
+    #[test]
+    fn geschuetzter_ordner_wird_nie_entfernt() {
+        let fx = fx();
+        fx.mkdir("wichtig");
+        let plan = fx.dir_plan(&["wichtig"]);
+        let config = Config {
+            protected_paths: vec![crate::paths::display(&fx.root.join("wichtig"))],
+            ..Config::default()
+        };
+        let protector =
+            crate::change::protect::Protector::new(&fx.root, &config, &ProtectPaths::default());
+
+        let out = run_with(&fx, &plan, &RealFs, &protector, RUN).unwrap();
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::Protected)
+        );
+        assert!(fx.exists("wichtig"));
+    }
+
+    #[test]
+    fn junction_wird_nie_entfernt() {
+        let fx = fx();
+        let target = fx.mkdir("ziel");
+        let link = fx.root.join("verweis");
+        let ok = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("Junction nicht erzeugbar, Test übersprungen");
+            return;
+        }
+        let plan = fx.dir_plan(&["verweis"]);
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::Link)
+        );
+        assert!(link.exists() && target.exists());
+    }
+
+    #[test]
+    fn cloud_platzhalter_ordner_wird_uebersprungen() {
+        let fx = fx();
+        let dir = fx.mkdir("wolke");
+        let plan = fx.dir_plan(&["wolke"]);
+        let faulty = FaultyFs::new().cloud_only(&dir);
+
+        let out = run_with(&fx, &plan, &faulty, &fx.protector(), RUN).unwrap();
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::CloudPlaceholder)
+        );
+        assert!(fx.exists("wolke"));
+    }
+
+    #[test]
+    fn fehler_beim_entfernen_wird_gemeldet_und_der_lauf_geht_weiter() {
+        let fx = fx();
+        let gesperrt = fx.mkdir("gesperrt");
+        fx.mkdir("frei");
+        let plan = fx.dir_plan(&["gesperrt", "frei"]);
+        let faulty = FaultyFs::new().fail(Op::RemoveDir, &gesperrt);
+
+        let out = run_with(&fx, &plan, &faulty, &fx.protector(), RUN).unwrap();
+
+        assert_eq!((out.executed(), out.failed(), out.exit_code()), (1, 1, 2));
+        assert!(fx.exists("gesperrt") && !fx.exists("frei"));
+        let entries = fx.journal(RUN);
+        assert!(entries
+            .iter()
+            .any(|e| matches!(e, Entry::Fail { action: 1, .. })));
+    }
+
+    #[test]
+    fn wird_der_ordner_erst_nach_der_vorpruefung_befuellt_ist_das_ergebnis_stale() {
+        let fx = fx();
+        let a = fx.mkdir("a");
+        let plan = fx.dir_plan(&["a"]);
+        let faulty = FaultyFs::new().fail(Op::RemoveDirNotEmpty, &a);
+
+        let out = run_with(&fx, &plan, &faulty, &fx.protector(), RUN).unwrap();
+
+        assert_eq!((out.executed(), out.stale()), (0, 1));
+        let entries = fx.journal(RUN);
+        assert_eq!(remove_dir_intents(&entries).len(), 1);
+        assert!(entries.iter().any(|e| matches!(
+            e,
+            Entry::Skip {
+                action: 1,
+                reason: SkipReason::Stale,
+                ..
+            }
+        )));
     }
 
     #[test]
