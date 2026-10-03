@@ -7,6 +7,7 @@ pub mod journal;
 pub mod plan;
 pub mod protect;
 pub mod quarantine;
+pub mod registry;
 #[cfg(test)]
 mod test_support;
 pub mod undo;
@@ -50,6 +51,13 @@ impl RunId {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl std::str::FromStr for RunId {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        Self::parse(s)
     }
 }
 

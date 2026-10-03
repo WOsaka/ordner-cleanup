@@ -1,3 +1,4 @@
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -10,9 +11,20 @@ use indicatif::{ProgressBar, ProgressStyle};
 use crate::analysis::age::parse_old_after;
 use crate::analysis::problems::ProblemCtx;
 use crate::analysis::structure::Thresholds;
+use crate::change::apply::{apply_plan, ActionResult, ActionStatus, ApplyEnv, ApplyOutcome};
 use crate::change::dedupe::plan_dedupe;
+use crate::change::fsops::RealFs;
+use crate::change::plan::Plan;
 use crate::change::protect::{ProtectPaths, Protector};
-use crate::cli::{Cli, Command, IndexCommand, PlanCommand, PlanDedupeArgs, ReportArgs, ScanArgs};
+use crate::change::registry::{self, RunRecord};
+use crate::change::undo::{
+    expired_runs, list_runs, purge_run, undo_run, RestoreStatus, RunStatus, UndoEnv, UndoError,
+};
+use crate::change::RunId;
+use crate::cli::{
+    ApplyArgs, Cli, Command, IndexCommand, PlanCommand, PlanDedupeArgs, PurgeArgs, ReportArgs,
+    RunsArgs, ScanArgs, UndoArgs,
+};
 use crate::config::Config;
 use crate::index::{Index, RootStatus};
 use crate::paths;
@@ -30,6 +42,10 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Report(args) => report_command(&args),
         Command::Index(cmd) => index_command(&cmd),
         Command::Plan(PlanCommand::Dedupe(args)) => plan_dedupe_command(&args),
+        Command::Apply(args) => apply_command(&args),
+        Command::Undo(args) => undo_command(&args),
+        Command::Runs(args) => runs_command(&args),
+        Command::Purge(args) => purge_command(&args),
     }
 }
 
@@ -119,6 +135,382 @@ fn plan_dedupe_command(args: &PlanDedupeArgs) -> Result<i32> {
     println!("Plan: {}", paths::display(&shown));
     println!("Es wurde nichts verändert. Plan prüfen, danach mit `apply` ausführen.");
     Ok(0)
+}
+
+fn registry_path() -> Result<PathBuf> {
+    let dir = paths::data_dir().context("Datenordner (%LOCALAPPDATA%) nicht ermittelbar")?;
+    Ok(dir.join("runs.jsonl"))
+}
+
+/// Fragt einmal j/N. Ohne `--yes` bricht eine nicht interaktive Sitzung hart ab, damit ein
+/// Skript nie versehentlich Dateien verschiebt oder löscht.
+fn confirm_with(
+    prompt: &str,
+    yes: bool,
+    interactive: bool,
+    input: &mut dyn BufRead,
+) -> Result<bool> {
+    if yes {
+        return Ok(true);
+    }
+    if !interactive {
+        bail!(
+            "Keine interaktive Sitzung: ohne Bestätigung wird nichts verändert. \
+             Mit --yes bestätigen."
+        );
+    }
+    eprint!("{prompt}");
+    std::io::stderr().flush().ok();
+    let mut answer = String::new();
+    input.read_line(&mut answer)?;
+    Ok(matches!(
+        answer.trim().to_lowercase().as_str(),
+        "j" | "ja" | "y" | "yes"
+    ))
+}
+
+fn confirm(prompt: &str, yes: bool) -> Result<bool> {
+    let stdin = std::io::stdin();
+    confirm_with(prompt, yes, stdin.is_terminal(), &mut stdin.lock())
+}
+
+fn install_cancel_flag() -> Result<Arc<AtomicBool>> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&cancel);
+    ctrlc::set_handler(move || flag.store(true, Ordering::Relaxed))
+        .context("Strg+C-Handler konnte nicht gesetzt werden")?;
+    Ok(cancel)
+}
+
+fn status_line(result: &ActionResult) -> Option<String> {
+    let text = match &result.status {
+        ActionStatus::Done | ActionStatus::AlreadyDone => return None,
+        ActionStatus::Skipped(reason) => reason.to_string(),
+        ActionStatus::Failed(error) => format!("Fehler: {error}"),
+    };
+    Some(format!("  {text}: {}", result.path))
+}
+
+fn print_apply_summary(outcome: &ApplyOutcome) {
+    println!(
+        "Lauf {}: {} verschoben ({}), {} bereits erledigt, {} stale, {} übersprungen, {} Fehler",
+        outcome.run,
+        outcome.executed(),
+        ByteSize::b(outcome.moved_bytes),
+        outcome.already_done(),
+        outcome.stale(),
+        outcome.skipped(),
+        outcome.failed()
+    );
+    const MAX_LINES: usize = 20;
+    let lines: Vec<String> = outcome.results.iter().filter_map(status_line).collect();
+    for line in lines.iter().take(MAX_LINES) {
+        println!("{line}");
+    }
+    if lines.len() > MAX_LINES {
+        println!("  … und {} weitere", lines.len() - MAX_LINES);
+    }
+    if outcome.aborted {
+        eprintln!("Abgebrochen; der Lauf ist teilweise ausgeführt und lässt sich zurückdrehen.");
+    }
+    if outcome.executed() > 0 {
+        println!("Rückgängig machen: ordner-cleanup undo {}", outcome.run);
+    }
+}
+
+fn apply_command(args: &ApplyArgs) -> Result<i32> {
+    let plan = Plan::load(&args.plan)?;
+    let root = PathBuf::from(&plan.root);
+    if !root.is_dir() {
+        bail!("Wurzel {} des Plans existiert nicht", plan.root);
+    }
+    let config = load_config()?;
+    let protector = Protector::new(&root, &config, &ProtectPaths::from_env());
+
+    println!(
+        "Plan vom {}: {} Aktionen, {}, Wurzel {}",
+        plan.created,
+        plan.actions.len(),
+        ByteSize::b(plan.total_bytes()),
+        plan.root
+    );
+    if let Some(warning) = onedrive_warning(&root, &onedrive_roots_from_env()) {
+        eprintln!("{warning}");
+    }
+    if plan.actions.is_empty() {
+        println!("Der Plan enthält keine Aktionen.");
+        return Ok(0);
+    }
+    let question = format!(
+        "{} Dateien in die Quarantäne verschieben? [j/N] ",
+        plan.actions.len()
+    );
+    if !confirm(&question, args.yes)? {
+        println!("Abgebrochen. Es wurde nichts verändert.");
+        return Ok(1);
+    }
+
+    let cancel = install_cancel_flag()?;
+    let run = RunId::generate(chrono::Local::now());
+    let now = now_rfc3339();
+    let registered = registry_path().and_then(|file| {
+        registry::append(
+            &file,
+            &RunRecord {
+                run: run.clone(),
+                root: plan.root.clone(),
+                at: now.clone(),
+            },
+        )
+        .map_err(Into::into)
+    });
+    if let Err(e) = registered {
+        eprintln!("Hinweis: Lauf nicht im Register vermerkt ({e}); für undo --root angeben.");
+    }
+
+    let bar = ProgressBar::new(plan.actions.len() as u64);
+    bar.set_style(
+        ProgressStyle::with_template("{bar:30} {pos}/{len} {msg}")
+            .unwrap_or_else(|_| ProgressStyle::default_bar()),
+    );
+    let plan_name = args
+        .plan
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let outcome = apply_plan(
+        &plan,
+        &ApplyEnv {
+            fs: &RealFs,
+            protector: &protector,
+            cancel: &cancel,
+            progress: &|r| {
+                bar.set_message(r.path.clone());
+                bar.inc(1);
+            },
+            run,
+            plan_name: &plan_name,
+            now: &now,
+        },
+    );
+    bar.finish_and_clear();
+    let outcome = outcome?;
+    print_apply_summary(&outcome);
+    Ok(outcome.exit_code())
+}
+
+/// Wurzel eines Laufs: ausdrücklich angegeben oder aus dem Register.
+fn find_run_root(run: &RunId, explicit: Option<&Path>) -> Result<PathBuf> {
+    if let Some(path) = explicit {
+        return Ok(normalize(path));
+    }
+    match registry::find_root(&registry_path()?, run) {
+        Some(root) => Ok(PathBuf::from(root)),
+        None => bail!("Lauf {run} ist im Register unbekannt; Wurzel mit --root angeben"),
+    }
+}
+
+fn status_label(status: RunStatus) -> &'static str {
+    match status {
+        RunStatus::Complete => "vollständig",
+        RunStatus::Partial => "teilweise",
+        RunStatus::Incomplete => "unvollständig",
+        RunStatus::Undone => "zurückgedreht",
+        RunStatus::PartiallyUndone => "teilweise zurückgedreht",
+        RunStatus::Purged => "Quarantäne gelöscht",
+        RunStatus::Unreadable => "Journal unlesbar",
+    }
+}
+
+fn local_time(rfc3339: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(rfc3339)
+        .map(|t| {
+            t.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|_| rfc3339.to_string())
+}
+
+fn undo_command(args: &UndoArgs) -> Result<i32> {
+    let config = load_config()?;
+    let root = find_run_root(&args.run_id, args.root.as_deref())?;
+    let summary = list_runs(&root, config.quarantine_days)?
+        .into_iter()
+        .find(|s| s.run == args.run_id)
+        .ok_or_else(|| UndoError::NotFound(args.run_id.clone()))?;
+    match summary.status {
+        RunStatus::Undone => {
+            println!("Lauf {} wurde bereits zurückgedreht.", args.run_id);
+            return Ok(0);
+        }
+        RunStatus::Purged => {
+            println!(
+                "Lauf {}: Quarantäne wurde gelöscht, nicht mehr wiederherstellbar.",
+                args.run_id
+            );
+            return Ok(2);
+        }
+        _ => {}
+    }
+    let question = format!(
+        "Lauf {} ({} Dateien, {}) zurückdrehen? [j/N] ",
+        args.run_id,
+        summary.moved,
+        ByteSize::b(summary.bytes)
+    );
+    if !confirm(&question, args.yes)? {
+        println!("Abgebrochen. Es wurde nichts verändert.");
+        return Ok(1);
+    }
+
+    let now = now_rfc3339();
+    let outcome = undo_run(
+        &root,
+        &args.run_id,
+        &UndoEnv {
+            fs: &RealFs,
+            now: &now,
+        },
+    )?;
+    println!(
+        "Lauf {}: {} wiederhergestellt, {} Kollisionen, {} nicht mehr vorhanden, {} Fehler",
+        outcome.run,
+        outcome.restored(),
+        outcome.conflicts(),
+        outcome.missing(),
+        outcome.failed()
+    );
+    for r in &outcome.results {
+        match &r.status {
+            RestoreStatus::Conflict(reason) => println!("  Kollision ({reason}): {}", r.path),
+            RestoreStatus::Missing => println!("  nicht mehr wiederherstellbar: {}", r.path),
+            RestoreStatus::Failed(error) => println!("  Fehler ({error}): {}", r.path),
+            RestoreStatus::Restored | RestoreStatus::NothingToDo => {}
+        }
+    }
+    if outcome.conflicts() > 0 {
+        println!("Kollidierende Dateien bleiben in der Quarantäne; nach dem Auflösen erneut `undo` ausführen.");
+    }
+    Ok(outcome.exit_code())
+}
+
+/// Alle Wurzeln mit möglichen Läufen: Register plus gescannte Wurzeln, ohne Duplikate.
+fn known_roots() -> Result<Vec<PathBuf>> {
+    let mut roots = registry::known_roots(&registry_path()?);
+    let index_file = index_path()?;
+    if index_file.exists() {
+        roots.extend(
+            Index::open(&index_file)?
+                .roots()?
+                .into_iter()
+                .map(|r| r.path),
+        );
+    }
+    let mut seen = std::collections::HashSet::new();
+    Ok(roots
+        .into_iter()
+        .filter(|r| seen.insert(paths::path_key(Path::new(r))))
+        .map(PathBuf::from)
+        .collect())
+}
+
+fn runs_command(args: &RunsArgs) -> Result<i32> {
+    let config = load_config()?;
+    let roots = match &args.path {
+        Some(path) => vec![normalize(path)],
+        None => known_roots()?,
+    };
+    let mut any = false;
+    for root in roots {
+        let runs = list_runs(&root, config.quarantine_days)?;
+        if runs.is_empty() {
+            continue;
+        }
+        any = true;
+        println!("Wurzel: {}", paths::display(&root));
+        for r in runs {
+            println!(
+                "  {}  {}  {:>5} Dateien  {:>10}  {}{}",
+                r.run,
+                r.started.as_deref().map(local_time).unwrap_or_default(),
+                r.moved,
+                ByteSize::b(r.bytes).to_string(),
+                status_label(r.status),
+                r.expires
+                    .filter(|_| r.status != RunStatus::Purged)
+                    .map(|e| format!(
+                        ", läuft ab {}",
+                        e.with_timezone(&chrono::Local).format("%Y-%m-%d")
+                    ))
+                    .unwrap_or_default()
+            );
+        }
+    }
+    if !any {
+        println!("Keine Läufe gefunden.");
+    }
+    Ok(0)
+}
+
+fn purge_command(args: &PurgeArgs) -> Result<i32> {
+    let config = load_config()?;
+    let days = match &args.older_than {
+        Some(text) => u32::try_from(parse_old_after(text).map_err(anyhow::Error::msg)?)
+            .context("Dauer ist zu groß")?,
+        None => config.quarantine_days,
+    };
+    let roots = match &args.root {
+        Some(path) => vec![normalize(path)],
+        None => known_roots()?,
+    };
+    let now = chrono::Utc::now();
+    let mut candidates = Vec::new();
+    for root in roots {
+        for run in expired_runs(&root, days, now)? {
+            candidates.push((root.clone(), run));
+        }
+    }
+    if candidates.is_empty() {
+        println!("Keine abgelaufenen Läufe (älter als {days} Tage).");
+        return Ok(0);
+    }
+    let total: u64 = candidates.iter().map(|(_, r)| r.bytes).sum();
+    for (root, r) in &candidates {
+        println!(
+            "  {}  {}  {}  ({})",
+            r.run,
+            ByteSize::b(r.bytes),
+            status_label(r.status),
+            paths::display(root)
+        );
+    }
+    let question = format!(
+        "{} Läufe ({}) endgültig löschen? Das lässt sich nicht rückgängig machen. [j/N] ",
+        candidates.len(),
+        ByteSize::b(total)
+    );
+    if !confirm(&question, args.yes)? {
+        println!("Abgebrochen. Es wurde nichts gelöscht.");
+        return Ok(1);
+    }
+
+    let stamp = now_rfc3339();
+    let env = UndoEnv {
+        fs: &RealFs,
+        now: &stamp,
+    };
+    let mut failures = 0;
+    for (root, r) in &candidates {
+        match purge_run(root, &r.run, &env) {
+            Ok(()) => println!("Gelöscht: {} ({})", r.run, ByteSize::b(r.bytes)),
+            Err(e) => {
+                failures += 1;
+                eprintln!("Fehler bei {}: {e}", r.run);
+            }
+        }
+    }
+    Ok(if failures > 0 { 2 } else { 0 })
 }
 
 fn index_path() -> Result<PathBuf> {
@@ -374,5 +766,63 @@ mod tests {
         assert!(index_age_note(&fresh, at("2026-10-03T12:00:00Z")).is_none());
         let undated = root(RootStatus::Complete, None);
         assert!(index_age_note(&undated, at("2026-10-03T12:00:00Z")).is_none());
+    }
+}
+
+#[cfg(test)]
+mod confirm_tests {
+    use super::*;
+    use rstest::rstest;
+    use std::io::Cursor;
+
+    fn ask(input: &str, yes: bool, interactive: bool) -> Result<bool> {
+        confirm_with("?", yes, interactive, &mut Cursor::new(input.to_string()))
+    }
+
+    #[rstest]
+    #[case("j\n", true)]
+    #[case("J\n", true)]
+    #[case("ja\n", true)]
+    #[case(" Yes \n", true)]
+    #[case("n\n", false)]
+    #[case("nein\n", false)]
+    #[case("\n", false)]
+    #[case("", false)]
+    #[case("vielleicht\n", false)]
+    fn antworten_werden_ausgewertet(#[case] input: &str, #[case] expected: bool) {
+        assert_eq!(ask(input, false, true).unwrap(), expected);
+    }
+
+    #[test]
+    fn yes_ueberspringt_die_frage_auch_ohne_terminal() {
+        assert!(ask("", true, false).unwrap());
+    }
+
+    #[test]
+    fn ohne_terminal_und_ohne_yes_bricht_es_hart_ab() {
+        let err = ask("j\n", false, false).unwrap_err();
+        assert!(err.to_string().contains("--yes"));
+    }
+
+    #[test]
+    fn statuszeilen_nennen_nur_nicht_erledigtes() {
+        use crate::change::SkipReason;
+        let result = |status| ActionResult {
+            id: 1,
+            path: r"D:\x.txt".into(),
+            status,
+        };
+        assert!(status_line(&result(ActionStatus::Done)).is_none());
+        assert!(status_line(&result(ActionStatus::AlreadyDone)).is_none());
+        assert!(
+            status_line(&result(ActionStatus::Skipped(SkipReason::Stale)))
+                .unwrap()
+                .contains("stale")
+        );
+        assert!(
+            status_line(&result(ActionStatus::Failed("gesperrt".into())))
+                .unwrap()
+                .contains("Fehler: gesperrt")
+        );
     }
 }

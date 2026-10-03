@@ -24,6 +24,8 @@ pub enum ApplyError {
     Plan(#[from] PlanError),
     #[error("Vorprüfung fehlgeschlagen: {0}")]
     Preflight(io::Error),
+    #[error("Die Wurzel des Plans ist geschützt ({0}); es wird nichts angelegt oder verschoben")]
+    ProtectedRoot(String),
     #[error("Journal nicht schreibbar, Lauf abgebrochen: {0}")]
     Journal(#[from] io::Error),
 }
@@ -253,6 +255,11 @@ fn process(
 pub fn apply_plan(plan: &Plan, env: &ApplyEnv) -> Result<ApplyOutcome, ApplyError> {
     plan.validate()?;
     let root = Path::new(&plan.root);
+    // Journal und Quarantäne entstehen in der Wurzel: Liegt sie in einem Systempfad (z. B. ein
+    // manipulierter Plan mit `C:\Windows`), darf dort nichts angelegt werden.
+    if let Some(reason) = env.protector.check(root) {
+        return Err(ApplyError::ProtectedRoot(reason.to_string()));
+    }
     quarantine::ensure_plain_dirs(env.fs, root, &env.run).map_err(ApplyError::Preflight)?;
 
     let mut journal = JournalWriter::create(&quarantine::journal_path(root, &env.run))?;
@@ -692,6 +699,25 @@ mod tests {
         assert_eq!(intents(&entries), 1);
         assert!(!entries.iter().any(|e| matches!(e, Entry::Done { .. })));
         assert!(!fx.exists("b.txt") && fx.quarantined(RUN, "b.txt").exists());
+    }
+
+    #[test]
+    fn geschuetzte_wurzel_wird_vor_dem_ersten_schreiben_abgelehnt() {
+        let fx = fx();
+        fx.write("a.txt", "x");
+        fx.write("b.txt", "x");
+        let plan = fx.plan(&[("b.txt", "a.txt")]);
+        let protect = ProtectPaths {
+            system: vec![fx.root.clone()],
+            appdata: vec![],
+        };
+        let protector = Protector::new(&fx.root, &Config::default(), &protect);
+
+        let err = run_with(&fx, &plan, &RealFs, &protector, RUN).unwrap_err();
+
+        assert!(matches!(err, ApplyError::ProtectedRoot(_)));
+        assert!(!quarantine::tool_dir(&fx.root).exists(), "nichts angelegt");
+        assert!(fx.exists("b.txt"));
     }
 
     #[test]

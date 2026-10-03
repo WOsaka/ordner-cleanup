@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 use crate::change::dedupe::KeepStrategy;
+use crate::change::RunId;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -27,6 +28,54 @@ pub enum Command {
     /// Änderungsplan erzeugen (verändert nichts)
     #[command(subcommand)]
     Plan(PlanCommand),
+    /// Plan ausführen: Dateien wandern nach Bestätigung in die Quarantäne
+    Apply(ApplyArgs),
+    /// Einen Lauf zurückdrehen
+    Undo(UndoArgs),
+    /// Läufe mit Status und Quarantäne-Größe auflisten
+    Runs(RunsArgs),
+    /// Abgelaufene Quarantäne-Läufe endgültig löschen
+    Purge(PurgeArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ApplyArgs {
+    /// Plan-Datei aus `plan`
+    pub plan: PathBuf,
+    /// Ohne Rückfrage ausführen (nötig in nicht interaktiven Sitzungen)
+    #[arg(long)]
+    pub yes: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct UndoArgs {
+    /// Lauf-ID aus `apply` oder `runs`
+    pub run_id: RunId,
+    /// Wurzel des Laufs, falls er nicht im Register steht
+    #[arg(long)]
+    pub root: Option<PathBuf>,
+    /// Ohne Rückfrage zurückdrehen
+    #[arg(long)]
+    pub yes: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct RunsArgs {
+    /// Nur Läufe dieser Wurzel (Default: alle bekannten)
+    pub path: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct PurgeArgs {
+    /// Mindestalter eines Laufs, z. B. 30d, 2m (Default: quarantine_days aus der Config)
+    #[arg(long)]
+    pub older_than: Option<String>,
+    /// Nur diese Wurzel (Default: alle bekannten)
+    #[arg(long)]
+    pub root: Option<PathBuf>,
+    /// Ohne Rückfrage löschen
+    #[arg(long)]
+    pub yes: bool,
 }
 
 #[derive(Debug, Subcommand)]
