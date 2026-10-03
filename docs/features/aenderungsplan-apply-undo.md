@@ -85,19 +85,19 @@ Neben der Infrastruktur enthält Phase 2 genau **eine Referenzaktion**, um alles
 - Der Nutzer kann über die Config weitere Pfade hinzufügen. Eine Aktion auf einem geschützten Pfad wird nicht in den Plan aufgenommen und beim Apply nochmals geprüft und verweigert.
 
 ## Acceptance Criteria
-- [ ] Given ein indizierter Ordner mit Duplikaten, when `plan dedupe` läuft, then entsteht eine Plan-Datei und im Ordner ändert sich kein Byte
-- [ ] Given eine Duplikatgruppe, when `plan dedupe --keep oldest` läuft, then bleibt pro Gruppe genau eine Datei (die älteste) unberührt und alle anderen stehen als `quarantine`-Aktion im Plan
-- [ ] Given ein Plan, when `apply` ohne `--yes` läuft, then erscheint eine Zusammenfassung und eine einmalige j/N-Abfrage, und bei „N“ oder leerer Eingabe wird nichts verändert
-- [ ] Given ein bestätigter Apply, when er durchläuft, then liegen die Dateien unter der Quarantäne, die behaltenen Dateien sind unverändert, und ein Journal mit passender `run-id` existiert
-- [ ] Given ein abgeschlossener Lauf, when `undo <run-id>` läuft, then ist der Ausgangszustand byteidentisch wiederhergestellt (Pfad, Inhalt, Änderungszeitpunkt)
-- [ ] Given ein bereits ausgeführter Plan, when `apply` erneut läuft, then ändert sich nichts und die Aktionen werden als „bereits erledigt“ gemeldet (Idempotenz)
-- [ ] Given eine Datei, die sich seit `plan` geändert hat, when `apply` läuft, then wird nur diese Aktion als `stale` übersprungen, die übrigen werden ausgeführt, und der Exit-Code zeigt Teilerfolg
-- [ ] Given ein Pfad unter einem geschützten Ordner, when er in einem (manipulierten) Plan steht, then verweigert `apply` die Aktion und meldet den Grund
-- [ ] Given eine OneDrive-Cloud-only-Datei, when `plan` oder `apply` läuft, then wird sie weder gelesen noch gehasht noch verschoben und erscheint als übersprungen
-- [ ] Given ein Abbruch mitten im Lauf (Prozess beendet), when `undo <run-id>` läuft, then stellt es anhand des Write-ahead-Journals alle bereits verschobenen Dateien wieder her und ignoriert noch nicht begonnene Aktionen
-- [ ] Given eine Quarantäne-Datei, deren Ursprungspfad inzwischen belegt ist, when `undo` läuft, then wird nichts überschrieben, die Kollision wird gemeldet und die Datei bleibt in der Quarantäne
-- [ ] Given abgelaufene Quarantäne-Läufe, when `purge` läuft, then werden nur diese nach Bestätigung endgültig gelöscht; jüngere Läufe bleiben erhalten
-- [ ] `runs` listet alle Läufe mit Status; `cargo clippy -- -D warnings` und `cargo test` sind grün
+- [x] Given ein indizierter Ordner mit Duplikaten, when `plan dedupe` läuft, then entsteht eine Plan-Datei und im Ordner ändert sich kein Byte
+- [x] Given eine Duplikatgruppe, when `plan dedupe --keep oldest` läuft, then bleibt pro Gruppe genau eine Datei (die älteste) unberührt und alle anderen stehen als `quarantine`-Aktion im Plan
+- [x] Given ein Plan, when `apply` ohne `--yes` läuft, then erscheint eine Zusammenfassung und eine einmalige j/N-Abfrage, und bei „N“ oder leerer Eingabe wird nichts verändert
+- [x] Given ein bestätigter Apply, when er durchläuft, then liegen die Dateien unter der Quarantäne, die behaltenen Dateien sind unverändert, und ein Journal mit passender `run-id` existiert
+- [x] Given ein abgeschlossener Lauf, when `undo <run-id>` läuft, then ist der Ausgangszustand byteidentisch wiederhergestellt (Pfad, Inhalt, Änderungszeitpunkt)
+- [x] Given ein bereits ausgeführter Plan, when `apply` erneut läuft, then ändert sich nichts und die Aktionen werden als „bereits erledigt“ gemeldet (Idempotenz)
+- [x] Given eine Datei, die sich seit `plan` geändert hat, when `apply` läuft, then wird nur diese Aktion als `stale` übersprungen, die übrigen werden ausgeführt, und der Exit-Code zeigt Teilerfolg
+- [x] Given ein Pfad unter einem geschützten Ordner, when er in einem (manipulierten) Plan steht, then verweigert `apply` die Aktion und meldet den Grund
+- [ ] Given eine OneDrive-Cloud-only-Datei, when `plan` oder `apply` läuft, then wird sie weder gelesen noch gehasht noch verschoben und erscheint als übersprungen (Teilweise belegt: Unit-Test mit simuliertem Platzhalter und OFFLINE-Attribut am echten Dateisystem; echter OneDrive-Platzhalter nicht geprüft, siehe „Manueller Test“)
+- [x] Given ein Abbruch mitten im Lauf (Prozess beendet), when `undo <run-id>` läuft, then stellt es anhand des Write-ahead-Journals alle bereits verschobenen Dateien wieder her und ignoriert noch nicht begonnene Aktionen
+- [x] Given eine Quarantäne-Datei, deren Ursprungspfad inzwischen belegt ist, when `undo` läuft, then wird nichts überschrieben, die Kollision wird gemeldet und die Datei bleibt in der Quarantäne
+- [x] Given abgelaufene Quarantäne-Läufe, when `purge` läuft, then werden nur diese nach Bestätigung endgültig gelöscht; jüngere Läufe bleiben erhalten
+- [x] `runs` listet alle Läufe mit Status; `cargo clippy -- -D warnings` und `cargo test` sind grün
 
 ## Edge Cases & Error States
 | Scenario | Expected Behavior |
@@ -139,3 +139,25 @@ Neben der Infrastruktur enthält Phase 2 genau **eine Referenzaktion**, um alles
 - [ ] Soll `apply` zusätzlich prüfen, ob der Index aktuell ist (Hinweis „bitte neu scannen“), oder reicht die Stale-Prüfung pro Datei?
 - [ ] Welcher Hash-Algorithmus wird für Plan und Stale-Prüfung verwendet (der aus Phase 1 wiederverwenden)?
 - [ ] Soll die Quarantäne unter OneDrive-Wurzeln wegen Sync-Traffic auf einen lokalen, nicht synchronisierten Ort ausweichen? Vorschlag: Warnung, Entscheidung im Implementierungsplan.
+
+## Manueller Test (2026-10-03)
+
+Ausgeführt mit dem Release-Build in einem eigenen Testordner `C:\Users\Oskar\OneDrive\ordner-cleanup-test` (Index und Config isoliert über `ORDNER_CLEANUP_HOME`). Der Ordner wurde danach vollständig entfernt.
+
+| Prüfung | Ergebnis |
+|---|---|
+| `scan` und `plan dedupe` verändern den Baum nicht (Pfad, Größe, mtime, Attribute, SHA256 vorher/nachher) | bestanden |
+| OneDrive-Warnung bei `plan` und `apply` | erscheint |
+| `apply --yes`: Duplikate liegen in `.ordner-cleanup\quarantine\<run-id>\…`, Journal vorhanden, `runs` zeigt „vollständig“ | bestanden |
+| `undo`: Ausgangszustand byteidentisch (Pfad, Größe, mtime, Attribute, SHA256) | bestanden |
+| Zweites `undo` | „bereits zurückgedreht“, Exit 0 |
+| `purge`: junger Lauf bleibt, künstlich gealterter Lauf wird gelöscht, Journal bleibt, `undo` danach „nicht mehr wiederherstellbar“ (Exit 2) | bestanden |
+| Simulierter Platzhalter (Attribut `OFFLINE`): fehlt im Plan; in einem manipulierten Plan wird er als „Cloud-Platzhalter“ übersprungen (Exit 2), Datei, Attribut, Zeit und Inhalt unverändert | bestanden |
+
+Nicht geprüft:
+- **Echter Cloud-only-Platzhalter:** Der OneDrive-Client lief nicht (kein Prozess), daher konnte kein Platzhalter über den Sync-Filtertreiber entstehen. Ob ein echter Platzhalter nie einen Download auslöst, ist damit nur über die Attribut-Erkennung belegt (dieselbe wie in Phase 1, dort manuell geprüft).
+- **Interaktive j/N-Abfrage mit echtem Terminal** (nur Unit-Tests) sowie ein echtes Beenden des Prozesses oder Strg+C während `apply`.
+
+Beobachtung: Nach `undo` bleiben leere Ordner unter `quarantine\<run-id>` stehen, bis `purge` läuft.
+
+Performance (Release, 100.000 Dateien, synthetischer Baum): `plan dedupe` 1,3 s (Vorgabe unter 10 s); `apply` von 9.993 Aktionen 24,9 s; `undo` 13,7 s.
