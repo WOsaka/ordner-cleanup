@@ -44,4 +44,4 @@ Gemessen am 2026-10-03 (Release-Build) mit einem synthetischen Baum aus 100.000 
 | Re-Scan (nichts geändert) | 5,6 s | 106 MB | < 15 s |
 | Report (alle Formate) | 0,6 s | 87 MB | – |
 
-Den Testbaum erzeugt `cargo run --release --example gen-tree -- <zielordner> [anzahl]`. Der Baum besteht aus kleinen Dateien; bei großen Dateien dominiert das Hashen, das über Teil-Hash und Größengruppen begrenzt wird. Ein Test auf einem echten OneDrive-Ordner steht noch aus.
+Den Testbaum erzeugt `cargo run --release --example gen-tree -- <zielordner> [anzahl]`. Der Baum besteht aus kleinen Dateien; bei großen Dateien dominiert das Hashen, das über Teil-Hash und Größengruppen begrenzt wird. Manuell geprüft am 2026-10-03: Scan von `OneDrive\Dokumente` (30 Dateien, davon 1 Cloud-only) ließ Größen, Zeitstempel und Attribute unverändert, die Cloud-only-Datei blieb Cloud-only.
