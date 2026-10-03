@@ -1,7 +1,7 @@
 ---
 title: "Implementation Plan: Aufräumaktionen (Phase 3)"
 feature_spec: docs/features/aufraeumaktionen.md
-status: approved   # pending-approval | approved | implemented
+status: implemented   # pending-approval | approved | implemented
 created: 2026-10-03
 updated: 2026-10-03
 ---
