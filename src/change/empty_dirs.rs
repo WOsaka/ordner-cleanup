@@ -39,7 +39,8 @@ fn locally_incomplete(tree: &Tree, row: &DirRow) -> bool {
 }
 
 /// Anzahl der obersten Ordner, die nur eingebauten Müll enthalten (und deshalb nicht leer sind).
-fn count_junk_only_dirs(tree: &Tree, order: &[String]) -> usize {
+/// Die Wurzel zählt nie selbst (sie bleibt immer stehen); gezählt werden ihre Müll-Unterordner.
+fn count_junk_only_dirs(tree: &Tree, order: &[String], root_key: &str) -> usize {
     // (enthält Dateien, enthält nur Müll)
     let mut state: HashMap<&str, (bool, bool)> = HashMap::new();
     for key in order {
@@ -58,12 +59,12 @@ fn count_junk_only_dirs(tree: &Tree, order: &[String]) -> usize {
     let is_junk_dir = |key: &str| state.get(key).is_some_and(|(has, junk)| *has && *junk);
     order
         .iter()
-        .filter(|key| is_junk_dir(key))
+        .filter(|key| key.as_str() != root_key && is_junk_dir(key))
         .filter(|key| {
             !tree
                 .row(key)
                 .and_then(|r| r.parent_key.as_deref())
-                .is_some_and(is_junk_dir)
+                .is_some_and(|parent| parent != root_key && is_junk_dir(parent))
         })
         .count()
 }
@@ -140,11 +141,16 @@ pub fn plan_empty_dirs(
     skipped.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut notes = Vec::new();
-    let junk_dirs = count_junk_only_dirs(&tree, &order);
+    let junk_dirs = count_junk_only_dirs(&tree, &order, &root_key);
     if junk_dirs > 0 {
+        let (verb, rule) = if junk_dirs == 1 {
+            ("enthält", "gilt")
+        } else {
+            ("enthalten", "gelten")
+        };
         notes.push(format!(
-            "{junk_dirs} Ordner enthalten nur Müll (z. B. Thumbs.db) und gelten deshalb nicht \
-             als leer. Erst `plan junk` und `apply` ausführen, danach neu scannen."
+            "{junk_dirs} Ordner {verb} nur Müll (z. B. Thumbs.db) und {rule} deshalb nicht als \
+             leer. Erst `plan junk` und `apply` ausführen, danach neu scannen."
         ));
     }
     Ok(CleanupPlan {
@@ -313,6 +319,28 @@ mod tests {
             result.notes
         );
         assert!(result.notes[0].contains("plan junk"), "{:?}", result.notes);
+    }
+
+    #[test]
+    fn hinweistext_beachtet_den_singular_und_plural() {
+        let one = seed(&[r"Z:\Root\m"], &[r"Z:\Root\m\Thumbs.db"]);
+        let note = &plan_of(&one).notes[0];
+        assert!(
+            note.starts_with("1 Ordner enthält nur Müll")
+                && note.contains("gilt deshalb nicht als leer"),
+            "{note}"
+        );
+
+        let two = seed(
+            &[r"Z:\Root\m", r"Z:\Root\n"],
+            &[r"Z:\Root\m\Thumbs.db", r"Z:\Root\n\a.tmp"],
+        );
+        let note = &plan_of(&two).notes[0];
+        assert!(
+            note.starts_with("2 Ordner enthalten nur Müll")
+                && note.contains("gelten deshalb nicht als leer"),
+            "{note}"
+        );
     }
 
     #[test]
