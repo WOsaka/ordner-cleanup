@@ -9,7 +9,7 @@ Strukturierung und Bereinigung von Ordnersystemen auf dem PC (Analyse, Aufräume
 - Sprache/Framework: Rust (CLI), nur Windows 10/11
 - Tests: `cargo test`
 - Lint/Format: `cargo clippy -- -D warnings` / `cargo fmt`
-- Start lokal: `cargo run -- <scan|report> …`
+- Start lokal: `cargo run -- <scan|report|plan|apply|undo|runs|purge> …`
 
 ## Projektstruktur
 

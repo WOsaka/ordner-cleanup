@@ -51,6 +51,28 @@ pub fn prefix_range(dir_key: &str) -> (String, String) {
     (dir_key.to_string(), format!("{dir_key}{}", char::MAX))
 }
 
+/// `key` liegt auf oder unterhalb von `prefix_key` (beide aus [`path_key`]).
+pub fn is_under(key: &str, prefix_key: &str) -> bool {
+    key == prefix_key
+        || key
+            .strip_prefix(prefix_key.trim_end_matches('\\'))
+            .is_some_and(|rest| rest.starts_with('\\'))
+}
+
+/// Pfad relativ zur Wurzel (Groß-/Kleinschreibung der Wurzel egal, Schreibweise des Rests bleibt).
+/// `None`, wenn `path` nicht unterhalb von `root` liegt; für `path == root` ein leerer Pfad.
+pub fn relative_to(root: &Path, path: &Path) -> Option<PathBuf> {
+    let (root, path) = (plain(root), plain(path));
+    let mut root_parts = root.split('\\').filter(|p| !p.is_empty());
+    let mut path_parts = path.split('\\').filter(|p| !p.is_empty());
+    for r in root_parts.by_ref() {
+        if path_parts.next()?.to_lowercase() != r.to_lowercase() {
+            return None;
+        }
+    }
+    Some(path_parts.collect::<PathBuf>())
+}
+
 /// Pfad mit Extended-Length-Präfix für das Dateisystem (relative Pfade bleiben unverändert).
 pub fn extended(path: &Path) -> PathBuf {
     let s = path.to_string_lossy().replace('/', "\\");
@@ -133,6 +155,37 @@ mod tests {
     fn display_entfernt_praefix() {
         assert_eq!(display(Path::new(r"\\?\C:\Daten\x")), r"C:\Daten\x");
         assert_eq!(display(Path::new(r"\\?\UNC\S\Sh")), r"\\S\Sh");
+    }
+
+    #[rstest]
+    #[case(r"C:\daten", r"C:\daten", true)]
+    #[case(r"C:\daten\a\b", r"C:\daten", true)]
+    #[case(r"C:\daten2\b", r"C:\daten", false)]
+    #[case(r"C:\dat", r"C:\daten", false)]
+    fn is_under_prueft_ordnergrenzen(
+        #[case] key: &str,
+        #[case] prefix: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(is_under(key, prefix), expected);
+    }
+
+    #[rstest]
+    #[case(r"C:\Daten", r"C:\Daten\Sub\Datei.TXT", Some(r"Sub\Datei.TXT"))]
+    #[case(r"c:\daten", r"C:\DATEN\Sub\x", Some(r"Sub\x"))]
+    #[case(r"\\?\C:\Daten", r"C:\Daten\x", Some("x"))]
+    #[case(r"C:\Daten", r"C:\Daten", Some(""))]
+    #[case(r"C:\Daten", r"C:\Daten2\x", None)]
+    #[case(r"C:\Daten", r"D:\Daten\x", None)]
+    fn relative_to_schneidet_wurzel_ab(
+        #[case] root: &str,
+        #[case] path: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(
+            relative_to(Path::new(root), Path::new(path)),
+            expected.map(PathBuf::from)
+        );
     }
 
     #[test]

@@ -84,3 +84,4 @@ Ideensammlung und grobe Priorisierung für ordner-cleanup. Einzelne Features wer
 | Feature | Spec | Status |
 |---|---|---|
 | Phase 1: Scan & Analyse-Bericht | [`features/scan-analyse-bericht.md`](features/scan-analyse-bericht.md), Plan: [`implementation-plans/scan-analyse-bericht.md`](implementation-plans/scan-analyse-bericht.md) | Umgesetzt (Schritte 0 bis 12), manuell auf echtem OneDrive-Ordner geprüft |
+| Phase 2: Änderungsplan, Apply & Undo | [`features/aenderungsplan-apply-undo.md`](features/aenderungsplan-apply-undo.md) | Umgesetzt (`plan dedupe`, `apply`, `undo`, `runs`, `purge`), manuell auf OneDrive-Testordner geprüft; offen: Test mit echtem Cloud-only-Platzhalter und echtem Terminal |

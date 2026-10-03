@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod app;
+pub mod change;
 pub mod cli;
 pub mod config;
 pub mod index;

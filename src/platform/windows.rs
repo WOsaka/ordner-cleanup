@@ -48,6 +48,41 @@ pub fn drive_kind(path: &Path) -> DriveKind {
     }
 }
 
+/// Verschiebt eine Datei auf demselben Volume und überschreibt nie ein vorhandenes Ziel
+/// (anders als `std::fs::rename`). Über Laufwerksgrenzen schlägt der Aufruf fehl, es wird
+/// nie kopiert und gelöscht.
+pub fn move_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+    let (from, to) = (wide(&paths::extended(from)), wide(&paths::extended(to)));
+    // SAFETY: beide Puffer sind nullterminiert und leben über den Aufruf; Flags 0 =
+    // weder Ersetzen noch Kopieren erlaubt.
+    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0) } == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+/// Kurzname (8.3) eines existierenden Pfads, falls Windows einen vergibt.
+pub fn short_path(path: &Path) -> Option<std::path::PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    let name = wide(path);
+    let mut buf = vec![0u16; 1024];
+    // SAFETY: `name` ist nullterminiert, `buf` bietet die angegebene Länge.
+    let len = unsafe {
+        windows_sys::Win32::Storage::FileSystem::GetShortPathNameW(
+            name.as_ptr(),
+            buf.as_mut_ptr(),
+            buf.len() as u32,
+        )
+    } as usize;
+    if len == 0 || len > buf.len() {
+        return None;
+    }
+    let short = std::path::PathBuf::from(std::ffi::OsString::from_wide(&buf[..len]));
+    (short != path).then_some(short)
+}
+
 /// Liest Volume-Seriennummer, File-ID und Link-Anzahl; öffnet nur mit
 /// `FILE_READ_ATTRIBUTES` (löst keinen Cloud-Recall aus).
 pub fn file_identity(path: &Path) -> io::Result<FileIdentity> {

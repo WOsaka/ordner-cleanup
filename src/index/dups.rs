@@ -35,6 +35,8 @@ pub struct DupFile {
     pub path: String,
     pub mtime: i64,
     pub nlinks: i64,
+    /// `(volume_serial, file_index)`; gleich bei Hardlinks derselben Datei.
+    pub identity: Option<(i64, i64)>,
 }
 
 /// Gruppe identischer Dateien (gleicher Voll-Hash). Hardlinks zählen als eine Instanz.
@@ -126,8 +128,7 @@ impl Index {
                AND hash_status = 'ok' AND cloud_only = 0 AND is_link = 0
              ORDER BY path_key",
         )?;
-        type Row = (DupFile, Option<(i64, i64)>);
-        let mut groups: HashMap<(i64, Vec<u8>), Vec<Row>> = HashMap::new();
+        let mut groups: HashMap<(i64, Vec<u8>), Vec<DupFile>> = HashMap::new();
         let rows = stmt.query_map(params![lo, hi], |r| {
             let size: i64 = r.get(1)?;
             let hash: Vec<u8> = r.get(3)?;
@@ -135,14 +136,12 @@ impl Index {
             let index: Option<i64> = r.get(5)?;
             Ok((
                 (size, hash),
-                (
-                    DupFile {
-                        path: r.get(0)?,
-                        mtime: r.get(2)?,
-                        nlinks: r.get::<_, Option<i64>>(6)?.unwrap_or(1),
-                    },
-                    volume.zip(index),
-                ),
+                DupFile {
+                    path: r.get(0)?,
+                    mtime: r.get(2)?,
+                    nlinks: r.get::<_, Option<i64>>(6)?.unwrap_or(1),
+                    identity: volume.zip(index),
+                },
             ))
         })?;
         for row in rows {
@@ -153,9 +152,9 @@ impl Index {
         for ((size, hash), members) in groups {
             let mut identities = std::collections::HashSet::new();
             let mut instances = 0;
-            for (_, identity) in &members {
+            for file in &members {
                 // Ohne bekannte Identität zählt jede Datei einzeln.
-                if identity.is_none_or(|id| identities.insert(id)) {
+                if file.identity.is_none_or(|id| identities.insert(id)) {
                     instances += 1;
                 }
             }
@@ -165,7 +164,7 @@ impl Index {
                     hash,
                     instances,
                     wasted: size * (instances as i64 - 1),
-                    files: members.into_iter().map(|(f, _)| f).collect(),
+                    files: members,
                 });
             }
         }

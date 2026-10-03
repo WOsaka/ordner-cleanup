@@ -18,6 +18,8 @@ pub struct Config {
     pub huge_dir_entries: usize,
     pub onedrive_conflict_hostnames: Vec<String>,
     pub threads: usize,
+    pub protected_paths: Vec<String>,
+    pub quarantine_days: u32,
 }
 
 impl Default for Config {
@@ -32,6 +34,8 @@ impl Default for Config {
             huge_dir_entries: 1000,
             onedrive_conflict_hostnames: Vec::new(),
             threads: 0,
+            protected_paths: Vec::new(),
+            quarantine_days: 30,
         }
     }
 }
@@ -48,7 +52,12 @@ impl Config {
     }
 
     pub fn parse(text: &str) -> Result<Self> {
-        Ok(toml::from_str(text)?)
+        let config: Self = toml::from_str(text)?;
+        anyhow::ensure!(
+            config.quarantine_days >= 1,
+            "quarantine_days muss mindestens 1 sein"
+        );
+        Ok(config)
     }
 
     /// CLI-Flags haben Vorrang vor der Config; Listen werden ergänzt.
@@ -106,6 +115,26 @@ mod tests {
         assert_eq!(c.threads, 4);
         assert!(c.no_default_excludes);
         assert_eq!(c.huge_dir_entries, 1000);
+    }
+
+    #[test]
+    fn schutz_und_quarantaene_defaults() {
+        let c = Config::default();
+        assert!(c.protected_paths.is_empty());
+        assert_eq!(c.quarantine_days, 30);
+    }
+
+    #[test]
+    fn schutz_und_quarantaene_werden_gelesen() {
+        let c =
+            Config::parse("protected_paths = [\"D:\\\\Wichtig\"]\nquarantine_days = 7").unwrap();
+        assert_eq!(c.protected_paths, vec!["D:\\Wichtig"]);
+        assert_eq!(c.quarantine_days, 7);
+    }
+
+    #[test]
+    fn quarantaene_null_tage_ist_ungueltig() {
+        assert!(Config::parse("quarantine_days = 0").is_err());
     }
 
     #[test]
