@@ -19,6 +19,21 @@ pub enum EndStatus {
     Partial,
 }
 
+/// Wohin ein Move ging; steuert in `undo`, unter welchem Präfix `to` liegen muss, und ob
+/// `purge` die Aktion unwiederbringlich macht.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Dest {
+    /// Phase-2-Journale kennen nur die Quarantäne.
+    #[default]
+    Quarantine,
+    Archive,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Entry {
@@ -28,14 +43,32 @@ pub enum Entry {
         root: String,
         started: String,
     },
-    /// Vor dem Move geschrieben; `to` ist das tatsächliche Ziel in der Quarantäne.
+    /// Vor dem Move geschrieben; `to` ist das tatsächliche Ziel (Quarantäne oder `_Archiv`).
     Intent {
         run: RunId,
         action: u32,
         from: String,
         to: String,
         size: u64,
-        hash: String,
+        /// Nur `dedupe`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hash: Option<String>,
+        #[serde(default)]
+        dest: Dest,
+        /// Ein ganzer Ordner wurde verschoben; `size` ist dann die Summe.
+        #[serde(default, skip_serializing_if = "is_false")]
+        is_dir: bool,
+    },
+    /// Vor dem Entfernen eines leeren Ordners geschrieben. Attribute und Zeiten stammen vom
+    /// Zustand unmittelbar vor dem Entfernen und dienen dem Undo zur Wiederherstellung.
+    IntentRemoveDir {
+        run: RunId,
+        action: u32,
+        path: String,
+        attrs: u32,
+        mtime_ticks: i64,
+        /// Erstellungszeit.
+        ctime_ticks: i64,
     },
     Done {
         run: RunId,
@@ -84,6 +117,7 @@ impl Entry {
         match self {
             Self::RunStart { run, .. }
             | Self::Intent { run, .. }
+            | Self::IntentRemoveDir { run, .. }
             | Self::Done { run, .. }
             | Self::Skip { run, .. }
             | Self::Fail { run, .. }
@@ -188,7 +222,20 @@ mod tests {
             from: r"D:\Daten\a.txt".into(),
             to: r"D:\Daten\.ordner-cleanup\quarantine\r\a.txt".into(),
             size: 5,
-            hash: "00".repeat(16),
+            hash: Some("00".repeat(16)),
+            dest: Dest::Quarantine,
+            is_dir: false,
+        }
+    }
+
+    fn remove_dir_intent(action: u32) -> Entry {
+        Entry::IntentRemoveDir {
+            run: run(),
+            action,
+            path: r"D:\Daten\leer".into(),
+            attrs: 0x12,
+            mtime_ticks: 17_000_000_000_000_000,
+            ctime_ticks: 16_000_000_000_000_000,
         }
     }
 
@@ -309,6 +356,74 @@ mod tests {
             io::ErrorKind::AlreadyExists
         );
         assert_eq!(read(&path).unwrap().len(), 1);
+    }
+
+    /// Zeile, wie Phase 2 sie geschrieben hat: ohne `dest` und `is_dir`.
+    const PHASE_2_INTENT: &str = r#"{"t":"intent","run":"20261003-120000-ab12","action":1,"from":"D:\\Daten\\a.txt","to":"D:\\Daten\\.ordner-cleanup\\quarantine\\r\\a.txt","size":5,"hash":"00000000000000000000000000000000"}"#;
+
+    #[test]
+    fn journal_zeile_aus_phase_2_wird_als_quarantaene_move_gelesen() {
+        let entry: Entry = serde_json::from_str(PHASE_2_INTENT).unwrap();
+        let Entry::Intent {
+            dest,
+            is_dir,
+            hash,
+            size,
+            ..
+        } = entry
+        else {
+            panic!("kein Intent");
+        };
+        assert_eq!(dest, Dest::Quarantine);
+        assert!(!is_dir);
+        assert_eq!(hash.as_deref(), Some("0".repeat(32).as_str()));
+        assert_eq!(size, 5);
+    }
+
+    #[test]
+    fn phase_2_journal_datei_bleibt_lesbar() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("r.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{PHASE_2_INTENT}
+"
+            ),
+        )
+        .unwrap();
+        assert_eq!(read(&path).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn archiv_intent_ohne_hash_serialisiert_dest_und_laesst_hash_weg() {
+        let entry = Entry::Intent {
+            run: run(),
+            action: 2,
+            from: r"D:\Daten\alt".into(),
+            to: r"D:\Daten\_Archiv\2020\alt".into(),
+            size: 99,
+            hash: None,
+            dest: Dest::Archive,
+            is_dir: true,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"dest\":\"archive\""), "{json}");
+        assert!(json.contains("\"is_dir\":true"), "{json}");
+        assert!(!json.contains("\"hash\""), "{json}");
+        assert_eq!(serde_json::from_str::<Entry>(&json).unwrap(), entry);
+    }
+
+    #[test]
+    fn intent_remove_dir_hat_eigenen_tag_und_laeuft_durch_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("r.jsonl");
+        write_all(&path, &[remove_dir_intent(4)]);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with("{\"t\":\"intent_remove_dir\""), "{text}");
+        let entries = read(&path).unwrap();
+        assert_eq!(entries, vec![remove_dir_intent(4)]);
+        assert_eq!(entries[0].run(), &run());
     }
 
     #[test]

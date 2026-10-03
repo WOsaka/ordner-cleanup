@@ -656,7 +656,9 @@ mod tests {
                 from: paths::display(&elsewhere),
                 to: paths::display(&victim),
                 size: 1,
-                hash: "00".repeat(16),
+                hash: Some("00".repeat(16)),
+                dest: crate::change::journal::Dest::Quarantine,
+                is_dir: false,
             },
             Entry::Done {
                 run: run_id(),

@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::fsops::FsOps;
-use super::journal::{EndStatus, Entry, JournalWriter};
+use super::journal::{Dest, EndStatus, Entry, JournalWriter};
 use super::plan::{hex, Plan, PlanError, PlannedAction};
 use super::protect::Protector;
 use super::quarantine;
@@ -244,7 +244,9 @@ fn process(
         from: a.path.clone(),
         to: paths::display(&target),
         size: a.size,
-        hash: a.hash.clone().unwrap_or_default(),
+        hash: a.hash.clone(),
+        dest: Dest::Quarantine,
+        is_dir: false,
     })?;
     match env.fs.rename(Path::new(&a.path), &target) {
         Ok(()) => {
