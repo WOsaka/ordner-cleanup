@@ -940,6 +940,254 @@ mod tests {
         );
     }
 
+    /// Wurzel mit `Projekt` (verschachtelt); der Archiv-Apply ist gelaufen.
+    fn archived() -> (Fx, String) {
+        let fx = fx();
+        fx.write("Projekt/a.txt", "alpha");
+        fx.write("Projekt/sub/b.txt", "bravo bravo");
+        fx.write("Projekt/sub/tief/c.txt", "charlie");
+        let plan = fx.archive_plan(&["Projekt"]);
+        let target = plan.actions[0].target.clone().unwrap();
+        let out = run_with(&fx, &plan, &RealFs, &fx.protector(), RUN).unwrap();
+        assert_eq!(out.executed(), 1);
+        assert!(!fx.exists("Projekt"));
+        (fx, target)
+    }
+
+    #[test]
+    fn undo_stellt_archivierten_ordner_her_und_raeumt_das_archiv_auf() {
+        let fx = fx();
+        fx.write("Projekt/a.txt", "alpha");
+        fx.write("Projekt/sub/b.txt", "bravo bravo");
+        let m_a = mtime(&fx, "Projekt/a.txt");
+        let m_b = mtime(&fx, "Projekt/sub/b.txt");
+        let plan = fx.archive_plan(&["Projekt"]);
+        run_with(&fx, &plan, &RealFs, &fx.protector(), RUN).unwrap();
+        assert!(fx.exists("_Archiv"));
+
+        let out = undo(&fx);
+
+        assert_eq!((out.restored(), out.exit_code()), (1, 0));
+        assert_eq!(fx.read("Projekt/a.txt"), "alpha");
+        assert_eq!(fx.read("Projekt/sub/b.txt"), "bravo bravo");
+        assert_eq!(
+            (mtime(&fx, "Projekt/a.txt"), mtime(&fx, "Projekt/sub/b.txt")),
+            (m_a, m_b)
+        );
+        assert!(
+            !fx.exists("_Archiv"),
+            "Jahresordner und leeres _Archiv werden aufgeräumt"
+        );
+        let entries = fx.journal(RUN);
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|e| matches!(e, Entry::UndoDone { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn undo_laesst_ein_archiv_mit_anderem_inhalt_stehen() {
+        let (fx, target) = archived();
+        fx.write("_Archiv/2010/Anderes/x.txt", "fremd");
+
+        let out = undo(&fx);
+
+        assert_eq!(out.exit_code(), 0);
+        assert!(fx.exists("Projekt/a.txt"));
+        assert!(
+            !std::path::Path::new(&target).exists()
+                && !std::path::Path::new(&target).parent().unwrap().exists(),
+            "der eigene Jahresordner ist weg"
+        );
+        assert_eq!(fx.read("_Archiv/2010/Anderes/x.txt"), "fremd");
+    }
+
+    #[test]
+    fn belegter_ursprungspfad_ist_ein_konflikt_und_das_archiv_bleibt_unberuehrt() {
+        let (fx, target) = archived();
+        fx.write("Projekt/neu.txt", "inzwischen angelegt");
+
+        let out = undo(&fx);
+
+        assert_eq!(
+            (out.restored(), out.conflicts(), out.exit_code()),
+            (0, 1, 2)
+        );
+        assert_eq!(fx.read("Projekt/neu.txt"), "inzwischen angelegt");
+        assert!(std::path::Path::new(&target).join("a.txt").exists());
+
+        // Nach Auflösen der Kollision lässt sich Undo wiederholen.
+        std::fs::remove_dir_all(fx.root.join("Projekt")).unwrap();
+        let retry = undo(&fx);
+        assert_eq!((retry.restored(), retry.exit_code()), (1, 0));
+        assert!(fx.exists("Projekt/sub/tief/c.txt"));
+    }
+
+    #[test]
+    fn absturz_nach_dem_rename_ohne_done_wird_anhand_des_zustands_zurueckgedreht() {
+        let (fx, _) = archived();
+        drop_done_entries(&fx);
+
+        let out = undo(&fx);
+
+        assert_eq!((out.restored(), out.exit_code()), (1, 0));
+        assert!(fx.exists("Projekt/a.txt"));
+    }
+
+    #[test]
+    fn absturz_vor_dem_rename_intent_ohne_done_und_ordner_noch_am_ursprung_ist_nichts_zu_tun() {
+        let fx = fx();
+        fx.write("Projekt/a.txt", "alpha");
+        let plan = fx.archive_plan(&["Projekt"]);
+        let faulty = FaultyFs::new().crash_before_rename(1);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with(&fx, &plan, &faulty, &fx.protector(), RUN)
+        }));
+        assert!(result.is_err(), "simulierter Absturz");
+        assert!(fx.exists("Projekt/a.txt"));
+
+        let out = undo(&fx);
+
+        assert_eq!(out.results[0].status, RestoreStatus::NothingToDo);
+        assert_eq!(out.exit_code(), 0);
+        assert!(fx.exists("Projekt/a.txt"));
+    }
+
+    #[test]
+    fn purge_macht_archiv_moves_nicht_unwiederbringlich() {
+        let (fx, _) = archived();
+        purge_run(&fx.root, &run_id(), &env()).unwrap();
+
+        let out = undo(&fx);
+
+        assert!(!out.purged);
+        assert_eq!((out.restored(), out.missing(), out.exit_code()), (1, 0, 0));
+        assert!(fx.exists("Projekt/sub/tief/c.txt"));
+    }
+
+    #[test]
+    fn purge_trifft_nur_quarantaene_aktionen_eines_gemischten_laufs() {
+        // Gemischter Lauf (nur über ein handgebautes Journal möglich): ein Quarantäne-Move
+        // und ein Archiv-Move; nach `purge` fehlt nur der erste.
+        let fx = fx();
+        fx.write("lose.txt", "quarantäne");
+        fx.write("Projekt/a.txt", "archiv");
+        let junk = fx.junk_plan(&["lose.txt"]);
+        let archive = fx.archive_plan(&["Projekt"]);
+        let mut plan = junk;
+        plan.kind = crate::change::plan::PlanKind::Junk;
+        let mut moved = archive.actions[0].clone();
+        moved.id = 2;
+        plan.actions.push(moved);
+        // Das Plan-Format erlaubt gemischte Aktionstypen; `apply` führt beide aus.
+        let out = run_with(&fx, &plan, &RealFs, &fx.protector(), RUN).unwrap();
+        assert_eq!(out.executed(), 2);
+        purge_run(&fx.root, &run_id(), &env()).unwrap();
+
+        let result = undo(&fx);
+
+        assert!(!result.purged, "ein Teil ist noch wiederherstellbar");
+        assert_eq!((result.restored(), result.missing()), (1, 1));
+        assert!(fx.exists("Projekt/a.txt") && !fx.exists("lose.txt"));
+    }
+
+    #[test]
+    fn manipuliertes_journal_kann_kein_archiv_ziel_ausserhalb_von_archiv_zurueckholen() {
+        let fx = fx();
+        let victim = fx.write("opfer.txt", "x");
+        let elsewhere = fx.write("woanders.txt", "y");
+        let in_quarantine = fx.quarantined(RUN, "q.txt");
+        std::fs::create_dir_all(in_quarantine.parent().unwrap()).unwrap();
+        std::fs::write(&in_quarantine, "q").unwrap();
+        let mut w = JournalWriter::create(&quarantine::journal_path(&fx.root, &run_id())).unwrap();
+        w.append(&Entry::RunStart {
+            run: run_id(),
+            plan: "p".into(),
+            root: paths::display(&fx.root),
+            started: "2026-10-03T10:00:00Z".into(),
+        })
+        .unwrap();
+        // 1: dest archive, aber `to` liegt irgendwo in der Wurzel
+        // 2: dest archive, aber `to` liegt in der Quarantäne
+        // 3: dest quarantine, aber `to` liegt unter _Archiv
+        let cases = [
+            (
+                paths::display(&elsewhere),
+                paths::display(&victim),
+                Dest::Archive,
+            ),
+            (
+                paths::display(&fx.root.join("ziel2.txt")),
+                paths::display(&in_quarantine),
+                Dest::Archive,
+            ),
+            (
+                paths::display(&fx.root.join("ziel3.txt")),
+                paths::display(&fx.root.join("_Archiv").join("x.txt")),
+                Dest::Quarantine,
+            ),
+        ];
+        for ((from, to, dest), action) in cases.into_iter().zip(1u32..) {
+            w.append(&Entry::Intent {
+                run: run_id(),
+                action,
+                from,
+                to,
+                size: 1,
+                hash: None,
+                dest,
+                is_dir: false,
+            })
+            .unwrap();
+            w.append(&Entry::Done {
+                run: run_id(),
+                action,
+            })
+            .unwrap();
+        }
+
+        let out = undo(&fx);
+
+        assert_eq!(out.failed(), 3, "{:?}", out.results);
+        assert_eq!(fx.read("opfer.txt"), "x");
+        assert_eq!(fx.read("woanders.txt"), "y");
+        assert!(in_quarantine.exists());
+    }
+
+    #[test]
+    fn archivierte_einzeldatei_wird_zurueckgeholt_und_der_ordner_aufgeraeumt() {
+        let fx = fx();
+        fx.write("Bericht_v1.docx", "eins");
+        fx.write("Bericht_v2.docx", "zwei");
+        let m = mtime(&fx, "Bericht_v1.docx");
+        let plan = fx.move_file_plan(&[("Bericht_v1.docx", r"Versionen\Bericht_v1.docx")]);
+        run_with(&fx, &plan, &RealFs, &fx.protector(), RUN).unwrap();
+        assert!(!fx.exists("Bericht_v1.docx"));
+
+        let out = undo(&fx);
+
+        assert_eq!((out.restored(), out.exit_code()), (1, 0));
+        assert_eq!(fx.read("Bericht_v1.docx"), "eins");
+        assert_eq!(mtime(&fx, "Bericht_v1.docx"), m);
+        assert!(!fx.exists("_Archiv"));
+    }
+
+    #[test]
+    fn runs_zaehlt_archiv_moves_ohne_quarantaene_bytes() {
+        let (fx, _) = archived();
+        let runs = list_runs(&fx.root, 30).unwrap();
+        assert_eq!((runs[0].moved, runs[0].bytes), (1, 0));
+        assert_eq!(runs[0].status, RunStatus::Complete);
+        undo(&fx);
+        assert_eq!(
+            list_runs(&fx.root, 30).unwrap()[0].status,
+            RunStatus::Undone
+        );
+    }
+
     #[test]
     fn apply_und_undo_stellen_pfad_inhalt_und_zeit_wieder_her() {
         let fx = fx();
