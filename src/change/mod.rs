@@ -1,8 +1,15 @@
 //! Phase 2: Änderungsplan, Apply und Undo. Nichts wird hart gelöscht (außer `purge`).
 
+pub mod apply;
 pub mod dedupe;
+pub mod fsops;
+pub mod journal;
 pub mod plan;
 pub mod protect;
+pub mod quarantine;
+#[cfg(test)]
+mod test_support;
+pub mod undo;
 
 use std::collections::hash_map::RandomState;
 use std::fmt;
@@ -75,6 +82,15 @@ pub enum SkipReason {
     Link,
     GroupIncomplete,
     TooLong,
+    /// Datei hat sich seit dem Plan geändert (Größe, Zeit oder Hash).
+    Stale,
+    /// Behaltene Datei fehlt, ist ein Platzhalter/Link oder nicht lesbar.
+    KeepMissing,
+    /// Quelle existiert nicht mehr: nichts zu tun.
+    AlreadyDone,
+    /// Quarantäne läge auf einem anderen Volume als die Quelle.
+    DifferentVolume,
+    OutsideRoot,
 }
 
 impl fmt::Display for SkipReason {
@@ -86,6 +102,11 @@ impl fmt::Display for SkipReason {
             Self::Link => "Symlink/Junction",
             Self::GroupIncomplete => "keine zulässige Datei zum Behalten",
             Self::TooLong => "Quarantäne-Pfad zu lang",
+            Self::Stale => "seit dem Plan geändert (stale)",
+            Self::KeepMissing => "behaltene Datei fehlt oder ist nicht nutzbar",
+            Self::AlreadyDone => "bereits erledigt",
+            Self::DifferentVolume => "Quarantäne läge auf einem anderen Volume",
+            Self::OutsideRoot => "liegt nicht in der Wurzel",
         })
     }
 }

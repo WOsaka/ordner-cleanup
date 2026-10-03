@@ -15,6 +15,7 @@ use super::plan::{
     hex, ticks_to_rfc3339, ActionType, Plan, PlanKind, PlannedAction, Skipped, PLAN_VERSION,
 };
 use super::protect::Protector;
+use super::quarantine;
 use super::SkipReason;
 use crate::index::{DupFile, Index, IndexError};
 use crate::paths;
@@ -139,6 +140,8 @@ pub fn plan_dedupe(
         for c in eligible.iter().filter(|c| c.key != keep.key) {
             if c.file.identity.is_some() && c.file.identity == keep.file.identity {
                 note(c.file, SkipReason::Hardlink);
+            } else if let Err(reason) = quarantine::fits(root, Path::new(&c.file.path)) {
+                note(c.file, reason);
             } else {
                 removed.push(c);
             }
@@ -384,6 +387,19 @@ mod tests {
         assert_eq!(reasons.len(), 2);
         assert!(reasons.contains(&SkipReason::Protected));
         assert!(reasons.contains(&SkipReason::GroupIncomplete));
+    }
+
+    #[test]
+    fn zu_lange_quarantaene_ziele_werden_uebersprungen() {
+        let long = format!(r"Z:\Root\{}\x.txt", "a".repeat(32_000));
+        let index = seed(&[
+            (r"Z:\Root\a.txt", 100, 1, None),
+            (long.as_str(), 200, 1, None),
+        ]);
+        let plan = plan_with(&index, KeepStrategy::Oldest).plan;
+        assert!(plan.actions.is_empty());
+        assert_eq!(plan.skipped.len(), 1);
+        assert_eq!(plan.skipped[0].reason, SkipReason::TooLong);
     }
 
     #[test]

@@ -48,6 +48,21 @@ pub fn drive_kind(path: &Path) -> DriveKind {
     }
 }
 
+/// Verschiebt eine Datei auf demselben Volume und überschreibt nie ein vorhandenes Ziel
+/// (anders als `std::fs::rename`). Über Laufwerksgrenzen schlägt der Aufruf fehl, es wird
+/// nie kopiert und gelöscht.
+pub fn move_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+    let (from, to) = (wide(&paths::extended(from)), wide(&paths::extended(to)));
+    // SAFETY: beide Puffer sind nullterminiert und leben über den Aufruf; Flags 0 =
+    // weder Ersetzen noch Kopieren erlaubt.
+    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0) } == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 /// Kurzname (8.3) eines existierenden Pfads, falls Windows einen vergibt.
 pub fn short_path(path: &Path) -> Option<std::path::PathBuf> {
     use std::os::windows::ffi::OsStringExt;

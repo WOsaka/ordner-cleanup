@@ -94,6 +94,12 @@ fn is_hash(s: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+/// `path_key` löst `.`/`..` nicht auf; ein Pfad wie `Wurzel\..\Anders` würde die
+/// Wurzel-Prüfung bestehen, ohne in der Wurzel zu liegen.
+pub(super) fn has_dot_component(path: &str) -> bool {
+    path.split(['\\', '/']).any(|c| c == "." || c == "..")
+}
+
 impl Plan {
     /// Lädt aus JSON-Text; die Version wird vor allem anderen geprüft, damit ein Plan einer
     /// neueren Version nicht an unbekannten Feldern scheitert.
@@ -158,6 +164,12 @@ impl Plan {
                 paths::path_key(Path::new(&a.path)),
                 paths::path_key(Path::new(&a.keep)),
             );
+            if has_dot_component(&a.path) || has_dot_component(&a.keep) {
+                return invalid(format!(
+                    "Aktion {}: Pfade mit „.“ oder „..“ sind nicht erlaubt",
+                    a.id
+                ));
+            }
             if !paths::is_under(&key, &root_key) || key == root_key {
                 return invalid(format!(
                     "Aktion {}: {} liegt nicht in der Wurzel",
@@ -297,6 +309,23 @@ mod tests {
             action(2, r"D:\Daten\a.txt", r"D:\Daten\c.txt"),
         ]);
         assert!(matches!(p.validate(), Err(PlanError::Invalid(m)) if m.contains("selbst")));
+    }
+
+    #[test]
+    fn punkt_komponenten_sind_ungueltig() {
+        for bad in [
+            r"D:\Daten\..\Anders\x.txt",
+            r"D:\Daten\sub\..\..\x.txt",
+            r"D:\Daten\.\x.txt",
+        ] {
+            let p = plan(vec![action(1, bad, r"D:\Daten\a.txt")]);
+            assert!(
+                matches!(p.validate(), Err(PlanError::Invalid(m)) if m.contains("..")),
+                "{bad}"
+            );
+        }
+        let p = plan(vec![action(1, r"D:\Daten\b.txt", r"D:\Daten\..\a.txt")]);
+        assert!(p.validate().is_err());
     }
 
     #[test]

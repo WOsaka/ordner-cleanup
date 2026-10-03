@@ -1,0 +1,116 @@
+//! Gemeinsame Test-Hilfen für Apply- und Undo-Tests (echte Temp-Ordner).
+
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+
+use super::apply::{apply_plan, ApplyEnv, ApplyError, ApplyOutcome};
+use super::fsops::{FsOps, RealFs};
+use super::journal::{self, Entry};
+use super::plan::{hex, ActionType, Plan, PlanKind, PlannedAction, PLAN_VERSION};
+use super::protect::{ProtectPaths, Protector};
+use super::{quarantine, RunId};
+use crate::config::Config;
+use crate::paths;
+
+pub const RUN: &str = "20261003-120000-ab12";
+
+pub struct Fx {
+    _dir: tempfile::TempDir,
+    pub root: PathBuf,
+}
+
+pub fn fx() -> Fx {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("wurzel");
+    std::fs::create_dir_all(&root).unwrap();
+    Fx { _dir: dir, root }
+}
+
+impl Fx {
+    pub fn write(&self, rel: &str, content: &str) -> PathBuf {
+        let path = self.root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    pub fn read(&self, rel: &str) -> String {
+        std::fs::read_to_string(self.root.join(rel)).unwrap()
+    }
+
+    pub fn exists(&self, rel: &str) -> bool {
+        self.root.join(rel).exists()
+    }
+
+    /// Plan aus `(Duplikat, behaltene Datei)`-Paaren, Werte wie der Planer sie schreibt.
+    pub fn plan(&self, pairs: &[(&str, &str)]) -> Plan {
+        let actions = pairs
+            .iter()
+            .zip(1u32..)
+            .map(|((dup, keep), id)| {
+                let (dup, keep) = (self.root.join(dup), self.root.join(keep));
+                let meta = RealFs.metadata(&dup).unwrap();
+                let hash = hex(&RealFs.hash(&dup, meta.size).unwrap());
+                PlannedAction {
+                    id,
+                    action: ActionType::Quarantine,
+                    path: paths::display(&dup),
+                    size: meta.size,
+                    mtime_ticks: meta.mtime_ticks,
+                    mtime: String::new(),
+                    hash: hash.clone(),
+                    keep: paths::display(&keep),
+                    keep_hash: hash,
+                    reason: "exact-duplicate".into(),
+                }
+            })
+            .collect();
+        Plan {
+            version: PLAN_VERSION,
+            created: "t".into(),
+            kind: PlanKind::Dedupe,
+            root: paths::display(&self.root),
+            keep_strategy: "oldest".into(),
+            actions,
+            skipped: vec![],
+        }
+    }
+
+    pub fn protector(&self) -> Protector {
+        Protector::new(&self.root, &Config::default(), &ProtectPaths::default())
+    }
+
+    pub fn quarantined(&self, run: &str, rel: &str) -> PathBuf {
+        quarantine::run_dir(&self.root, &RunId::parse(run).unwrap()).join(rel)
+    }
+
+    pub fn journal(&self, run: &str) -> Vec<Entry> {
+        journal::read(&quarantine::journal_path(
+            &self.root,
+            &RunId::parse(run).unwrap(),
+        ))
+        .unwrap()
+    }
+}
+
+pub fn run_with(
+    _fx: &Fx,
+    plan: &Plan,
+    fs: &dyn FsOps,
+    protector: &Protector,
+    run: &str,
+) -> Result<ApplyOutcome, ApplyError> {
+    let cancel = AtomicBool::new(false);
+    apply_plan(
+        plan,
+        &ApplyEnv {
+            fs,
+            protector,
+            cancel: &cancel,
+            progress: &|_| {},
+            run: RunId::parse(run).unwrap(),
+            plan_name: "plan.json",
+            now: "2026-10-03T10:00:00Z",
+        },
+    )
+}
