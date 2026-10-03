@@ -8,6 +8,7 @@ use super::{
     onedrive_warning, resolve_root,
 };
 use crate::change::dedupe::plan_dedupe;
+use crate::change::limits;
 use crate::change::protect::{ProtectPaths, Protector};
 use crate::cli::PlanDedupeArgs;
 use crate::index::Index;
@@ -54,6 +55,12 @@ pub(super) fn plan_dedupe_command(args: &PlanDedupeArgs) -> Result<i32> {
     }
     for (reason, count) in reasons {
         println!("  übersprungen: {count} × {reason}");
+    }
+    if limits::exceeds(plan, &onedrive_roots_from_env(), &config).is_some() {
+        println!(
+            "Hinweis: Der Plan überschreitet die OneDrive-Obergrenze; `apply` braucht dafür \
+             `--allow-large`."
+        );
     }
     let shown = std::path::absolute(&out).unwrap_or(out);
     println!("Plan: {}", paths::display(&shown));

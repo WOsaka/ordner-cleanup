@@ -4,6 +4,7 @@ pub mod apply;
 pub mod dedupe;
 pub mod fsops;
 pub mod journal;
+pub mod limits;
 pub mod plan;
 pub mod protect;
 pub mod quarantine;

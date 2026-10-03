@@ -13,6 +13,7 @@ use crate::analysis::problems::ProblemCtx;
 use crate::analysis::structure::Thresholds;
 use crate::change::apply::{apply_plan, ActionResult, ActionStatus, ApplyEnv, ApplyOutcome};
 use crate::change::fsops::RealFs;
+use crate::change::limits;
 use crate::change::plan::Plan;
 use crate::change::protect::{ProtectPaths, Protector};
 use crate::change::registry::{self, RunRecord};
@@ -56,16 +57,12 @@ const STALE_SCAN_DAYS: i64 = 7;
 /// Hinweis, wenn die Wurzel unter einem OneDrive-Ordner liegt: Die Quarantäne läge dann im
 /// synchronisierten Bereich und erzeugt Sync-Traffic.
 fn onedrive_warning(root: &Path, onedrive_roots: &[PathBuf]) -> Option<String> {
-    let key = paths::path_key(root);
-    onedrive_roots
-        .iter()
-        .any(|r| paths::is_under(&key, &paths::path_key(r)))
-        .then(|| {
-            "Warnung: Der Ordner liegt in OneDrive. Die Quarantäne (.ordner-cleanup) wird \
+    limits::under_onedrive(root, onedrive_roots).then(|| {
+        "Warnung: Der Ordner liegt in OneDrive. Die Quarantäne (.ordner-cleanup) wird \
              mitsynchronisiert und erzeugt Sync-Traffic; Dateien lassen sich später mit \
              `purge` endgültig entsorgen."
-                .to_string()
-        })
+            .to_string()
+    })
 }
 
 fn onedrive_roots_from_env() -> Vec<PathBuf> {
@@ -188,8 +185,15 @@ fn apply_command(args: &ApplyArgs) -> Result<i32> {
         ByteSize::b(plan.total_bytes()),
         plan.root
     );
-    if let Some(warning) = onedrive_warning(&root, &onedrive_roots_from_env()) {
+    let onedrive_roots = onedrive_roots_from_env();
+    if let Some(warning) = onedrive_warning(&root, &onedrive_roots) {
         eprintln!("{warning}");
+    }
+    if let Some(message) = limits::exceeds(&plan, &onedrive_roots, &config) {
+        if !args.allow_large {
+            bail!("{message}");
+        }
+        eprintln!("Hinweis: Obergrenze mit --allow-large aufgehoben.");
     }
     if plan.actions.is_empty() {
         println!("Der Plan enthält keine Aktionen.");

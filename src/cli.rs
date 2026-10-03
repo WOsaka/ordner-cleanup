@@ -45,6 +45,9 @@ pub struct ApplyArgs {
     /// Ohne Rückfrage ausführen (nötig in nicht interaktiven Sitzungen)
     #[arg(long)]
     pub yes: bool,
+    /// Die OneDrive-Obergrenze (Dateianzahl/Größe) für diesen Plan aufheben
+    #[arg(long)]
+    pub allow_large: bool,
 }
 
 #[derive(Debug, Args)]
