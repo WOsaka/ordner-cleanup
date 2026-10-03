@@ -91,6 +91,8 @@ pub enum PlanCommand {
     EmptyDirs(PlanEmptyDirsArgs),
     /// Lange unberührte Ordner nach `_Archiv\<Jahr>\…` verschieben
     Archive(PlanArchiveArgs),
+    /// Ältere Versionen (`_v1`, `- Kopie`, …) nach `_Archiv\Versionen\…` verschieben
+    Versions(PlanVersionsArgs),
 }
 
 #[derive(Debug, Args)]
@@ -135,6 +137,19 @@ pub struct PlanArchiveArgs {
     /// (Default: `archive_older_than` aus der Config, sonst 2y)
     #[arg(long)]
     pub older_than: Option<String>,
+    /// Zieldatei für den Plan (Default: plan-<Zeitstempel>.json im aktuellen Ordner)
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct PlanVersionsArgs {
+    /// Bereits gescannter Ordner
+    pub path: PathBuf,
+    /// Mindestalter einer älteren Version, z. B. 30d, 2m
+    /// (Default: `versions_min_age` aus der Config, sonst 30d)
+    #[arg(long)]
+    pub min_age: Option<String>,
     /// Zieldatei für den Plan (Default: plan-<Zeitstempel>.json im aktuellen Ordner)
     #[arg(long)]
     pub out: Option<PathBuf>,

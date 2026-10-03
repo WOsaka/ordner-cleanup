@@ -19,7 +19,10 @@ use crate::change::junk::{plan_junk, JunkOptions};
 use crate::change::limits;
 use crate::change::plan::Plan;
 use crate::change::protect::{ProtectPaths, Protector};
-use crate::cli::{PlanArchiveArgs, PlanDedupeArgs, PlanEmptyDirsArgs, PlanJunkArgs};
+use crate::change::versions::{plan_versions, VersionsOptions};
+use crate::cli::{
+    PlanArchiveArgs, PlanDedupeArgs, PlanEmptyDirsArgs, PlanJunkArgs, PlanVersionsArgs,
+};
 use crate::config::{Config, BUILTIN_JUNK_CATEGORIES};
 use crate::index::Index;
 use crate::paths;
@@ -214,6 +217,34 @@ pub(super) fn plan_archive_command(args: &PlanArchiveArgs) -> Result<i32> {
     let plan = &result.plan;
     let headline = format!(
         "{} Ordner zum Archivieren, {} betroffen, {} übersprungen (älter als {older_than})",
+        plan.actions.len(),
+        ByteSize::b(result.bytes),
+        plan.skipped.len(),
+    );
+    finish(plan, &p.config, args.out.as_ref(), &headline, &result.notes)
+}
+
+pub(super) fn plan_versions_command(args: &PlanVersionsArgs) -> Result<i32> {
+    let p = prepare(&args.path)?;
+    let min_age = args
+        .min_age
+        .clone()
+        .unwrap_or_else(|| p.config.versions_min_age.clone());
+    let min_age_days = parse_old_after(&min_age).map_err(anyhow::Error::msg)?;
+    let result = plan_versions(
+        &p.index,
+        &p.root,
+        &p.protector,
+        &now_rfc3339(),
+        &VersionsOptions {
+            min_age: &min_age,
+            min_age_days,
+            now_ticks: now_ticks(),
+        },
+    )?;
+    let plan = &result.plan;
+    let headline = format!(
+        "{} ältere Versionen, {} betroffen, {} übersprungen (Mindestalter {min_age})",
         plan.actions.len(),
         ByteSize::b(result.bytes),
         plan.skipped.len(),

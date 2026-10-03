@@ -773,3 +773,143 @@ fn archive_zaehlt_dateien_im_ordner_fuer_die_onedrive_obergrenze() {
         .success();
     assert!(!env.exists("Projekt2019"));
 }
+
+// ---------------------------------------------------------------------------------------------
+// versions
+// ---------------------------------------------------------------------------------------------
+
+fn versions_tree(env: &Env) {
+    let v1 = env.write("Bericht_v1.docx", "version eins");
+    let v2 = env.write("Bericht_v2.docx", "version zwei");
+    env.write("Bericht final.docx", "final");
+    env.age_days(&v1, 400);
+    env.age_days(&v2, 200);
+    let p1 = env.write("Sub/Plan_v1.xlsx", "plan eins");
+    env.write("Sub/Plan_v2.xlsx", "plan zwei");
+    env.age_days(&p1, 100);
+    env.write("Einzeln.txt", "ohne gruppe");
+}
+
+#[test]
+fn versions_plan_apply_undo_behaelt_die_juengste_und_stellt_alles_her() {
+    let env = Env::new();
+    versions_tree(&env);
+    let before = env.snapshot();
+
+    let plan = env.plan("versions", "plan.json", &[]);
+    assert_eq!(env.snapshot(), before, "plan darf nichts verändern");
+
+    let json = plan_json(&plan);
+    assert_eq!(json["kind"], "versions");
+    assert_eq!(json["params"]["min_age"], "30d");
+    assert_eq!(
+        action_paths(&json, env.root()),
+        [r"Bericht_v1.docx", r"Bericht_v2.docx", r"Sub\Plan_v1.xlsx"]
+    );
+    for action in json["actions"].as_array().unwrap() {
+        assert_eq!(action["type"], "move");
+        assert_eq!(action["reason"], "older-version");
+        assert!(action.get("hash").is_none() && action.get("is_dir").is_none());
+        let target = action["target"].as_str().unwrap();
+        assert!(target.contains(r"\_Archiv\Versionen\"), "{target}");
+        let keep = action["keep"].as_str().unwrap();
+        if action["path"].as_str().unwrap().contains("Plan_v1") {
+            assert!(keep.ends_with(r"Sub\Plan_v2.xlsx"), "{keep}");
+        } else {
+            assert!(keep.ends_with("Bericht final.docx"), "{keep}");
+        }
+    }
+
+    let out = stdout(env.apply(&plan).success());
+    assert!(!env.exists("Bericht_v1.docx") && !env.exists(r"Sub\Plan_v1.xlsx"));
+    assert!(env.exists("Bericht final.docx") && env.exists(r"Sub\Plan_v2.xlsx"));
+    assert_eq!(
+        std::fs::read_to_string(env.root().join(r"_Archiv\Versionen\Sub\Plan_v1.xlsx")).unwrap(),
+        "plan eins"
+    );
+
+    env.undo(&run_id(&out)).success();
+
+    assert_eq!(env.snapshot(), before, "byteidentisch inkl. mtime");
+    assert!(!env.exists("_Archiv"), "leeres Archiv wird aufgeräumt");
+}
+
+#[test]
+fn versions_juengere_aeltere_version_bleibt_und_erscheint_als_too_recent() {
+    let env = Env::new();
+    let v1 = env.write("a_v1.doc", "eins");
+    env.write("a_v2.doc", "zwei");
+    env.age_days(&v1, 10);
+    // keep ist die jüngere; v1 ist nur 10 Tage alt
+    env.age_days(&env.root().join("a_v2.doc"), 1);
+
+    let plan = env.plan("versions", "plan.json", &[]);
+    let json = plan_json(&plan);
+    assert!(json["actions"].as_array().unwrap().is_empty());
+    assert_eq!(json["skipped"][0]["reason"], "too-recent");
+
+    let relaxed = env.plan("versions", "relaxed.json", &["--min-age", "5d"]);
+    assert_eq!(action_paths(&plan_json(&relaxed), env.root()), ["a_v1.doc"]);
+}
+
+#[test]
+fn versions_min_age_aus_der_config_und_ungueltige_dauer() {
+    let env = Env::new();
+    let v1 = env.write("a_v1.doc", "eins");
+    env.write("a_v2.doc", "zwei");
+    env.age_days(&v1, 10);
+    env.age_days(&env.root().join("a_v2.doc"), 1);
+    env.config("versions_min_age = \"5d\"\n");
+
+    let plan = env.plan("versions", "plan.json", &[]);
+    assert_eq!(action_paths(&plan_json(&plan), env.root()), ["a_v1.doc"]);
+    assert_eq!(plan_json(&plan)["params"]["min_age"], "5d");
+
+    env.bin()
+        .args(["plan", "versions"])
+        .arg(env.root())
+        .args(["--min-age", "bald"])
+        .assert()
+        .failure()
+        .stderr(contains("bald"));
+}
+
+#[test]
+fn versions_ist_idempotent_nach_apply_ist_der_naechste_plan_leer() {
+    let env = Env::new();
+    versions_tree(&env);
+    let plan = env.plan("versions", "plan1.json", &[]);
+    env.apply(&plan).success();
+
+    let second = env.plan("versions", "plan2.json", &[]);
+
+    assert!(plan_json(&second)["actions"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn versions_fehlende_behaltene_datei_ueberspringt_die_gruppe() {
+    let env = Env::new();
+    versions_tree(&env);
+    let plan = env.plan("versions", "plan.json", &[]);
+    std::fs::remove_file(env.root().join("Bericht final.docx")).unwrap();
+
+    env.apply(&plan).code(2);
+
+    assert!(env.exists("Bericht_v1.docx") && env.exists("Bericht_v2.docx"));
+    assert!(!env.exists(r"Sub\Plan_v1.xlsx"), "die andere Gruppe läuft");
+}
+
+#[test]
+fn versions_gleich_benannte_dateien_in_verschiedenen_ordnern_oder_mit_anderer_endung_bilden_keine_gruppe(
+) {
+    let env = Env::new();
+    let a = env.write("a/Bericht_v1.docx", "x");
+    let b = env.write("b/Bericht_v2.docx", "y");
+    let c = env.write("c/Plan_v1.docx", "z");
+    let d = env.write("c/Plan_v2.pdf", "w");
+    for f in [&a, &b, &c, &d] {
+        env.age_days(f, 300);
+    }
+    let plan = env.plan("versions", "plan.json", &[]);
+    assert!(plan_json(&plan)["actions"].as_array().unwrap().is_empty());
+}
