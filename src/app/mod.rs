@@ -12,7 +12,6 @@ use crate::analysis::age::parse_old_after;
 use crate::analysis::problems::ProblemCtx;
 use crate::analysis::structure::Thresholds;
 use crate::change::apply::{apply_plan, ActionResult, ActionStatus, ApplyEnv, ApplyOutcome};
-use crate::change::dedupe::plan_dedupe;
 use crate::change::fsops::RealFs;
 use crate::change::plan::Plan;
 use crate::change::protect::{ProtectPaths, Protector};
@@ -22,8 +21,8 @@ use crate::change::undo::{
 };
 use crate::change::RunId;
 use crate::cli::{
-    ApplyArgs, Cli, Command, IndexCommand, PlanCommand, PlanDedupeArgs, PurgeArgs, ReportArgs,
-    RunsArgs, ScanArgs, UndoArgs,
+    ApplyArgs, Cli, Command, IndexCommand, PlanCommand, PurgeArgs, ReportArgs, RunsArgs, ScanArgs,
+    UndoArgs,
 };
 use crate::config::Config;
 use crate::index::{Index, RootStatus};
@@ -35,13 +34,15 @@ use crate::scan::source::{StdDirSource, TICKS_PER_SEC};
 use crate::scan::walker::Progress;
 use crate::scan::{scan, ScanEnv};
 
+mod plan;
+
 /// Führt den Befehl aus und liefert den Exit-Code (0 OK, 2 OK mit Teilfehlern).
 pub fn run(cli: Cli) -> Result<i32> {
     match cli.command {
         Command::Scan(args) => scan_command(&args),
         Command::Report(args) => report_command(&args),
         Command::Index(cmd) => index_command(&cmd),
-        Command::Plan(PlanCommand::Dedupe(args)) => plan_dedupe_command(&args),
+        Command::Plan(PlanCommand::Dedupe(args)) => plan::plan_dedupe_command(&args),
         Command::Apply(args) => apply_command(&args),
         Command::Undo(args) => undo_command(&args),
         Command::Runs(args) => runs_command(&args),
@@ -88,53 +89,6 @@ fn index_age_note(root: &report::ReportRoot, now: chrono::DateTime<chrono::Utc>)
     (age >= STALE_SCAN_DAYS).then(|| {
         format!("Hinweis: Der letzte Scan ist {age} Tage alt. Bitte neu scannen, falls sich viel geändert hat.")
     })
-}
-
-fn plan_dedupe_command(args: &PlanDedupeArgs) -> Result<i32> {
-    let root = resolve_root(&args.path, false)?;
-    let config = load_config()?;
-    let index = Index::open(&index_path()?)?;
-    let scanned = report::select_root(&index, Some(&root))?;
-    if let Some(note) = index_age_note(&scanned, chrono::Utc::now()) {
-        eprintln!("{note}");
-    }
-    if let Some(warning) = onedrive_warning(&root, &onedrive_roots_from_env()) {
-        eprintln!("{warning}");
-    }
-
-    let protector = Protector::new(&root, &config, &ProtectPaths::from_env());
-    let result = plan_dedupe(&index, &root, &args.keep, &protector, &now_rfc3339())?;
-    let out = match &args.out {
-        Some(out) => out.clone(),
-        None => PathBuf::from(format!(
-            "plan-{}.json",
-            chrono::Local::now().format("%Y%m%d-%H%M%S")
-        )),
-    };
-    result
-        .plan
-        .save(&out)
-        .with_context(|| format!("Plan-Datei {} nicht schreibbar", paths::display(&out)))?;
-
-    let plan = &result.plan;
-    println!(
-        "{} Aktionen, {} freiwerdend, {} übersprungen (Strategie: {})",
-        plan.actions.len(),
-        ByteSize::b(result.freed_bytes),
-        plan.skipped.len(),
-        plan.keep_strategy
-    );
-    let mut reasons = std::collections::BTreeMap::new();
-    for s in &plan.skipped {
-        *reasons.entry(s.reason.to_string()).or_insert(0usize) += 1;
-    }
-    for (reason, count) in reasons {
-        println!("  übersprungen: {count} × {reason}");
-    }
-    let shown = std::path::absolute(&out).unwrap_or(out);
-    println!("Plan: {}", paths::display(&shown));
-    println!("Es wurde nichts verändert. Plan prüfen, danach mit `apply` ausführen.");
-    Ok(0)
 }
 
 fn registry_path() -> Result<PathBuf> {
