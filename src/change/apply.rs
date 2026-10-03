@@ -9,11 +9,12 @@ use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use super::archive::is_in_archive;
 use super::fsops::{FileMeta, FsOps};
 use super::journal::{Dest, EndStatus, Entry, JournalWriter};
-use super::plan::{hex, ActionType, Plan, PlanError, PlannedAction};
+use super::plan::{hex, ActionType, Plan, PlanError, PlannedAction, ARCHIVE_DIR};
 use super::protect::Protector;
-use super::quarantine;
+use super::quarantine::{self, MAX_TARGET_LEN};
 use super::{RunId, SkipReason};
 use crate::paths;
 use crate::scan::hasher;
@@ -400,6 +401,179 @@ fn process_remove_dir(
     }
 }
 
+/// Dateianzahl, Summe der Größen und jüngste mtime eines Ordners per Metadaten-Walk (es wird
+/// nichts geöffnet, kein Cloud-Recall). Links, Platzhalter und Geschütztes darin verbieten das
+/// Verschieben als Ganzes.
+struct DirSummary {
+    files: u64,
+    bytes: u64,
+    newest: Option<i64>,
+}
+
+fn summarize_dir(a: &PlannedAction, env: &ApplyEnv) -> Result<DirSummary, Verdict> {
+    let mut summary = DirSummary {
+        files: 0,
+        bytes: 0,
+        newest: None,
+    };
+    let mut stack = vec![std::path::PathBuf::from(&a.path)];
+    while let Some(dir) = stack.pop() {
+        let entries = match env.fs.read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Err(Verdict::Skip(SkipReason::Stale))
+            }
+            Err(e) => return Err(Verdict::Fail(io_message(&e))),
+        };
+        for (path, meta) in entries {
+            if meta.is_link || meta.is_reparse_point() {
+                return Err(Verdict::Skip(SkipReason::Link));
+            }
+            if meta.is_cloud_only() {
+                return Err(Verdict::Skip(SkipReason::CloudPlaceholder));
+            }
+            if meta.is_dir {
+                if env.protector.check_inside(&path).is_some() {
+                    return Err(Verdict::Skip(SkipReason::Protected));
+                }
+                stack.push(path);
+            } else {
+                if env.protector.check(&path).is_some() {
+                    return Err(Verdict::Skip(SkipReason::Protected));
+                }
+                summary.files += 1;
+                summary.bytes += meta.size;
+                summary.newest = summary.newest.max(Some(meta.mtime_ticks));
+            }
+        }
+    }
+    Ok(summary)
+}
+
+/// Ein vorhandener Pfad muss ein echter Ordner sein (kein Link, keine Datei).
+fn ensure_plain_dir(env: &ApplyEnv, dir: &Path) -> Result<(), Verdict> {
+    match env.fs.metadata(dir) {
+        Ok(m) if m.is_reparse_point() || !m.is_dir => Err(Verdict::Fail(format!(
+            "{} ist ein Link oder kein Ordner; es wird nichts verschoben",
+            paths::display(dir)
+        ))),
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Verdict::Fail(io_message(&e))),
+    }
+}
+
+/// Legt den Zielordner unter `_Archiv` an. `_Archiv` und jede Ebene darunter müssen echte
+/// Ordner sein: Ein Link würde das Ziel aus der Wurzel hinaus umleiten.
+fn prepare_archive_parent(root: &Path, parent: &Path, env: &ApplyEnv) -> Result<(), Verdict> {
+    let archive = root.join(ARCHIVE_DIR);
+    ensure_plain_dir(env, &archive)?;
+    env.fs
+        .create_dir_all(parent)
+        .map_err(|e| Verdict::Fail(io_message(&e)))?;
+    let archive_key = paths::path_key(&archive);
+    let mut dir = parent;
+    loop {
+        ensure_plain_dir(env, dir)?;
+        if paths::path_key(dir) == archive_key {
+            return Ok(());
+        }
+        match dir.parent() {
+            Some(up) => dir = up,
+            None => return Ok(()),
+        }
+    }
+}
+
+/// Alle Prüfungen vor dem Journal. `Ok` liefert das freie Ziel unter `_Archiv`.
+fn verify_move(
+    a: &PlannedAction,
+    root: &Path,
+    env: &ApplyEnv,
+) -> Result<std::path::PathBuf, Verdict> {
+    let src = Path::new(&a.path);
+    let Some(target) = a.target.as_deref().map(std::path::PathBuf::from) else {
+        return Err(Verdict::Fail("move ohne Ziel".into()));
+    };
+    if env.protector.check_move(src, &target).is_some() {
+        return Err(Verdict::Skip(SkipReason::Protected));
+    }
+    if is_in_archive(root, src) {
+        return Err(Verdict::Skip(SkipReason::InArchive));
+    }
+    if a.is_dir {
+        let meta = match env.fs.metadata(src) {
+            Ok(m) => m,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Err(Verdict::Skip(SkipReason::AlreadyDone))
+            }
+            Err(e) => return Err(Verdict::Fail(io_message(&e))),
+        };
+        if meta.is_cloud_only() {
+            return Err(Verdict::Skip(SkipReason::CloudPlaceholder));
+        }
+        if meta.is_link || meta.is_reparse_point() {
+            return Err(Verdict::Skip(SkipReason::Link));
+        }
+        if !meta.is_dir {
+            return Err(Verdict::Skip(SkipReason::Stale));
+        }
+        if env.protector.check_inside(src).is_some() {
+            return Err(Verdict::Skip(SkipReason::Protected));
+        }
+        let summary = summarize_dir(a, env)?;
+        if summary.files != a.files.unwrap_or(0)
+            || summary.bytes != a.size
+            || summary.newest != Some(a.mtime_ticks)
+        {
+            return Err(Verdict::Skip(SkipReason::Stale));
+        }
+    } else {
+        verify_source(a, env)?;
+    }
+
+    if paths::display(&target).chars().count() > MAX_TARGET_LEN {
+        return Err(Verdict::Skip(SkipReason::TooLong));
+    }
+    if env.fs.exists(&target) {
+        return Err(Verdict::Skip(SkipReason::TargetExists));
+    }
+    let parent = target.parent().unwrap_or(root);
+    prepare_archive_parent(root, parent, env)?;
+    let same_volume = match (env.fs.volume_serial(src), env.fs.volume_serial(parent)) {
+        (Ok(x), Ok(y)) => x == y,
+        (Err(e), _) | (_, Err(e)) => return Err(Verdict::Fail(io_message(&e))),
+    };
+    if !same_volume {
+        return Err(Verdict::Skip(SkipReason::DifferentVolume));
+    }
+    Ok(target)
+}
+
+fn process_move(
+    a: &PlannedAction,
+    root: &Path,
+    env: &ApplyEnv,
+    journal: &mut JournalWriter,
+) -> Result<ActionStatus, ApplyError> {
+    let target = match verify_move(a, root, env) {
+        Ok(target) => target,
+        Err(verdict) => return record_verdict(verdict, env.run.clone(), a.id, journal),
+    };
+    // Write-ahead: Ohne gesicherten `intent` wird nichts verschoben.
+    journal.append(&Entry::Intent {
+        run: env.run.clone(),
+        action: a.id,
+        from: a.path.clone(),
+        to: paths::display(&target),
+        size: a.size,
+        hash: None,
+        dest: Dest::Archive,
+        is_dir: a.is_dir,
+    })?;
+    finish_rename(env, journal, a, &target)
+}
+
 fn process(
     a: &PlannedAction,
     root: &Path,
@@ -411,12 +585,7 @@ fn process(
     match a.action {
         ActionType::Quarantine => process_quarantine(a, root, env, journal, keeps),
         ActionType::RemoveDir => process_remove_dir(a, env, journal, before),
-        ActionType::Move => record_verdict(
-            Verdict::Fail("Aktionstyp wird von dieser Version noch nicht ausgeführt".into()),
-            env.run.clone(),
-            a.id,
-            journal,
-        ),
+        ActionType::Move => process_move(a, root, env, journal),
     }
 }
 
@@ -917,6 +1086,363 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    fn archive_tree(fx: &Fx) {
+        fx.write("Projekt/a.txt", "alpha");
+        fx.write("Projekt/sub/b.txt", "bravo bravo");
+        fx.write("Projekt/sub/tief/c.txt", "charlie");
+    }
+
+    fn archive_intents(entries: &[Entry]) -> Vec<(String, String, bool, Dest, Option<String>)> {
+        entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Intent {
+                    from,
+                    to,
+                    is_dir,
+                    dest,
+                    hash,
+                    ..
+                } => Some((from.clone(), to.clone(), *is_dir, *dest, hash.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ordner_wird_als_ganzes_ins_archiv_verschoben_und_journalisiert() {
+        let fx = fx();
+        archive_tree(&fx);
+        let plan = fx.archive_plan(&["Projekt"]);
+        let target = plan.actions[0].target.clone().unwrap();
+        let mtime = RealFs
+            .metadata(&fx.root.join("Projekt/sub/b.txt"))
+            .unwrap()
+            .mtime_ticks;
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!((out.executed(), out.exit_code()), (1, 0));
+        assert!(!fx.exists("Projekt"));
+        let moved = std::path::Path::new(&target);
+        assert_eq!(
+            std::fs::read_to_string(moved.join("sub").join("b.txt")).unwrap(),
+            "bravo bravo"
+        );
+        assert_eq!(
+            RealFs
+                .metadata(&moved.join("sub").join("b.txt"))
+                .unwrap()
+                .mtime_ticks,
+            mtime
+        );
+        let entries = fx.journal(RUN);
+        assert_eq!(
+            archive_intents(&entries),
+            [(
+                plan.actions[0].path.clone(),
+                target,
+                true,
+                Dest::Archive,
+                None
+            )]
+        );
+        let order: Vec<bool> = entries
+            .iter()
+            .filter(|e| matches!(e, Entry::Intent { .. } | Entry::Done { .. }))
+            .map(|e| matches!(e, Entry::Intent { .. }))
+            .collect();
+        assert_eq!(order, [true, false], "intent vor done");
+        assert!(matches!(
+            entries.last(),
+            Some(Entry::RunEnd {
+                status: EndStatus::Complete,
+                ..
+            })
+        ));
+        assert!(
+            !fx.quarantined(RUN, "Projekt").exists(),
+            "nichts in der Quarantäne"
+        );
+    }
+
+    #[test]
+    fn veraenderter_ordner_ist_stale() {
+        // (Veränderung, Beschreibung)
+        type Change = fn(&Fx);
+        let changes: [(Change, &str); 4] = [
+            (
+                |fx| drop(fx.write("Projekt/neu.txt", "x")),
+                "Datei hinzugekommen",
+            ),
+            (
+                |fx| std::fs::remove_file(fx.root.join("Projekt/a.txt")).unwrap(),
+                "Datei entfernt",
+            ),
+            (
+                |fx| drop(fx.write("Projekt/sub/b.txt", "anders und länger")),
+                "Größe geändert",
+            ),
+            (
+                |fx| {
+                    let f = std::fs::File::options()
+                        .write(true)
+                        .open(fx.root.join("Projekt/sub/tief/c.txt"))
+                        .unwrap();
+                    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+                    f.set_modified(later).unwrap();
+                },
+                "jüngste mtime geändert",
+            ),
+        ];
+        for (change, what) in changes {
+            let fx = fx();
+            archive_tree(&fx);
+            let plan = fx.archive_plan(&["Projekt"]);
+            change(&fx);
+
+            let out = apply(&fx, &plan);
+
+            assert_eq!(
+                (out.executed(), out.stale(), out.exit_code()),
+                (0, 1, 2),
+                "{what}"
+            );
+            assert!(fx.exists("Projekt"), "{what}");
+            assert!(
+                archive_intents(&fx.journal(RUN)).is_empty(),
+                "{what}: kein intent"
+            );
+        }
+    }
+
+    #[test]
+    fn vorhandenes_ziel_wird_nie_ueberschrieben_oder_zusammengefuehrt() {
+        let fx = fx();
+        archive_tree(&fx);
+        let plan = fx.archive_plan(&["Projekt"]);
+        let target = plan.actions[0].target.clone().unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(std::path::Path::new(&target).join("alt.txt"), "bestand").unwrap();
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::TargetExists)
+        );
+        assert!(fx.exists("Projekt/a.txt"));
+        assert_eq!(
+            std::fs::read_to_string(std::path::Path::new(&target).join("alt.txt")).unwrap(),
+            "bestand"
+        );
+    }
+
+    #[test]
+    fn fehlende_quelle_ist_bereits_erledigt_und_zweiter_lauf_aendert_nichts() {
+        let fx = fx();
+        archive_tree(&fx);
+        let plan = fx.archive_plan(&["Projekt"]);
+        assert_eq!(apply(&fx, &plan).executed(), 1);
+
+        let second =
+            run_with(&fx, &plan, &RealFs, &fx.protector(), "20261003-130000-cd34").unwrap();
+
+        assert_eq!((second.executed(), second.already_done()), (0, 1));
+        assert_eq!(second.exit_code(), 0);
+    }
+
+    #[test]
+    fn cloud_platzhalter_im_ordner_verhindert_das_verschieben() {
+        let fx = fx();
+        archive_tree(&fx);
+        let plan = fx.archive_plan(&["Projekt"]);
+        let faulty = FaultyFs::new().cloud_only(&fx.root.join("Projekt/sub/b.txt"));
+
+        let out = run_with(&fx, &plan, &faulty, &fx.protector(), RUN).unwrap();
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::CloudPlaceholder)
+        );
+        assert!(fx.exists("Projekt/sub/b.txt"));
+        assert!(faulty.hashed().is_empty());
+    }
+
+    #[test]
+    fn junction_im_ordner_verhindert_das_verschieben() {
+        let fx = fx();
+        archive_tree(&fx);
+        let outside = fx.mkdir("woanders");
+        let link = fx.root.join("Projekt").join("verweis");
+        let ok = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&outside)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("Junction nicht erzeugbar, Test übersprungen");
+            return;
+        }
+        let mut plan = fx.archive_plan(&["Projekt"]);
+        // Der Plan stammt von vor dem Link; Zähler wie im Plan, der Link kommt neu hinzu.
+        plan.actions[0].files = Some(3);
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::Link)
+        );
+        assert!(fx.exists("Projekt/a.txt") && outside.exists());
+    }
+
+    #[test]
+    fn geschuetzter_inhalt_verhindert_das_verschieben() {
+        let fx = fx();
+        archive_tree(&fx);
+        fx.write("Projekt/sub/wichtig/x.txt", "x");
+        let plan = fx.archive_plan(&["Projekt"]);
+        let config = Config {
+            protected_paths: vec![crate::paths::display(&fx.root.join("Projekt/sub/wichtig"))],
+            ..Config::default()
+        };
+        let protector =
+            crate::change::protect::Protector::new(&fx.root, &config, &ProtectPaths::default());
+
+        let out = run_with(&fx, &plan, &RealFs, &protector, RUN).unwrap();
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::Protected)
+        );
+        assert!(fx.exists("Projekt/sub/wichtig/x.txt"));
+    }
+
+    #[test]
+    fn geschuetztes_ziel_verhindert_das_verschieben() {
+        let fx = fx();
+        archive_tree(&fx);
+        let plan = fx.archive_plan(&["Projekt"]);
+        let config = Config {
+            protected_paths: vec![crate::paths::display(&fx.root.join("_Archiv"))],
+            ..Config::default()
+        };
+        let protector =
+            crate::change::protect::Protector::new(&fx.root, &config, &ProtectPaths::default());
+
+        let out = run_with(&fx, &plan, &RealFs, &protector, RUN).unwrap();
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::Protected)
+        );
+        assert!(fx.exists("Projekt"));
+        assert!(!fx.exists("_Archiv"), "es wird nichts angelegt");
+    }
+
+    #[test]
+    fn archiv_als_junction_wird_nicht_betreten() {
+        let fx = fx();
+        archive_tree(&fx);
+        let outside = tempfile::tempdir().unwrap();
+        let link = fx.root.join("_Archiv");
+        let ok = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(outside.path())
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("Junction nicht erzeugbar, Test übersprungen");
+            return;
+        }
+        let plan = fx.archive_plan(&["Projekt"]);
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(out.executed(), 0);
+        assert!(matches!(out.results[0].status, ActionStatus::Failed(_)));
+        assert!(fx.exists("Projekt/a.txt"));
+        assert_eq!(
+            std::fs::read_dir(outside.path()).unwrap().count(),
+            0,
+            "außerhalb der Wurzel darf nichts landen"
+        );
+    }
+
+    #[test]
+    fn quelle_unterhalb_von_archiv_wird_nicht_erneut_verschoben() {
+        let fx = fx();
+        fx.write("_Archiv/2019/Alt/a.txt", "x");
+        let mut plan = fx.archive_plan(&["_Archiv/2019/Alt"]);
+        plan.actions[0].target = Some(crate::paths::display(&fx.root.join("_Archiv/2020/Alt")));
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::InArchive)
+        );
+        assert!(fx.exists("_Archiv/2019/Alt/a.txt"));
+    }
+
+    #[test]
+    fn gesperrter_ordner_scheitert_ohne_teilverschiebung_und_der_lauf_geht_weiter() {
+        let fx = fx();
+        archive_tree(&fx);
+        fx.write("Zweiter/z.txt", "zz");
+        let plan = fx.archive_plan(&["Projekt", "Zweiter"]);
+        let faulty = FaultyFs::new().fail(Op::Rename, &fx.root.join("Projekt"));
+
+        let out = run_with(&fx, &plan, &faulty, &fx.protector(), RUN).unwrap();
+
+        assert_eq!((out.executed(), out.failed(), out.exit_code()), (1, 1, 2));
+        assert!(fx.exists("Projekt/sub/tief/c.txt"), "kein Teilverschieben");
+        assert!(!fx.exists("Zweiter"));
+        let entries = fx.journal(RUN);
+        assert!(entries
+            .iter()
+            .any(|e| matches!(e, Entry::Fail { action: 1, .. })));
+    }
+
+    #[test]
+    fn einzelne_datei_wird_mit_groesse_und_mtime_geprueft_und_verschoben() {
+        let fx = fx();
+        fx.write("Bericht_v1.docx", "version eins");
+        fx.write("Bericht_v2.docx", "version zwei");
+        let plan = fx.move_file_plan(&[("Bericht_v1.docx", r"Versionen\Bericht_v1.docx")]);
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!((out.executed(), out.exit_code()), (1, 0));
+        assert!(!fx.exists("Bericht_v1.docx") && fx.exists("Bericht_v2.docx"));
+        assert_eq!(
+            fx.read(r"_Archiv\Versionen\Bericht_v1.docx"),
+            "version eins"
+        );
+        let intents = archive_intents(&fx.journal(RUN));
+        assert_eq!(intents.len(), 1);
+        assert!(!intents[0].2, "keine Ordner-Aktion");
+        assert_eq!(intents[0].3, Dest::Archive);
+    }
+
+    #[test]
+    fn geaenderte_einzeldatei_ist_stale() {
+        let fx = fx();
+        fx.write("a.docx", "kurz");
+        let plan = fx.move_file_plan(&[("a.docx", "Versionen/a.docx")]);
+        fx.write("a.docx", "jetzt länger");
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!((out.executed(), out.stale()), (0, 1));
+        assert!(fx.exists("a.docx") && !fx.exists("_Archiv"));
     }
 
     #[test]

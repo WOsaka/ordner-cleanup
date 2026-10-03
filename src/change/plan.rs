@@ -318,8 +318,8 @@ impl Plan {
                 if a.is_dir && a.files.is_none() {
                     return invalid("verschobener Ordner braucht die Dateianzahl (files)".into());
                 }
-                if paths::path_key(Path::new(&a.path)) == target_key {
-                    return invalid("Quelle und Ziel sind gleich".into());
+                if paths::is_under(&target_key, key) {
+                    return invalid("Ziel liegt in der Quelle selbst".into());
                 }
                 if a.keep.as_deref().map(|k| paths::path_key(Path::new(k))) == Some(key.into()) {
                     return invalid("Pfad entspricht der behaltenen Datei".into());
@@ -599,6 +599,16 @@ mod tests {
         let inner = mv(2, r"D:\Daten\b.txt", r"D:\Daten\alt\b.txt");
         let p = plan_of(PlanKind::Archive, vec![dir, inner]);
         assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn ziel_innerhalb_der_eigenen_quelle_ist_ungueltig() {
+        let nested = mv(1, r"D:\Daten\_Archiv", r"D:\Daten\_Archiv\x");
+        assert!(plan_of(PlanKind::Archive, vec![nested]).validate().is_err());
+        let same = mv(1, r"D:\Daten\_Archiv\x", r"D:\Daten\_Archiv\x");
+        assert!(plan_of(PlanKind::Archive, vec![same]).validate().is_err());
+        let ok = mv(1, r"D:\Daten\_Archiv\2019\x", r"D:\Daten\_Archiv\2020\x");
+        assert!(plan_of(PlanKind::Archive, vec![ok]).validate().is_ok());
     }
 
     #[test]
