@@ -2,6 +2,8 @@
 
 Analyse und sicheres Aufräumen von Ordnersystemen unter Windows 10/11. `scan` und `report` (Phase 1) sind rein lesend: Größenbaum, Dateitypen, Alter, exakte Duplikate, ähnliche Dateien, Strukturprobleme und Problemdateien als HTML, JSON und CSV. Phase 2 (`plan`, `apply`, `undo`, `runs`, `purge`) verschiebt exakte Duplikate nach einem prüfbaren Plan und einer Bestätigung in eine Quarantäne und kann jeden Lauf zurückdrehen. Phase 3 ergänzt die Aufräumaktionen `plan junk`, `empty-dirs`, `archive` und `versions` auf demselben Fundament. Es gibt keine Netzwerkzugriffe und keine Telemetrie.
 
+Ausführliche Gesamtdokumentation (Einrichtung, Bedienung, alle Features): [docs/dokumentation.md](docs/dokumentation.md).
+
 Spec Phase 1: [docs/features/scan-analyse-bericht.md](docs/features/scan-analyse-bericht.md), Plan: [docs/implementation-plans/scan-analyse-bericht.md](docs/implementation-plans/scan-analyse-bericht.md). Spec Phase 2: [docs/features/aenderungsplan-apply-undo.md](docs/features/aenderungsplan-apply-undo.md), Plan: [docs/implementation-plans/aenderungsplan-apply-undo.md](docs/implementation-plans/aenderungsplan-apply-undo.md). Spec Phase 3: [docs/features/aufraeumaktionen.md](docs/features/aufraeumaktionen.md), Plan: [docs/implementation-plans/aufraeumaktionen.md](docs/implementation-plans/aufraeumaktionen.md). Roadmap: [docs/roadmap.md](docs/roadmap.md).
 
 ## Verwendung
