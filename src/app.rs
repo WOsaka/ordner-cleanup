@@ -46,6 +46,14 @@ fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
+/// Löst Kurznamen (8.3), Symlinks und relative Pfade auf, damit Scan, Report und
+/// `index remove` denselben Schlüssel verwenden. Nicht existierende Pfade bleiben unverändert.
+fn normalize(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path)
+        .map(|p| PathBuf::from(paths::display(&p)))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
 /// Prüft die Wurzel und liefert den normalisierten Pfad.
 fn resolve_root(path: &Path, force: bool) -> Result<PathBuf> {
     let meta = std::fs::metadata(paths::extended(path))
@@ -53,9 +61,7 @@ fn resolve_root(path: &Path, force: bool) -> Result<PathBuf> {
     if !meta.is_dir() {
         bail!("{} ist kein Ordner", paths::display(path));
     }
-    let absolute = std::fs::canonicalize(path)
-        .map(|p| PathBuf::from(paths::display(&p)))
-        .unwrap_or_else(|_| path.to_path_buf());
+    let absolute = normalize(path);
     if drive_kind(&absolute) != DriveKind::Local && !force {
         bail!(
             "{} liegt auf einem Netzlaufwerk bzw. UNC-Pfad. Das wird in Phase 1 nicht unterstützt; \
@@ -160,11 +166,7 @@ fn report_command(args: &ReportArgs) -> Result<i32> {
     let formats = Format::parse_list(&args.format)?;
 
     let index = Index::open(&index_path()?)?;
-    let requested = args.path.as_deref().map(|p| {
-        std::fs::canonicalize(p)
-            .map(|c| PathBuf::from(paths::display(&c)))
-            .unwrap_or_else(|_| p.to_path_buf())
-    });
+    let requested = args.path.as_deref().map(normalize);
     let root = report::select_root(&index, requested.as_deref())?;
 
     let now = SystemTime::now()
@@ -220,11 +222,12 @@ fn index_command(cmd: &IndexCommand) -> Result<i32> {
             Ok(0)
         }
         IndexCommand::Remove { path } => {
-            if index.remove_root(&paths::dir_key(path))? {
-                println!("Entfernt: {}", paths::display(path));
+            let path = normalize(path);
+            if index.remove_root(&paths::dir_key(&path))? {
+                println!("Entfernt: {}", paths::display(&path));
                 Ok(0)
             } else {
-                bail!("{} ist nicht im Index", paths::display(path))
+                bail!("{} ist nicht im Index", paths::display(&path))
             }
         }
     }
