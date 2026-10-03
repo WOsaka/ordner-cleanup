@@ -10,6 +10,7 @@ pub mod quarantine;
 pub mod registry;
 #[cfg(test)]
 mod test_support;
+pub mod tree;
 pub mod undo;
 
 use std::collections::hash_map::RandomState;
