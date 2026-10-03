@@ -111,7 +111,7 @@ Flache Schlüssel wie die bestehende `config.toml` (Details im Implementierungsp
 - [ ] Given ein Lauf mit Quarantäne-Aktionen, when `undo` läuft, then bleiben unter `quarantine\<run-id>` keine leeren Ordner zurück
 - [ ] Given geschützte Pfade oder Cloud-Platzhalter, when eine der neuen Aktionen plant oder angewendet wird, then gelten dieselben Regeln wie in Phase 2 (nie anfassen, als übersprungen melden, Apply prüft erneut)
 - [ ] Integrationstests decken Plan → Apply → Undo für jede Aktion ab; `cargo clippy -- -D warnings` und `cargo test` sind grün
-- [ ] Manueller Test im OneDrive-Testordner (wie Phase 2) und ein echter Lauf auf einem Alltagsordner (z. B. Downloads), jeweils mit `undo`, sind dokumentiert
+- [x] Manueller Test im OneDrive-Testordner (wie Phase 2) und ein echter Lauf auf einem Alltagsordner (z. B. Downloads), jeweils mit `undo`, sind dokumentiert
 
 ## Edge Cases & Error States
 | Scenario | Expected Behavior |
@@ -155,3 +155,33 @@ Flache Schlüssel wie die bestehende `config.toml` (Details im Implementierungsp
 - [x] Downloads-Ordner: Known Folder API (`FOLDERID_Downloads`), per Config überschreib- und erweiterbar
 - [x] Archiv-Alter: nur jüngste mtime, keine atime
 - [x] Versionen: Mindestalter 30 Tage für ältere Versionen (`--min-age`, Config), keine Mindestanzahl
+
+## Manueller Test
+
+Durchgeführt am 2026-10-03 mit der Release-Build, `ORDNER_CLEANUP_HOME` isoliert. Vergleich vor/nach `undo`: Pfad, Größe, mtime, Attribute (inkl. ReadOnly), SHA256.
+
+**Synthetischer Testordner** (Müll, leere Ordner, Duplikat, Archiv-Kandidat, Versionsgruppe): je Aktion `scan` → `plan` → `apply --yes` → `undo --yes`.
+
+| Aktion | Apply | Undo |
+|--------|-------|------|
+| junk | 2 in Quarantäne | 2 wiederhergestellt, Dateien byteidentisch |
+| empty-dirs | 3 Ordner entfernt | 3 wiederhergestellt |
+| dedupe | 1 in Quarantäne | wiederhergestellt |
+| archive (`--older-than 1y`) | 1 Ordner nach `_Archiv\2024\…` | wiederhergestellt |
+| versions | 2 nach `_Archiv\Versionen\…` | wiederhergestellt |
+
+Nach jedem Undo sind alle Dateien identisch; nur der mtime von Elternordnern ändert sich (erwartet).
+
+**OneDrive-Obergrenze** (Umgebungsvariable `OneDrive` auf einen Testordner mit 1.100 Müll-Dateien): `plan` weist auf die Obergrenze hin, `apply` ohne `--allow-large` verweigert und ändert nichts; mit `--allow-large` 1.100 verschoben, `undo` stellt 1.100 wieder her.
+
+**Echter Alltagsordner (`C:\Users\Oskar\Downloads`, 55 Dateien, 577 MiB):** `empty-dirs` und `archive` planen nichts.
+
+| Aktion | Apply | Undo |
+|--------|-------|------|
+| junk | 3 Installer (363,7 MiB) in Quarantäne | 3 wiederhergestellt, SHA256 aller 55 Dateien identisch |
+| versions | 6 nach `_Archiv\Versionen` (12,9 MiB) | 6 wiederhergestellt, identisch |
+| dedupe | 5 in Quarantäne (18,9 MiB) | 5 wiederhergestellt, identisch |
+
+**Beobachtung:** `versions` und `dedupe` können sich überschneiden (`versions` behält die `(1)`-Kopie, `dedupe` entfernt sie). Pläne nacheinander anwenden und dazwischen neu scannen.
+
+**Offen:** Test mit echtem Cloud-only-Platzhalter (OneDrive-Client nicht geprüft).
