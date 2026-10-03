@@ -10,8 +10,6 @@ use crate::platform::windows::{file_identity, move_no_replace, set_dir_times_and
 use crate::platform::FileAttrs;
 use crate::scan::hasher;
 use crate::scan::source::filetime_to_ticks;
-#[cfg(test)]
-use crate::scan::source::TICKS_PER_SEC;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileMeta {
