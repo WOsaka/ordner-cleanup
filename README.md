@@ -1,8 +1,8 @@
 # ordner-cleanup
 
-Rein lesende Analyse von Ordnersystemen unter Windows 10/11: Größenbaum, Dateitypen, Alter, exakte Duplikate, ähnliche Dateien, Strukturprobleme und Problemdateien. Das Ergebnis ist ein Bericht als HTML, JSON und CSV. Phase 1 verändert nichts am gescannten Baum, es gibt keine Netzwerkzugriffe und keine Telemetrie.
+Analyse und sicheres Aufräumen von Ordnersystemen unter Windows 10/11. `scan` und `report` (Phase 1) sind rein lesend: Größenbaum, Dateitypen, Alter, exakte Duplikate, ähnliche Dateien, Strukturprobleme und Problemdateien als HTML, JSON und CSV. Phase 2 (`plan`, `apply`, `undo`, `runs`, `purge`) verschiebt exakte Duplikate nach einem prüfbaren Plan und einer Bestätigung in eine Quarantäne und kann jeden Lauf zurückdrehen. Es gibt keine Netzwerkzugriffe und keine Telemetrie.
 
-Spec: [docs/features/scan-analyse-bericht.md](docs/features/scan-analyse-bericht.md), Plan: [docs/implementation-plans/scan-analyse-bericht.md](docs/implementation-plans/scan-analyse-bericht.md), Roadmap: [docs/roadmap.md](docs/roadmap.md).
+Spec Phase 1: [docs/features/scan-analyse-bericht.md](docs/features/scan-analyse-bericht.md), Plan: [docs/implementation-plans/scan-analyse-bericht.md](docs/implementation-plans/scan-analyse-bericht.md). Spec Phase 2: [docs/features/aenderungsplan-apply-undo.md](docs/features/aenderungsplan-apply-undo.md), Plan: [docs/implementation-plans/aenderungsplan-apply-undo.md](docs/implementation-plans/aenderungsplan-apply-undo.md). Roadmap: [docs/roadmap.md](docs/roadmap.md).
 
 ## Verwendung
 
@@ -20,6 +20,29 @@ ordner-cleanup index remove <pfad>
 - OneDrive-Cloud-Platzhalter werden nie geöffnet: Sie erscheinen nur mit Metadaten und höchstens als „wahrscheinliche Duplikate“.
 - Exit-Codes: `0` OK, `1` Fehler oder Abbruch, `2` OK mit Teilfehlern (z. B. Zugriff verweigert, gesperrte Dateien).
 - Der letzte Zugriffszeitstempel (Last Access) kann sich durch das Hashen ändern. Windows aktualisiert ihn standardmäßig kaum.
+
+## Aufräumen: plan, apply, undo (Phase 2)
+
+```
+ordner-cleanup plan dedupe <pfad> [--keep oldest|newest|path:<absoluter ordner>] [--out <plan.json>]
+ordner-cleanup apply <plan.json> [--yes]
+ordner-cleanup undo <run-id> [--root <wurzel>] [--yes]
+ordner-cleanup runs [<wurzel>]
+ordner-cleanup purge [--older-than 30d] [--root <wurzel>] [--yes]
+```
+
+Ablauf: Ordner mit `scan` indizieren, mit `plan dedupe` einen Plan erzeugen (die Plan-Datei ist lesbares JSON, ohne `--out` landet sie als `plan-<zeitstempel>.json` im aktuellen Ordner), den Plan prüfen, mit `apply` ausführen, bei Bedarf mit `undo <run-id>` zurückdrehen. `plan` verändert nichts. Pro Duplikatgruppe bleibt immer mindestens eine Datei unberührt.
+
+- **Nichts wird hart gelöscht.** Verschoben wird per Umbenennen auf demselben Volume nach `<wurzel>\.ordner-cleanup\quarantine\<run-id>\<relativer Pfad>`; Zeitstempel und Inhalt bleiben erhalten. Einen Verschiebevorgang über Laufwerksgrenzen gibt es nicht. Ein belegtes Ziel wird nie überschrieben, es bekommt ein Suffix wie `datei (2).txt`. Hart gelöscht wird nur mit `purge` nach Bestätigung, nie automatisch.
+- **Bestätigung:** `apply`, `undo` und `purge` fragen einmal `j/N`. In einer nicht interaktiven Sitzung (Skript, Pipe) brechen sie ohne `--yes` ab, statt zu raten.
+- **Prüfung vor jeder Aktion:** Größe, Änderungszeit und Hash der Datei und der behaltenen Kopie müssen noch zum Plan passen, sonst wird nur diese Aktion als `stale` übersprungen und der Rest läuft weiter. Fehlt die behaltene Datei, passiert in der Gruppe nichts.
+- **Geschützte Pfade** werden nie angefasst: `C:\Windows`, `Program Files`, `Program Files (x86)` und `ProgramData` immer und nicht abschaltbar; `AppData`, `.git`, `node_modules` und Projektordner mit `Cargo.toml`, `package.json`, `*.sln` oder `*.csproj` standardmäßig; weitere über `protected_paths` in der Config. `apply` prüft das unabhängig vom Plan noch einmal (manipulierte Pläne, `..`, `\\?\`, 8.3-Kurznamen). Liegt die angegebene Wurzel selbst unter `AppData`, gilt nur diese eine Regel nicht.
+- **OneDrive:** Cloud-Platzhalter und Links (Symlinks/Junctions) werden nie gelesen, gehasht oder verschoben. Liegt die Wurzel in OneDrive, wird die Quarantäne mitsynchronisiert; `plan` und `apply` warnen davor.
+- **Journal:** Jeder Lauf schreibt ein Write-ahead-Journal (`<wurzel>\.ordner-cleanup\journal\<run-id>.jsonl`, `fsync` je Eintrag) vor dem Verschieben. `undo` prüft den echten Dateizustand, überschreibt nie (Kollisionen werden gemeldet, die Datei bleibt in der Quarantäne) und funktioniert auch nach einem Absturz. Ein zweiter `apply` desselben Plans ändert nichts.
+- **Lauf-Register:** Damit `undo <run-id>` die Wurzel findet, vermerkt `apply` jeden Lauf in `%LOCALAPPDATA%\ordner-cleanup\runs.jsonl`. Maßgeblich bleibt das Journal; fehlt das Register, hilft `--root`.
+- **Config** (`%APPDATA%\ordner-cleanup\config.toml`): `protected_paths = ["D:\\Wichtig"]` und `quarantine_days = 30` (Aufbewahrungsdauer; `purge` löscht nur Läufe, die älter sind).
+- **Exit-Codes:** `0` alles erledigt, `1` Fehler oder Abbruch (auch „N“ bei der Rückfrage), `2` Teilerfolg (stale, übersprungen, Fehler einzelner Aktionen, Kollisionen beim `undo`).
+- Der Ordner `.ordner-cleanup` wird von `scan` nie erfasst.
 
 ## Entwicklung
 
