@@ -12,11 +12,12 @@ use super::{
     onedrive_warning, resolve_root,
 };
 use crate::change::dedupe::plan_dedupe;
+use crate::change::empty_dirs::plan_empty_dirs;
 use crate::change::junk::{plan_junk, JunkOptions};
 use crate::change::limits;
 use crate::change::plan::Plan;
 use crate::change::protect::{ProtectPaths, Protector};
-use crate::cli::{PlanDedupeArgs, PlanJunkArgs};
+use crate::cli::{PlanDedupeArgs, PlanEmptyDirsArgs, PlanJunkArgs};
 use crate::config::{Config, BUILTIN_JUNK_CATEGORIES};
 use crate::index::Index;
 use crate::paths;
@@ -174,6 +175,18 @@ pub(super) fn plan_junk_command(args: &PlanJunkArgs) -> Result<i32> {
         ByteSize::b(result.bytes),
         plan.skipped.len(),
         categories.join(", ")
+    );
+    finish(plan, &p.config, args.out.as_ref(), &headline, &result.notes)
+}
+
+pub(super) fn plan_empty_dirs_command(args: &PlanEmptyDirsArgs) -> Result<i32> {
+    let p = prepare(&args.path)?;
+    let result = plan_empty_dirs(&p.index, &p.root, &p.protector, &now_rfc3339())?;
+    let plan = &result.plan;
+    let headline = format!(
+        "{} leere Ordner, {} übersprungen",
+        plan.actions.len(),
+        plan.skipped.len()
     );
     finish(plan, &p.config, args.out.as_ref(), &headline, &result.notes)
 }

@@ -87,6 +87,8 @@ pub enum PlanCommand {
     Dedupe(PlanDedupeArgs),
     /// Müll (Temp-, Lock- und Download-Reste, alte Installer) in die Quarantäne planen
     Junk(PlanJunkArgs),
+    /// Leere Ordner (rekursiv, von unten nach oben) zum Entfernen planen
+    EmptyDirs(PlanEmptyDirsArgs),
 }
 
 #[derive(Debug, Args)]
@@ -109,6 +111,15 @@ pub struct PlanJunkArgs {
     /// (Default: `junk_categories` aus der Config, sonst alle eingebauten)
     #[arg(long, value_delimiter = ',')]
     pub category: Vec<String>,
+    /// Zieldatei für den Plan (Default: plan-<Zeitstempel>.json im aktuellen Ordner)
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct PlanEmptyDirsArgs {
+    /// Bereits gescannter Ordner
+    pub path: PathBuf,
     /// Zieldatei für den Plan (Default: plan-<Zeitstempel>.json im aktuellen Ordner)
     #[arg(long)]
     pub out: Option<PathBuf>,

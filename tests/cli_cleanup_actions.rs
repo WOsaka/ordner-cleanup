@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime};
 
 use assert_cmd::assert::Assert;
 use assert_cmd::Command;
+use ordner_cleanup::change::fsops::{FsOps, RealFs};
 use ordner_cleanup::paths;
 use predicates::str::contains;
 
@@ -48,6 +49,12 @@ impl Env {
         let dir = self.home.path().join("config");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("config.toml"), text).unwrap();
+    }
+
+    fn mkdir(&self, rel: &str) -> PathBuf {
+        let path = self.root().join(rel);
+        std::fs::create_dir_all(paths::extended(&path)).unwrap();
+        path
     }
 
     fn write(&self, rel: &str, content: &str) -> PathBuf {
@@ -355,6 +362,206 @@ fn junk_geschuetzter_pfad_kommt_nicht_in_den_plan() {
     let plan = env.plan("junk", "plan.json", &[]);
     let json = plan_json(&plan);
     assert_eq!(action_paths(&json, env.root()), [r"frei\cache.tmp"]);
+    assert!(json["skipped"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["reason"] == "protected"));
+}
+
+// ---------------------------------------------------------------------------------------------
+// empty-dirs
+// ---------------------------------------------------------------------------------------------
+
+const KNOWN_MTIME: i64 = 1_600_000_000 * 10_000_000;
+const KNOWN_CTIME: i64 = 1_500_000_000 * 10_000_000;
+
+/// Setzt Attribute und Zeiten einer Ordnerliste (Kinder zuerst, sonst ändert das Anlegen der
+/// Kinder die Zeit der Eltern wieder).
+fn set_dir_times(env: &Env, rels_bottom_up: &[(&str, u32)]) {
+    for (rel, attrs) in rels_bottom_up {
+        RealFs
+            .set_dir_meta(&env.root().join(rel), *attrs, KNOWN_MTIME, KNOWN_CTIME)
+            .unwrap();
+    }
+}
+
+fn dir_meta(env: &Env, rel: &str) -> (i64, i64, bool) {
+    let meta = RealFs.metadata(&env.root().join(rel)).unwrap();
+    (meta.mtime_ticks, meta.ctime_ticks, meta.attrs.is_hidden())
+}
+
+fn empty_tree(env: &Env) {
+    env.mkdir("a/b/c");
+    env.mkdir("d");
+    env.write("keep/datei.txt", "bleibt");
+}
+
+#[test]
+fn empty_dirs_plan_apply_undo_stellen_ordner_attribute_und_zeiten_her() {
+    let env = Env::new();
+    empty_tree(&env);
+    set_dir_times(
+        &env,
+        &[
+            ("a/b/c", 0x10),
+            ("a/b", 0x10 | 0x2),
+            ("a", 0x10),
+            ("d", 0x10),
+        ],
+    );
+    let before = env.snapshot();
+    let metas: Vec<_> = ["a", "a/b", "a/b/c", "d"]
+        .iter()
+        .map(|rel| dir_meta(&env, rel))
+        .collect();
+
+    let plan = env.plan("empty-dirs", "plan.json", &[]);
+    assert_eq!(env.snapshot(), before, "plan darf nichts verändern");
+
+    let json = plan_json(&plan);
+    assert_eq!(json["kind"], "empty-dirs");
+    let actions = json["actions"].as_array().unwrap();
+    assert_eq!(actions.len(), 4);
+    assert!(actions.iter().all(|a| a["type"] == "remove-dir"));
+    let order: Vec<String> = actions
+        .iter()
+        .map(|a| {
+            Path::new(a["path"].as_str().unwrap())
+                .strip_prefix(env.root())
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert_eq!(order, [r"a\b\c", r"a\b", "a", "d"], "von unten nach oben");
+
+    let out = stdout(env.apply(&plan).success());
+    assert!(!env.exists("a") && !env.exists("d"));
+    assert!(env.exists("keep") && env.root().exists(), "Wurzel bleibt");
+
+    env.undo(&run_id(&out)).success();
+
+    assert_eq!(env.snapshot(), before);
+    let after: Vec<_> = ["a", "a/b", "a/b/c", "d"]
+        .iter()
+        .map(|rel| dir_meta(&env, rel))
+        .collect();
+    assert_eq!(
+        after, metas,
+        "Zeiten und versteckt-Attribut wie vor dem Lauf"
+    );
+}
+
+#[test]
+fn empty_dirs_ordner_mit_nur_thumbs_db_ist_nicht_leer_und_der_hinweis_nennt_junk() {
+    let env = Env::new();
+    env.write("muell/Thumbs.db", "t");
+    env.mkdir("leer");
+    env.scan();
+
+    let text = stdout(
+        env.bin()
+            .args(["plan", "empty-dirs"])
+            .arg(env.root())
+            .arg("--out")
+            .arg(env.out.path().join("plan.json"))
+            .assert()
+            .success(),
+    );
+
+    let json = plan_json(&env.out.path().join("plan.json"));
+    assert_eq!(action_paths(&json, env.root()), ["leer"]);
+    assert!(text.contains("plan junk"), "{text}");
+}
+
+#[test]
+fn kompletter_putz_junk_dann_empty_dirs_entfernt_auch_ordner_die_nur_muell_enthielten() {
+    let env = Env::new();
+    env.write("muell/Thumbs.db", "t");
+    env.write("muell/sub/cache.tmp", "c");
+    env.write("keep/datei.txt", "bleibt");
+    let before = env.snapshot();
+
+    let junk = env.plan("junk", "junk.json", &[]);
+    let junk_run = run_id(&stdout(env.apply(&junk).success()));
+    let dirs = env.plan("empty-dirs", "dirs.json", &[]);
+    let dirs_run = run_id(&stdout(env.apply(&dirs).success()));
+
+    assert!(!env.exists("muell"), "Ordner nur mit Müll ist jetzt weg");
+    assert!(env.exists(r"keep\datei.txt"));
+
+    env.undo(&dirs_run).success();
+    env.undo(&junk_run).success();
+    assert_eq!(env.snapshot(), before);
+}
+
+#[test]
+fn empty_dirs_leere_wurzel_wird_nie_entfernt() {
+    let env = Env::new();
+    let plan = env.plan("empty-dirs", "plan.json", &[]);
+    assert!(plan_json(&plan)["actions"].as_array().unwrap().is_empty());
+    env.apply(&plan).success();
+    assert!(env.root().exists());
+}
+
+#[test]
+fn empty_dirs_ordner_der_zwischen_plan_und_apply_befuellt_wurde_ist_stale() {
+    let env = Env::new();
+    empty_tree(&env);
+    let plan = env.plan("empty-dirs", "plan.json", &[]);
+    env.write("d/neu.txt", "inzwischen angelegt");
+
+    env.apply(&plan).code(2);
+
+    assert!(env.exists(r"d\neu.txt"), "der befüllte Ordner bleibt");
+    assert!(!env.exists("a"), "der Rest läuft");
+}
+
+#[test]
+fn empty_dirs_ist_idempotent() {
+    let env = Env::new();
+    empty_tree(&env);
+    let plan = env.plan("empty-dirs", "plan1.json", &[]);
+    env.apply(&plan).success();
+
+    let second = env.plan("empty-dirs", "plan2.json", &[]);
+
+    assert!(plan_json(&second)["actions"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn undo_meldet_kollision_wenn_an_der_stelle_des_ordners_inzwischen_eine_datei_liegt() {
+    let env = Env::new();
+    empty_tree(&env);
+    let plan = env.plan("empty-dirs", "plan.json", &[]);
+    let run = run_id(&stdout(env.apply(&plan).success()));
+    env.write("d", "ich bin jetzt eine datei");
+
+    env.undo(&run).code(2);
+
+    assert_eq!(
+        std::fs::read_to_string(env.root().join("d")).unwrap(),
+        "ich bin jetzt eine datei"
+    );
+    assert!(
+        env.root().join("a/b/c").is_dir(),
+        "der Rest wird wiederhergestellt"
+    );
+}
+
+#[test]
+fn empty_dirs_geschuetzter_ordner_kommt_nicht_in_den_plan() {
+    let env = Env::new();
+    env.mkdir("wichtig");
+    env.mkdir("frei");
+    env.config(&format!(
+        "protected_paths = [{:?}]\n",
+        env.root().join("wichtig").to_string_lossy()
+    ));
+    let plan = env.plan("empty-dirs", "plan.json", &[]);
+    let json = plan_json(&plan);
+    assert_eq!(action_paths(&json, env.root()), ["frei"]);
     assert!(json["skipped"]
         .as_array()
         .unwrap()
