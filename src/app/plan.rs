@@ -46,7 +46,7 @@ pub(super) fn plan_dedupe_command(args: &PlanDedupeArgs) -> Result<i32> {
         plan.actions.len(),
         ByteSize::b(result.freed_bytes),
         plan.skipped.len(),
-        plan.keep_strategy
+        plan.keep_strategy.as_deref().unwrap_or("-")
     );
     let mut reasons = std::collections::BTreeMap::new();
     for s in &plan.skipped {

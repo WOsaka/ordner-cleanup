@@ -99,6 +99,16 @@ pub enum SkipReason {
     /// Quarantäne läge auf einem anderen Volume als die Quelle.
     DifferentVolume,
     OutsideRoot,
+    /// Ordner enthält Einträge, die der Index nicht (vollständig) kennt.
+    IncompleteIndex,
+    /// Jünger als das Mindestalter (`junk`-Installer, `versions`).
+    TooRecent,
+    /// Archiv-Ziel existiert bereits (nichts wird überschrieben).
+    TargetExists,
+    /// `remove-dir`: Ordner ist (inzwischen) nicht leer.
+    NotEmpty,
+    /// Liegt bereits unter `_Archiv`.
+    InArchive,
 }
 
 impl fmt::Display for SkipReason {
@@ -115,6 +125,11 @@ impl fmt::Display for SkipReason {
             Self::AlreadyDone => "bereits erledigt",
             Self::DifferentVolume => "Quarantäne läge auf einem anderen Volume",
             Self::OutsideRoot => "liegt nicht in der Wurzel",
+            Self::IncompleteIndex => "Index unvollständig für diesen Ordner",
+            Self::TooRecent => "zu neu (Mindestalter nicht erreicht)",
+            Self::TargetExists => "Ziel existiert bereits",
+            Self::NotEmpty => "Ordner nicht leer",
+            Self::InArchive => "bereits im Archiv",
         })
     }
 }
@@ -144,6 +159,24 @@ mod tests {
     #[case("", false)]
     fn run_id_validierung(#[case] text: &str, #[case] ok: bool) {
         assert_eq!(RunId::parse(text).is_ok(), ok, "{text}");
+    }
+
+    #[rstest]
+    #[case(SkipReason::IncompleteIndex, "incomplete-index", "Index unvollständig")]
+    #[case(SkipReason::TooRecent, "too-recent", "zu neu")]
+    #[case(SkipReason::TargetExists, "target-exists", "Ziel existiert bereits")]
+    #[case(SkipReason::NotEmpty, "not-empty", "Ordner nicht leer")]
+    #[case(SkipReason::InArchive, "in-archive", "bereits im Archiv")]
+    fn neue_skip_reasons_phase_3(
+        #[case] reason: SkipReason,
+        #[case] json: &str,
+        #[case] text: &str,
+    ) {
+        assert_eq!(
+            serde_json::to_string(&reason).unwrap(),
+            format!("\"{json}\"")
+        );
+        assert!(reason.to_string().contains(text), "{reason}");
     }
 
     #[test]

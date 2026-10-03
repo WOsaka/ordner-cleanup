@@ -117,15 +117,25 @@ fn io_message(e: &io::Error) -> String {
     }
 }
 
+/// `hash`, `keep` und `keep_hash` einer `dedupe`-Aktion (die Validierung stellt sie sicher).
+fn dedupe_fields(a: &PlannedAction) -> Result<(&str, &str, &str), Verdict> {
+    match (&a.hash, &a.keep, &a.keep_hash) {
+        (Some(h), Some(k), Some(kh)) => Ok((h, k, kh)),
+        _ => Err(Verdict::Fail("Aktion enthält keinen Hash".into())),
+    }
+}
+
 /// Behaltene Datei prüfen (einmal je Datei und Hash, Ergebnis wird gemerkt).
 fn verify_keep(
     a: &PlannedAction,
+    keep_path: &str,
+    keep_hash: &str,
     env: &ApplyEnv,
     cache: &mut HashMap<String, Option<SkipReason>>,
 ) -> Option<SkipReason> {
-    let key = format!("{}|{}", paths::path_key(Path::new(&a.keep)), a.keep_hash);
+    let key = format!("{}|{}", paths::path_key(Path::new(keep_path)), keep_hash);
     *cache.entry(key).or_insert_with(|| {
-        let keep = Path::new(&a.keep);
+        let keep = Path::new(keep_path);
         let meta = match env.fs.metadata(keep) {
             Ok(m) if !m.is_dir && !m.is_link && !m.is_cloud_only() => m,
             _ => return Some(SkipReason::KeepMissing),
@@ -134,7 +144,7 @@ fn verify_keep(
             return Some(SkipReason::Stale);
         }
         match env.fs.hash(keep, meta.size) {
-            Ok(h) if hex(&h) == a.keep_hash => None,
+            Ok(h) if hex(&h) == keep_hash => None,
             Ok(_) => Some(SkipReason::Stale),
             Err(_) => Some(SkipReason::KeepMissing),
         }
@@ -169,11 +179,12 @@ fn verify(
     if meta.is_dir || meta.size != a.size || meta.mtime_ticks != a.mtime_ticks {
         return Err(Verdict::Skip(SkipReason::Stale));
     }
-    if let Some(reason) = verify_keep(a, env, keeps) {
+    let (hash, keep_path, keep_hash) = dedupe_fields(a)?;
+    if let Some(reason) = verify_keep(a, keep_path, keep_hash, env, keeps) {
         return Err(Verdict::Skip(reason));
     }
     match env.fs.hash(src, meta.size) {
-        Ok(h) if hex(&h) == a.hash => {}
+        Ok(h) if hex(&h) == hash => {}
         Ok(_) => return Err(Verdict::Skip(SkipReason::Stale)),
         Err(e) => return Err(Verdict::Fail(io_message(&e))),
     }
@@ -233,7 +244,7 @@ fn process(
         from: a.path.clone(),
         to: paths::display(&target),
         size: a.size,
-        hash: a.hash.clone(),
+        hash: a.hash.clone().unwrap_or_default(),
     })?;
     match env.fs.rename(Path::new(&a.path), &target) {
         Ok(()) => {
@@ -530,7 +541,7 @@ mod tests {
         }
         let mut plan = fx.plan(&[("a.txt", "zielordner/../a.txt")]);
         plan.actions[0].path = paths::display(&link);
-        plan.actions[0].keep = paths::display(&fx.root.join("a.txt"));
+        plan.actions[0].keep = Some(paths::display(&fx.root.join("a.txt")));
         plan.actions[0].size = 0;
 
         let out = apply(&fx, &plan);

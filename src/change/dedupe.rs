@@ -171,10 +171,13 @@ pub fn plan_dedupe(
                     size,
                     mtime_ticks: c.file.mtime,
                     mtime: ticks_to_rfc3339(c.file.mtime),
-                    hash: hash.clone(),
-                    keep: keep.file.path.clone(),
-                    keep_hash: hash.clone(),
+                    hash: Some(hash.clone()),
+                    keep: Some(keep.file.path.clone()),
+                    keep_hash: Some(hash.clone()),
                     reason: "exact-duplicate".into(),
+                    target: None,
+                    is_dir: false,
+                    files: None,
                 },
             ));
         }
@@ -196,7 +199,8 @@ pub fn plan_dedupe(
             created: created.to_string(),
             kind: PlanKind::Dedupe,
             root: paths::display(root),
-            keep_strategy: strategy.to_string(),
+            keep_strategy: Some(strategy.to_string()),
+            params: Default::default(),
             actions,
             skipped: skipped.into_iter().map(|(_, s)| s).collect(),
         },
@@ -292,11 +296,17 @@ mod tests {
         );
         assert_eq!(plan.actions[0].id, 1);
         assert_eq!(plan.actions[1].id, 2);
-        assert!(plan.actions.iter().all(|a| a.keep == r"Z:\Root\a\orig.txt"));
-        assert_eq!(plan.actions[0].hash, "01".repeat(16));
+        assert!(plan
+            .actions
+            .iter()
+            .all(|a| a.keep.as_deref() == Some(r"Z:\Root\a\orig.txt")));
+        assert_eq!(
+            plan.actions[0].hash.as_deref(),
+            Some("01".repeat(16).as_str())
+        );
         assert_eq!(plan.actions[0].keep_hash, plan.actions[0].hash);
         assert_eq!(plan.actions[0].mtime_ticks, 200);
-        assert_eq!(plan.keep_strategy, "oldest");
+        assert_eq!(plan.keep_strategy.as_deref(), Some("oldest"));
         assert_eq!(result.freed_bytes, 200);
     }
 
@@ -309,7 +319,7 @@ mod tests {
         ]);
         let plan = plan_with(&index, KeepStrategy::Newest).plan;
         assert_eq!(paths_of(&plan), [r"Z:\Root\a.txt", r"Z:\Root\c.txt"]);
-        assert_eq!(plan.actions[0].keep, r"Z:\Root\b.txt");
+        assert_eq!(plan.actions[0].keep.as_deref(), Some(r"Z:\Root\b.txt"));
     }
 
     #[test]
@@ -320,7 +330,10 @@ mod tests {
             (r"Z:\Root\a.txt", 100, 1, None),
         ]);
         let plan = plan_with(&index, KeepStrategy::Oldest).plan;
-        assert!(plan.actions.iter().all(|a| a.keep == r"Z:\Root\a.txt"));
+        assert!(plan
+            .actions
+            .iter()
+            .all(|a| a.keep.as_deref() == Some(r"Z:\Root\a.txt")));
     }
 
     #[test]
@@ -337,7 +350,7 @@ mod tests {
         assert!(plan
             .actions
             .iter()
-            .all(|a| a.keep == r"Z:\Root\Archiv\x.txt"));
+            .all(|a| a.keep.as_deref() == Some(r"Z:\Root\Archiv\x.txt")));
     }
 
     #[test]
@@ -365,7 +378,7 @@ mod tests {
         let plan = plan_with(&index, KeepStrategy::Oldest).plan;
         // Die älteste ist geschützt und wird nicht gewählt; a.txt bleibt, b.txt geht.
         assert_eq!(paths_of(&plan), [r"Z:\Root\b.txt"]);
-        assert_eq!(plan.actions[0].keep, r"Z:\Root\a.txt");
+        assert_eq!(plan.actions[0].keep.as_deref(), Some(r"Z:\Root\a.txt"));
         assert_eq!(
             plan.skipped,
             [Skipped {
@@ -461,7 +474,11 @@ mod tests {
         // (Hash-Byte, Dateien der Gruppe im Index)
         for (byte, total) in [(1u8, 3), (2, 2), (3, 2)] {
             let hash = hex(&[byte; 16]);
-            let planned = plan.actions.iter().filter(|a| a.hash == hash).count();
+            let planned = plan
+                .actions
+                .iter()
+                .filter(|a| a.hash.as_deref() == Some(hash.as_str()))
+                .count();
             assert!(planned < total, "Gruppe {hash} vollständig im Plan");
         }
     }

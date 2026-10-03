@@ -58,10 +58,13 @@ impl Fx {
                     size: meta.size,
                     mtime_ticks: meta.mtime_ticks,
                     mtime: String::new(),
-                    hash: hash.clone(),
-                    keep: paths::display(&keep),
-                    keep_hash: hash,
+                    hash: Some(hash.clone()),
+                    keep: Some(paths::display(&keep)),
+                    keep_hash: Some(hash),
                     reason: "exact-duplicate".into(),
+                    target: None,
+                    is_dir: false,
+                    files: None,
                 }
             })
             .collect();
@@ -70,7 +73,8 @@ impl Fx {
             created: "t".into(),
             kind: PlanKind::Dedupe,
             root: paths::display(&self.root),
-            keep_strategy: "oldest".into(),
+            keep_strategy: Some("oldest".into()),
+            params: Default::default(),
             actions,
             skipped: vec![],
         }
