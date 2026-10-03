@@ -38,7 +38,7 @@ Betroffen ist zunächst der Entwickler selbst, später Kollegen. Phase 3 liefert
    - `ordner-cleanup plan junk <pfad> [--category system,temp,downloads,installer] [--out <plan.json>]`
    - `ordner-cleanup plan empty-dirs <pfad> [--out <plan.json>]`
    - `ordner-cleanup plan archive <pfad> [--older-than 2y] [--out <plan.json>]`
-   - `ordner-cleanup plan versions <pfad> [--out <plan.json>]`
+   - `ordner-cleanup plan versions <pfad> [--min-age 30d] [--out <plan.json>]`
 3. Das System gibt eine Zusammenfassung aus (Anzahl Aktionen, betroffene Bytes bzw. Ordner, übersprungene Einträge mit Gründen) und nennt den Pfad der Plan-Datei. Unter einer OneDrive-Wurzel erscheint die Warnung aus Phase 2.
 4. Der Nutzer prüft die Plan-Datei.
 5. Er startet `ordner-cleanup apply <plan.json> [--yes] [--allow-large]`. Überschreitet ein Plan unter einer OneDrive-Wurzel die konfigurierte Obergrenze (Anzahl Dateien oder Bytes, die verschoben werden), verweigert `apply` ohne `--allow-large` mit klarer Meldung.
@@ -52,7 +52,7 @@ Empfohlene Reihenfolge für einen Komplettputz: `junk` → `apply` → `scan` �
   - `system`: `Thumbs.db`, `ehthumbs.db`, `.DS_Store`
   - `temp`: `*.tmp`, `~$*` (Office-Lockdateien)
   - `downloads`: `*.crdownload`, `*.part`, `*.partial`
-  - `installer`: `*.exe`, `*.msi` direkt im Downloads-Ordner des Nutzers, älter als N Tage (Default 90, Config)
+  - `installer`: `*.exe`, `*.msi` direkt im Downloads-Ordner des Nutzers, älter als N Tage (Default 90, Config). Der Downloads-Ordner wird über die Known Folder API (`SHGetKnownFolderPath(FOLDERID_Downloads)`) bestimmt, damit auch umgeleitete Ordner erkannt werden; die Config kann ihn überschreiben und weitere Ordner ergänzen.
 - Die Config kann eigene Kategorien bzw. Muster ergänzen (Glob auf den Dateinamen, optional Mindestalter, optional auf Ordner beschränkt).
 - Aktionstyp `quarantine` mit `reason: junk:<kategorie>`.
 
@@ -62,7 +62,7 @@ Empfohlene Reihenfolge für einen Komplettputz: `junk` → `apply` → `scan` �
 - Neuer Aktionstyp `remove-dir`: Beim Apply wird der Ordner nur entfernt, wenn er in diesem Moment wirklich leer ist. Das Journal speichert Attribute und Zeitstempel. `undo` legt Ordner von oben nach unten wieder an und setzt Attribute und Zeitstempel zurück.
 
 ### Aktion `archive`
-- Ein Ordner gilt als alt, wenn die jüngste mtime aller Dateien darin (rekursiv) älter als `--older-than` ist (Default 2 Jahre, Config).
+- Ein Ordner gilt als alt, wenn die jüngste mtime aller Dateien darin (rekursiv) älter als `--older-than` ist (Default 2 Jahre, Config). Es zählt nur die mtime; die Zugriffszeit (atime) wird nicht berücksichtigt, weil sie unter Windows oft deaktiviert ist oder von Virenscanner und Indexer verfälscht wird.
 - Nur der oberste passende Ordner wird verschoben, nie zusätzlich seine Unterordner. Einzeldateien werden nicht archiviert.
 - Ziel: `<wurzel>\_Archiv\<Jahr der jüngsten mtime>\<relativer Pfad>`.
 - Neuer Aktionstyp `move` (Quelle, Ziel, für Ordner: Anzahl Dateien und Summe der Bytes als Stale-Merkmal). Moves bleiben auf demselben Volume.
@@ -70,12 +70,12 @@ Empfohlene Reihenfolge für einen Komplettputz: `junk` → `apply` → `scan` �
 
 ### Aktion `versions`
 - Gruppenbildung über die Namensnormalisierung aus Phase 1 (`analysis/similar.rs`), zusätzlich eingeschränkt auf denselben Ordner und dieselbe Endung. Eine Gruppe braucht mindestens zwei Dateien.
-- Die Datei mit der jüngsten mtime bleibt (`keep`), alle anderen bekommen eine `move`-Aktion nach `<wurzel>\_Archiv\Versionen\<relativer Pfad>`.
+- Die Datei mit der jüngsten mtime bleibt (`keep`), alle anderen bekommen eine `move`-Aktion nach `<wurzel>\_Archiv\Versionen\<relativer Pfad>`, sofern ihre mtime mindestens `--min-age` alt ist (Default 30 Tage, Config). Jüngere ältere Versionen bleiben am Ort und erscheinen als übersprungen (`reason: too-recent`), damit laufende Arbeit nicht gestört wird.
 - Exakte Duplikate innerhalb einer Gruppe bleiben trotzdem Versionen. Für Duplikate ist `plan dedupe` zuständig.
 - Dateien unterhalb von `_Archiv` sind keine Kandidaten.
 
 ### Plan-Format (Erweiterung)
-`version` bleibt kompatibel bzw. wird erhöht, wenn nötig (Entscheidung im Implementierungsplan). Neue `kind`-Werte: `junk`, `empty-dirs`, `archive`, `versions`. Neue Aktionstypen:
+Neue Pläne tragen `version: 2`. `apply` und `undo` lesen Pläne der Versionen 1 und 2; ein Build, der nur Version 1 kennt, lehnt v2-Pläne mit klarer Meldung ab. Neue `kind`-Werte: `junk`, `empty-dirs`, `archive`, `versions`. Neue Aktionstypen:
 
 ```json
 { "id": 1, "type": "remove-dir", "path": "C:\\...\\leer", "mtime": "…", "reason": "empty-dir" }
@@ -87,8 +87,10 @@ Empfohlene Reihenfolge für einen Komplettputz: `junk` → `apply` → `scan` �
 
 ### Config (Erweiterung)
 - `junk`: zusätzliche Kategorien bzw. Muster, Mindestalter für Installer
-- `archive.older_than`: Default-Schwelle
-- `onedrive.max_move_files`, `onedrive.max_move_bytes`: Obergrenze, ab der `--allow-large` nötig ist
+- `junk.downloads_dirs`: Downloads-Ordner überschreiben bzw. ergänzen (Default: Known Folder)
+- `archive.older_than`: Default-Schwelle (2 Jahre)
+- `versions.min_age`: Mindestalter älterer Versionen (30 Tage)
+- `onedrive.max_move_files`, `onedrive.max_move_bytes`: Obergrenze, ab der `--allow-large` nötig ist (Default 1.000 Dateien oder 5 GB, was zuerst erreicht wird)
 
 ## Acceptance Criteria
 - [ ] Given ein indizierter Ordner, when ein beliebiges `plan junk|empty-dirs|archive|versions` läuft, then entsteht eine Plan-Datei und im Ordner ändert sich kein Byte
@@ -100,7 +102,9 @@ Empfohlene Reihenfolge für einen Komplettputz: `junk` → `apply` → `scan` �
 - [ ] Given ein `empty-dirs`-Lauf, when `undo` läuft, then existieren alle Ordner wieder mit ursprünglichen Attributen und Zeitstempeln
 - [ ] Given ein Ordner, dessen jüngste Datei älter als 2 Jahre ist, when `plan archive` und `apply` laufen, then liegt er unter `_Archiv\<Jahr>\<relativer Pfad>` mit unverändertem Inhalt; `undo` stellt ihn byteidentisch am Ursprungsort wieder her
 - [ ] Given ein alter Ordner mit einem alten Unterordner, when `plan archive` läuft, then gibt es genau eine Aktion für den obersten Ordner
-- [ ] Given eine Versionsgruppe (`Bericht_v1.docx`, `Bericht_v2.docx`, `Bericht final.docx`), when `plan versions` und `apply` laufen, then bleibt die jüngste Datei am Ort und die anderen liegen unter `_Archiv\Versionen\…`; `undo` stellt den Ausgangszustand her
+- [ ] Given eine Versionsgruppe (`Bericht_v1.docx`, `Bericht_v2.docx`, `Bericht final.docx`), deren ältere Versionen mindestens 30 Tage alt sind, when `plan versions` und `apply` laufen, then bleibt die jüngste Datei am Ort und die anderen liegen unter `_Archiv\Versionen\…`; `undo` stellt den Ausgangszustand her
+- [ ] Given eine ältere Version jünger als `--min-age`, when `plan versions` läuft, then ist sie nicht im Plan und erscheint als übersprungen (`too-recent`)
+- [ ] Given ein Plan mit `version: 1` aus Phase 2, when `apply` oder `undo` läuft, then funktioniert er unverändert
 - [ ] Given gleich normalisierte Namen in verschiedenen Ordnern oder mit verschiedener Endung, when `plan versions` läuft, then bilden sie keine Gruppe
 - [ ] Given ein bereits ausgeführter Archiv- oder Versionslauf, when `scan` und dasselbe `plan` erneut laufen, then ist der Plan leer (Idempotenz, `_Archiv` wird ausgelassen)
 - [ ] Given ein Plan unter einer OneDrive-Wurzel über der Obergrenze, when `apply` ohne `--allow-large` läuft, then wird nichts verändert und der Grund gemeldet; mit `--allow-large` läuft er
@@ -146,8 +150,8 @@ Empfohlene Reihenfolge für einen Komplettputz: `junk` → `apply` → `scan` �
 - Config-Datei aus Phase 2 (Erweiterung um `junk`, `archive`, `onedrive`)
 
 ## Open Questions
-- [ ] Plan-`version`: auf 2 erhöhen oder `version: 1` um neue Aktionstypen erweitern? Vorschlag: erhöhen, Phase-2-Pläne bleiben lesbar.
-- [ ] Defaults für die OneDrive-Obergrenze (Vorschlag: 1.000 Dateien oder 5 GB)?
-- [ ] Wie wird der Downloads-Ordner bestimmt (Known Folder API `FOLDERID_Downloads`)?
-- [ ] Soll `archive` die jüngste mtime oder zusätzlich die letzte Zugriffszeit berücksichtigen? Vorschlag: nur mtime (atime ist unter Windows oft deaktiviert).
-- [ ] Soll `versions` zusätzlich eine Mindestanzahl oder ein Mindestalter der älteren Versionen verlangen?
+- [x] Plan-`version`: auf 2 erhöhen, Phase-2-Pläne (v1) bleiben lesbar
+- [x] OneDrive-Obergrenze: 1.000 Dateien oder 5 GB (was zuerst erreicht wird), per Config änderbar
+- [x] Downloads-Ordner: Known Folder API (`FOLDERID_Downloads`), per Config überschreib- und erweiterbar
+- [x] Archiv-Alter: nur jüngste mtime, keine atime
+- [x] Versionen: Mindestalter 30 Tage für ältere Versionen (`--min-age`, Config), keine Mindestanzahl
