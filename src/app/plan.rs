@@ -8,7 +8,7 @@ use anyhow::{bail, Context, Result};
 use bytesize::ByteSize;
 
 use super::{
-    index_age_note, index_path, load_config, now_rfc3339, onedrive_roots_from_env,
+    index_age_note, index_path, load_config, normalize, now_rfc3339, onedrive_roots_from_env,
     onedrive_warning, resolve_root,
 };
 use crate::analysis::age::parse_old_after;
@@ -153,7 +153,11 @@ fn downloads_dirs(config: &Config) -> Vec<PathBuf> {
     if config.downloads_dirs.is_empty() {
         downloads_dir().into_iter().collect()
     } else {
-        config.downloads_dirs.iter().map(PathBuf::from).collect()
+        config
+            .downloads_dirs
+            .iter()
+            .map(|d| normalize(Path::new(d)))
+            .collect()
     }
 }
 

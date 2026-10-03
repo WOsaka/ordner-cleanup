@@ -155,6 +155,8 @@ fn plan_json(path: &Path) -> serde_json::Value {
 }
 
 fn action_paths(plan: &serde_json::Value, root: &Path) -> Vec<String> {
+    // Plan-Pfade sind kanonisiert; der Temp-Pfad kann ein 8.3-Kurzname sein (CI: RUNNER~1).
+    let root = PathBuf::from(paths::display(&std::fs::canonicalize(root).unwrap()));
     let mut out: Vec<String> = plan["actions"]
         .as_array()
         .unwrap()
@@ -162,7 +164,7 @@ fn action_paths(plan: &serde_json::Value, root: &Path) -> Vec<String> {
         .map(|a| {
             let p = a["path"].as_str().unwrap();
             Path::new(p)
-                .strip_prefix(root)
+                .strip_prefix(&root)
                 .unwrap()
                 .to_string_lossy()
                 .into_owned()
@@ -428,11 +430,12 @@ fn empty_dirs_plan_apply_undo_stellen_ordner_attribute_und_zeiten_her() {
     let actions = json["actions"].as_array().unwrap();
     assert_eq!(actions.len(), 4);
     assert!(actions.iter().all(|a| a["type"] == "remove-dir"));
+    let root = PathBuf::from(paths::display(&std::fs::canonicalize(env.root()).unwrap()));
     let order: Vec<String> = actions
         .iter()
         .map(|a| {
             Path::new(a["path"].as_str().unwrap())
-                .strip_prefix(env.root())
+                .strip_prefix(&root)
                 .unwrap()
                 .to_string_lossy()
                 .into_owned()
