@@ -204,7 +204,11 @@ fn plan_apply_undo_stellt_den_ausgangszustand_byteidentisch_her() {
     let before = env.snapshot();
     let plan = env.plan("plan.json");
 
-    let applied = stdout(env.apply(&plan).success().stdout(contains("2 verschoben")));
+    let applied = stdout(
+        env.apply(&plan)
+            .success()
+            .stdout(contains("2 in die Quarantäne verschoben")),
+    );
     let run = run_id(&applied);
 
     let during = env.snapshot();
@@ -275,7 +279,7 @@ fn geaenderte_datei_ist_stale_der_rest_laeuft_exit_2() {
 
     env.apply(&plan)
         .code(2)
-        .stdout(contains("1 verschoben"))
+        .stdout(contains("1 in die Quarantäne verschoben"))
         .stdout(contains("1 stale"));
 
     assert!(env.root().join("b/kopie.txt").exists());
@@ -522,7 +526,9 @@ fn lange_pfade_umlaute_und_leerzeichen_laufen_durch() {
     let plan = env.plan("plan.json");
 
     let run = run_id(&stdout(
-        env.apply(&plan).success().stdout(contains("1 verschoben")),
+        env.apply(&plan)
+            .success()
+            .stdout(contains("1 in die Quarantäne verschoben")),
     ));
     assert!(!std::fs::exists(paths::extended(&kopie)).unwrap());
 

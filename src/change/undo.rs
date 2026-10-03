@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use super::fsops::FsOps;
 use super::journal::{self, Dest, EndStatus, Entry, JournalError, JournalWriter};
 use super::plan::{has_dot_component, ARCHIVE_DIR};
-use super::{quarantine, RunId};
+use super::{quarantine, ActionCounts, RunId};
 use crate::paths;
 
 #[derive(Debug, thiserror::Error)]
@@ -101,8 +101,10 @@ pub enum RunStatus {
 pub struct RunSummary {
     pub run: RunId,
     pub started: Option<String>,
-    /// Verschobene Dateien.
+    /// Ausgeführte Aktionen insgesamt (Dateien, Ordner).
     pub moved: usize,
+    /// Dieselben nach Typ.
+    pub counts: ActionCounts,
     /// Bytes, die noch in der Quarantäne liegen.
     pub bytes: u64,
     pub status: RunStatus,
@@ -511,6 +513,23 @@ fn summarize(run: RunId, entries: &[Entry], quarantine_days: u32) -> RunSummary 
     RunSummary {
         run,
         moved: ops.iter().filter(|o| o.done && !o.failed).count(),
+        counts: ops.iter().filter(|o| o.done && !o.failed).fold(
+            ActionCounts::default(),
+            |mut counts, o| {
+                match o.kind {
+                    OpKind::Move {
+                        dest: Dest::Quarantine,
+                        ..
+                    } => counts.quarantined += 1,
+                    OpKind::Move {
+                        dest: Dest::Archive,
+                        ..
+                    } => counts.archived += 1,
+                    OpKind::RemoveDir { .. } => counts.dirs_removed += 1,
+                }
+                counts
+            },
+        ),
         bytes: if purged {
             0
         } else {
@@ -557,6 +576,7 @@ pub fn list_runs(root: &Path, quarantine_days: u32) -> Result<Vec<RunSummary>, U
                 run,
                 started: None,
                 moved: 0,
+                counts: ActionCounts::default(),
                 bytes: 0,
                 status: RunStatus::Unreadable,
                 expires: None,
@@ -931,6 +951,13 @@ mod tests {
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].moved, 4);
         assert_eq!(runs[0].bytes, 0);
+        assert_eq!(
+            runs[0].counts,
+            ActionCounts {
+                dirs_removed: 4,
+                ..ActionCounts::default()
+            }
+        );
         assert_eq!(runs[0].status, RunStatus::Complete);
 
         undo(&fx);
@@ -1180,6 +1207,13 @@ mod tests {
         let (fx, _) = archived();
         let runs = list_runs(&fx.root, 30).unwrap();
         assert_eq!((runs[0].moved, runs[0].bytes), (1, 0));
+        assert_eq!(
+            runs[0].counts,
+            ActionCounts {
+                archived: 1,
+                ..ActionCounts::default()
+            }
+        );
         assert_eq!(runs[0].status, RunStatus::Complete);
         undo(&fx);
         assert_eq!(

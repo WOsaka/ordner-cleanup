@@ -913,3 +913,60 @@ fn versions_gleich_benannte_dateien_in_verschiedenen_ordnern_oder_mit_anderer_en
     let plan = env.plan("versions", "plan.json", &[]);
     assert!(plan_json(&plan)["actions"].as_array().unwrap().is_empty());
 }
+
+// ---------------------------------------------------------------------------------------------
+// Ausgabe von apply und runs
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn apply_nennt_je_aktionstyp_was_geschehen_ist() {
+    let env = Env::new();
+    env.write("a/cache.tmp", "t");
+    let junk = env.plan("junk", "junk.json", &[]);
+    let text = stdout(env.apply(&junk).success());
+    assert!(text.contains("1 in die Quarantäne verschoben"), "{text}");
+
+    let env = Env::new();
+    env.mkdir("leer/auch");
+    let dirs = env.plan("empty-dirs", "dirs.json", &[]);
+    let text = stdout(env.apply(&dirs).success());
+    assert!(text.contains("2 leere Ordner entfernt"), "{text}");
+
+    let env = Env::new();
+    archive_tree(&env);
+    let archive = env.plan("archive", "archive.json", &[]);
+    let text = stdout(env.apply(&archive).success());
+    assert!(text.contains("2 nach _Archiv verschoben"), "{text}");
+}
+
+#[test]
+fn runs_zeigt_aktionen_je_typ_und_quarantaene_bytes_nur_fuer_quarantaene() {
+    let env = Env::new();
+    env.write("a/cache.tmp", "temporär");
+    let junk = env.plan("junk", "junk.json", &[]);
+    env.apply(&junk).success();
+    let runs = stdout(env.bin().args(["runs"]).arg(env.root()).assert().success());
+    assert!(runs.contains("1 Quarantäne (9 B)"), "{runs}");
+
+    let env = Env::new();
+    env.mkdir("leer/auch");
+    let dirs = env.plan("empty-dirs", "dirs.json", &[]);
+    env.apply(&dirs).success();
+    let runs = stdout(env.bin().args(["runs"]).arg(env.root()).assert().success());
+    assert!(runs.contains("2 Ordner"), "{runs}");
+    assert!(
+        !runs.contains("Quarantäne"),
+        "keine Bytes für Ordner: {runs}"
+    );
+
+    let env = Env::new();
+    archive_tree(&env);
+    let archive = env.plan("archive", "archive.json", &[]);
+    env.apply(&archive).success();
+    let runs = stdout(env.bin().args(["runs"]).arg(env.root()).assert().success());
+    assert!(runs.contains("2 Archiv"), "{runs}");
+    assert!(
+        !runs.contains("Quarantäne"),
+        "keine Bytes fürs Archiv: {runs}"
+    );
+}

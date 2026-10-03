@@ -15,7 +15,7 @@ use super::journal::{Dest, EndStatus, Entry, JournalWriter};
 use super::plan::{hex, ActionType, Plan, PlanError, PlannedAction, ARCHIVE_DIR};
 use super::protect::Protector;
 use super::quarantine::{self, MAX_TARGET_LEN};
-use super::{RunId, SkipReason};
+use super::{ActionCounts, RunId, SkipReason};
 use crate::paths;
 use crate::scan::hasher;
 
@@ -55,6 +55,7 @@ pub enum ActionStatus {
 pub struct ActionResult {
     pub id: u32,
     pub path: String,
+    pub kind: ActionType,
     pub status: ActionStatus,
 }
 
@@ -69,6 +70,19 @@ pub struct ApplyOutcome {
 impl ApplyOutcome {
     fn count(&self, f: impl Fn(&ActionStatus) -> bool) -> usize {
         self.results.iter().filter(|r| f(&r.status)).count()
+    }
+
+    /// Ausgeführte Aktionen nach Typ.
+    pub fn counts(&self) -> ActionCounts {
+        let mut counts = ActionCounts::default();
+        for r in self
+            .results
+            .iter()
+            .filter(|r| r.status == ActionStatus::Done)
+        {
+            counts.count(r.kind);
+        }
+        counts
     }
 
     pub fn executed(&self) -> usize {
@@ -643,6 +657,7 @@ pub fn apply_plan(plan: &Plan, env: &ApplyEnv) -> Result<ApplyOutcome, ApplyErro
         let result = ActionResult {
             id: action.id,
             path: action.path.clone(),
+            kind: action.action,
             status,
         };
         (env.progress)(&result);
@@ -703,6 +718,13 @@ mod tests {
         let out = apply(&fx, &plan);
 
         assert_eq!((out.executed(), out.exit_code()), (2, 0));
+        assert_eq!(
+            out.counts(),
+            ActionCounts {
+                quarantined: 2,
+                ..ActionCounts::default()
+            }
+        );
         assert_eq!(out.moved_bytes, 30);
         assert!(!fx.exists("b/kopie.txt") && !fx.exists("c/sub/kopie2.txt"));
         assert_eq!(fx.read("a/orig.txt"), "gleicher inhalt");
@@ -870,6 +892,13 @@ mod tests {
         let out = apply(&fx, &plan);
 
         assert_eq!((out.executed(), out.exit_code()), (4, 0));
+        assert_eq!(
+            out.counts(),
+            ActionCounts {
+                dirs_removed: 4,
+                ..ActionCounts::default()
+            }
+        );
         assert!(!fx.exists("a") && !fx.exists("d"));
         assert!(fx.root.exists(), "die Wurzel bleibt");
         let entries = fx.journal(RUN);
@@ -1141,6 +1170,13 @@ mod tests {
         let out = apply(&fx, &plan);
 
         assert_eq!((out.executed(), out.exit_code()), (1, 0));
+        assert_eq!(
+            out.counts(),
+            ActionCounts {
+                archived: 1,
+                ..ActionCounts::default()
+            }
+        );
         assert!(!fx.exists("Projekt"));
         let moved = std::path::Path::new(&target);
         assert_eq!(
@@ -1918,6 +1954,7 @@ mod tests {
                 .map(|status| ActionResult {
                     id: 1,
                     path: String::new(),
+                    kind: ActionType::Quarantine,
                     status,
                 })
                 .collect(),

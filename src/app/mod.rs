@@ -18,9 +18,10 @@ use crate::change::plan::Plan;
 use crate::change::protect::{ProtectPaths, Protector};
 use crate::change::registry::{self, RunRecord};
 use crate::change::undo::{
-    expired_runs, list_runs, purge_run, undo_run, RestoreStatus, RunStatus, UndoEnv, UndoError,
+    expired_runs, list_runs, purge_run, undo_run, RestoreStatus, RunStatus, RunSummary, UndoEnv,
+    UndoError,
 };
-use crate::change::RunId;
+use crate::change::{ActionCounts, RunId};
 use crate::cli::{
     ApplyArgs, Cli, Command, IndexCommand, PlanCommand, PurgeArgs, ReportArgs, RunsArgs, ScanArgs,
     UndoArgs,
@@ -146,12 +147,34 @@ fn status_line(result: &ActionResult) -> Option<String> {
     Some(format!("  {text}: {}", result.path))
 }
 
+/// Rückfrage vor `apply`: nennt die Aktionen je Typ.
+fn apply_question(plan: &Plan) -> String {
+    format!("{}? [j/N] ", ActionCounts::from_plan(plan).plan_text())
+}
+
+/// Rückfrage vor `undo`: nennt die Aktionen des Laufs und die Bytes in der Quarantäne.
+fn undo_question(run: &RunId, summary: &RunSummary) -> String {
+    let bytes = if summary.bytes > 0 {
+        format!(", {} in der Quarantäne", ByteSize::b(summary.bytes))
+    } else {
+        String::new()
+    };
+    format!(
+        "Lauf {run} ({}{bytes}) zurückdrehen? [j/N] ",
+        summary.counts.done_text()
+    )
+}
+
 fn print_apply_summary(outcome: &ApplyOutcome) {
+    let moved = if outcome.moved_bytes > 0 {
+        format!(" ({})", ByteSize::b(outcome.moved_bytes))
+    } else {
+        String::new()
+    };
     println!(
-        "Lauf {}: {} verschoben ({}), {} bereits erledigt, {} stale, {} übersprungen, {} Fehler",
+        "Lauf {}: {}{moved}, {} bereits erledigt, {} stale, {} übersprungen, {} Fehler",
         outcome.run,
-        outcome.executed(),
-        ByteSize::b(outcome.moved_bytes),
+        outcome.counts().done_text(),
         outcome.already_done(),
         outcome.stale(),
         outcome.skipped(),
@@ -203,11 +226,7 @@ fn apply_command(args: &ApplyArgs) -> Result<i32> {
         println!("Der Plan enthält keine Aktionen.");
         return Ok(0);
     }
-    let question = format!(
-        "{} Dateien in die Quarantäne verschieben? [j/N] ",
-        plan.actions.len()
-    );
-    if !confirm(&question, args.yes)? {
+    if !confirm(&apply_question(&plan), args.yes)? {
         println!("Abgebrochen. Es wurde nichts verändert.");
         return Ok(1);
     }
@@ -315,13 +334,7 @@ fn undo_command(args: &UndoArgs) -> Result<i32> {
         }
         _ => {}
     }
-    let question = format!(
-        "Lauf {} ({} Dateien, {}) zurückdrehen? [j/N] ",
-        args.run_id,
-        summary.moved,
-        ByteSize::b(summary.bytes)
-    );
-    if !confirm(&question, args.yes)? {
+    if !confirm(&undo_question(&args.run_id, &summary), args.yes)? {
         println!("Abgebrochen. Es wurde nichts verändert.");
         return Ok(1);
     }
@@ -352,7 +365,10 @@ fn undo_command(args: &UndoArgs) -> Result<i32> {
         }
     }
     if outcome.conflicts() > 0 {
-        println!("Kollidierende Dateien bleiben in der Quarantäne; nach dem Auflösen erneut `undo` ausführen.");
+        println!(
+            "Kollidierende Einträge bleiben, wo sie sind (Quarantäne bzw. _Archiv); nach dem \
+             Auflösen erneut `undo` ausführen."
+        );
     }
     Ok(outcome.exit_code())
 }
@@ -393,11 +409,10 @@ fn runs_command(args: &RunsArgs) -> Result<i32> {
         println!("Wurzel: {}", paths::display(&root));
         for r in runs {
             println!(
-                "  {}  {}  {:>5} Dateien  {:>10}  {}{}",
+                "  {}  {}  {}  {}{}",
                 r.run,
                 r.started.as_deref().map(local_time).unwrap_or_default(),
-                r.moved,
-                ByteSize::b(r.bytes).to_string(),
+                r.counts.short_text(r.bytes),
                 status_label(r.status),
                 r.expires
                     .filter(|_| r.status != RunStatus::Purged)
@@ -767,11 +782,80 @@ mod confirm_tests {
     }
 
     #[test]
+    fn apply_frage_nennt_die_aktionen_je_typ() {
+        use crate::change::plan::{ActionType, Plan, PlanKind, PlannedAction, PLAN_VERSION};
+        let action = |id, action| PlannedAction {
+            id,
+            action,
+            path: format!(r"D:\Daten\x{id}"),
+            size: 0,
+            mtime_ticks: 0,
+            mtime: String::new(),
+            hash: None,
+            keep: None,
+            keep_hash: None,
+            reason: String::new(),
+            target: None,
+            is_dir: false,
+            files: None,
+        };
+        let plan = Plan {
+            version: PLAN_VERSION,
+            created: String::new(),
+            kind: PlanKind::EmptyDirs,
+            root: r"D:\Daten".into(),
+            keep_strategy: None,
+            params: Default::default(),
+            actions: vec![
+                action(1, ActionType::RemoveDir),
+                action(2, ActionType::RemoveDir),
+                action(3, ActionType::Move),
+            ],
+            skipped: vec![],
+        };
+        assert_eq!(
+            apply_question(&plan),
+            "1 Elemente nach _Archiv verschieben, 2 leere Ordner entfernen? [j/N] "
+        );
+    }
+
+    #[test]
+    fn undo_frage_nennt_aktionen_und_nur_quarantaene_bytes() {
+        let run = RunId::parse("20261003-120000-ab12").unwrap();
+        let summary = |counts: ActionCounts, bytes| RunSummary {
+            run: run.clone(),
+            started: None,
+            moved: counts.total(),
+            counts,
+            bytes,
+            status: RunStatus::Complete,
+            expires: None,
+        };
+        let quarantine = ActionCounts {
+            quarantined: 2,
+            ..ActionCounts::default()
+        };
+        assert_eq!(
+            undo_question(&run, &summary(quarantine, 30)),
+            "Lauf 20261003-120000-ab12 (2 in die Quarantäne verschoben, 30 B in der Quarantäne) zurückdrehen? [j/N] "
+        );
+        let dirs = ActionCounts {
+            dirs_removed: 4,
+            ..ActionCounts::default()
+        };
+        assert_eq!(
+            undo_question(&run, &summary(dirs, 0)),
+            "Lauf 20261003-120000-ab12 (4 leere Ordner entfernt) zurückdrehen? [j/N] "
+        );
+    }
+
+    #[test]
     fn statuszeilen_nennen_nur_nicht_erledigtes() {
         use crate::change::SkipReason;
         let result = |status| ActionResult {
             id: 1,
             path: r"D:\x.txt".into(),
+            kind: crate::change::plan::ActionType::Quarantine,
             status,
         };
         assert!(status_line(&result(ActionStatus::Done)).is_none());
