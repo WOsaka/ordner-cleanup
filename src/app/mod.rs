@@ -44,6 +44,7 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Report(args) => report_command(&args),
         Command::Index(cmd) => index_command(&cmd),
         Command::Plan(PlanCommand::Dedupe(args)) => plan::plan_dedupe_command(&args),
+        Command::Plan(PlanCommand::Junk(args)) => plan::plan_junk_command(&args),
         Command::Apply(args) => apply_command(&args),
         Command::Undo(args) => undo_command(&args),
         Command::Runs(args) => runs_command(&args),

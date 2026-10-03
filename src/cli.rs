@@ -85,6 +85,8 @@ pub struct PurgeArgs {
 pub enum PlanCommand {
     /// Exakte Duplikate in die Quarantäne planen
     Dedupe(PlanDedupeArgs),
+    /// Müll (Temp-, Lock- und Download-Reste, alte Installer) in die Quarantäne planen
+    Junk(PlanJunkArgs),
 }
 
 #[derive(Debug, Args)]
@@ -94,6 +96,19 @@ pub struct PlanDedupeArgs {
     /// Welche Kopie bleibt: oldest, newest oder path:<absoluter Ordner>
     #[arg(long, default_value = "oldest")]
     pub keep: KeepStrategy,
+    /// Zieldatei für den Plan (Default: plan-<Zeitstempel>.json im aktuellen Ordner)
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct PlanJunkArgs {
+    /// Bereits gescannter Ordner
+    pub path: PathBuf,
+    /// Kategorien, kommagetrennt: system, temp, downloads, installer oder eigene aus der Config
+    /// (Default: `junk_categories` aus der Config, sonst alle eingebauten)
+    #[arg(long, value_delimiter = ',')]
+    pub category: Vec<String>,
     /// Zieldatei für den Plan (Default: plan-<Zeitstempel>.json im aktuellen Ordner)
     #[arg(long)]
     pub out: Option<PathBuf>,
