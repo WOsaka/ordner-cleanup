@@ -1,6 +1,7 @@
 //! Phase 2: Änderungsplan, Apply und Undo. Nichts wird hart gelöscht (außer `purge`).
 
 pub mod apply;
+pub mod archive;
 pub mod dedupe;
 pub mod empty_dirs;
 pub mod fsops;
