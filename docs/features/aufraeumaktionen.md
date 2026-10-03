@@ -86,11 +86,11 @@ Neue Pläne tragen `version: 2`. `apply` und `undo` lesen Pläne der Versionen 1
 ```
 
 ### Config (Erweiterung)
-- `junk`: zusätzliche Kategorien bzw. Muster, Mindestalter für Installer
-- `junk.downloads_dirs`: Downloads-Ordner überschreiben bzw. ergänzen (Default: Known Folder)
-- `archive.older_than`: Default-Schwelle (2 Jahre)
-- `versions.min_age`: Mindestalter älterer Versionen (30 Tage)
-- `onedrive.max_move_files`, `onedrive.max_move_bytes`: Obergrenze, ab der `--allow-large` nötig ist (Default 1.000 Dateien oder 5 GB, was zuerst erreicht wird)
+Flache Schlüssel wie die bestehende `config.toml` (Details im Implementierungsplan):
+- `junk_categories`, `installer_min_age` (90 Tage), `downloads_dirs` (Default: Known Folder), eigene Müllmuster als `[[junk_rules]]`
+- `archive_older_than` (2 Jahre)
+- `versions_min_age` (30 Tage)
+- `onedrive_max_move_files`, `onedrive_max_move_bytes`: Obergrenze, ab der `--allow-large` nötig ist (Default 1.000 Dateien oder 5 GB, was zuerst erreicht wird); gilt für alle Pläne
 
 ## Acceptance Criteria
 - [ ] Given ein indizierter Ordner, when ein beliebiges `plan junk|empty-dirs|archive|versions` läuft, then entsteht eine Plan-Datei und im Ordner ändert sich kein Byte
