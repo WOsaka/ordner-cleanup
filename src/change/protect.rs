@@ -203,6 +203,18 @@ impl Protector {
         variants(path).iter().find_map(|v| self.check_variant(v))
     }
 
+    /// Ein `move` verändert Quelle und Ziel; beide unterliegen denselben Regeln.
+    pub fn check_move(&self, source: &Path, target: &Path) -> Option<Protection> {
+        self.check(source).or_else(|| self.check(target))
+    }
+
+    /// Grund, warum der **Inhalt** eines Ordners nicht angefasst werden darf. Zusätzlich zum
+    /// Ordner selbst zählt ein Marker (z. B. `Cargo.toml`) im Ordner, der für Dateien darin
+    /// gilt, aber nicht für den Ordnerpfad selbst; ein Probe-Pfad darunter erfasst ihn.
+    pub fn check_inside(&self, dir: &Path) -> Option<Protection> {
+        self.check(dir).or_else(|| self.check(&dir.join("_")))
+    }
+
     fn check_variant(&self, path: &Path) -> Option<Protection> {
         let key = paths::path_key(path);
         if let Some(p) = self.system.iter().find(|p| paths::is_under(&key, p)) {
@@ -313,6 +325,56 @@ mod tests {
             matches!(p.check(Path::new(path)), Some(Protection::System(_))),
             "{path}"
         );
+    }
+
+    #[test]
+    fn ziel_eines_moves_wird_wie_die_quelle_geprueft() {
+        let p = protector(r"D:\Daten");
+        let free = |s: &str| Path::new(s).to_path_buf();
+        assert_eq!(
+            p.check_move(&free(r"D:\Daten\a"), &free(r"D:\Daten\_Archiv\2020\a")),
+            None
+        );
+        // Quelle geschützt
+        assert!(matches!(
+            p.check_move(
+                &free(r"D:\Daten\proj\node_modules"),
+                &free(r"D:\Daten\_Archiv\2020\x")
+            ),
+            Some(Protection::Name(_))
+        ));
+        // Ziel geschützt (manipulierter Plan mit Ziel in einem Systempfad)
+        assert!(matches!(
+            p.check_move(&free(r"D:\Daten\a"), &free(r"C:\Windows\a")),
+            Some(Protection::System(_))
+        ));
+    }
+
+    #[test]
+    fn inhalt_eines_ordners_wird_mit_dem_ordner_geprueft() {
+        let p = protector(r"D:\Daten");
+        assert_eq!(p.check_inside(Path::new(r"D:\Daten\alt\sub")), None);
+        assert!(matches!(
+            p.check_inside(Path::new(r"D:\Daten\alt\.git")),
+            Some(Protection::Name(_))
+        ));
+        assert!(matches!(
+            p.check_inside(Path::new(r"D:\Daten\alt\node_modules")),
+            Some(Protection::Name(_))
+        ));
+    }
+
+    #[test]
+    fn inhalt_eines_ordners_mit_projektmarker_ist_geschuetzt() {
+        let p = Protector::new(Path::new(r"D:\Daten"), &Config::default(), &protect_paths())
+            .with_probe(MapProbe::with(r"D:\Daten\proj", "Cargo.toml"));
+        // Der Ordner selbst trägt den Marker: seine Inhalte sind geschützt, ein Probe-Pfad
+        // darunter zeigt das, auch wenn der Ordner leer ist oder keine Unterordner hat.
+        assert!(matches!(
+            p.check_inside(Path::new(r"D:\Daten\proj")),
+            Some(Protection::ProjectMarker(_))
+        ));
+        assert_eq!(p.check_inside(Path::new(r"D:\Daten\andere")), None);
     }
 
     #[test]

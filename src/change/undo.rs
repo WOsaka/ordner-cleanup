@@ -273,15 +273,18 @@ impl Restore<'_> {
         Ok(RestoreStatus::Conflict(reason.to_string()))
     }
 
-    /// Verschobene Datei oder Ordner zurück an den Ursprungsort. `allowed_key` ist der Bereich
-    /// (Quarantäne-Lauf oder `_Archiv`), in dem `to` liegen muss.
+    /// Verschobene Datei oder Ordner zurück an den Ursprungsort. `stop` ist der Bereich
+    /// (Quarantäne-Lauf oder `_Archiv`), in dem `to` liegen muss; danach werden leer gewordene
+    /// Ordner darin bis einschließlich `stop` aufgeräumt.
     fn move_back(
         &mut self,
         action: u32,
         from: &str,
         to: &str,
-        allowed_key: &str,
+        stop: &Path,
     ) -> Result<RestoreStatus, UndoError> {
+        let allowed_key = paths::path_key(stop);
+        let allowed_key = allowed_key.as_str();
         let (from, to) = (Path::new(from), Path::new(to));
         let (from_key, to_key) = (paths::path_key(from), paths::path_key(to));
         let sane = !has_dot_component(&paths::display(from))
@@ -309,6 +312,9 @@ impl Restore<'_> {
                             run: self.run.clone(),
                             action,
                         })?;
+                        if let Some(parent) = to.parent() {
+                            quarantine::cleanup_empty_parents(self.env.fs, parent, stop);
+                        }
                         Ok(RestoreStatus::Restored)
                     }
                     Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
@@ -399,8 +405,8 @@ pub fn undo_run(root: &Path, run: &RunId, env: &UndoEnv) -> Result<UndoOutcome, 
         started: env.now.to_string(),
     })?;
     let root_key = paths::path_key(root);
-    let quarantine_key = paths::path_key(&quarantine::run_dir(root, run));
-    let archive_key = paths::path_key(&root.join(ARCHIVE_DIR));
+    let quarantine_dir = quarantine::run_dir(root, run);
+    let archive_dir = root.join(ARCHIVE_DIR);
     let mut restore = Restore {
         env,
         journal: &mut journal,
@@ -420,11 +426,11 @@ pub fn undo_run(root: &Path, run: &RunId, env: &UndoEnv) -> Result<UndoOutcome, 
         } else {
             match &op.kind {
                 OpKind::Move { from, to, dest, .. } => {
-                    let allowed = match dest {
-                        Dest::Quarantine => &quarantine_key,
-                        Dest::Archive => &archive_key,
+                    let stop = match dest {
+                        Dest::Quarantine => &quarantine_dir,
+                        Dest::Archive => &archive_dir,
                     };
-                    restore.move_back(op.action, from, to, allowed)?
+                    restore.move_back(op.action, from, to, stop)?
                 }
                 OpKind::RemoveDir { path, .. } => {
                     let status = restore.recreate_dir(op.action, path)?;
@@ -976,6 +982,38 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn undo_raeumt_leere_ordner_in_der_quarantaene_auf() {
+        let fx = applied();
+        assert!(quarantine::run_dir(&fx.root, &run_id()).exists());
+
+        let out = undo(&fx);
+
+        assert_eq!(out.exit_code(), 0);
+        assert!(
+            !quarantine::run_dir(&fx.root, &run_id()).exists(),
+            "keine leeren Ordner unter quarantine\\<run-id>, auch der Laufordner nicht"
+        );
+        assert!(quarantine::journal_path(&fx.root, &run_id()).exists());
+    }
+
+    #[test]
+    fn undo_laesst_ordner_mit_verbleibenden_dateien_stehen_und_raeumt_den_rest() {
+        let fx = applied();
+        fx.write("b/kopie.txt", "belegt");
+
+        undo(&fx);
+
+        assert!(
+            fx.quarantined(RUN, r"b\kopie.txt").exists(),
+            "Konflikt: bleibt"
+        );
+        assert!(
+            !fx.quarantined(RUN, "c").exists(),
+            "der erfolgreich zurückgeholte Zweig ist weg"
+        );
     }
 
     #[test]

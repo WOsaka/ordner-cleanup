@@ -228,6 +228,10 @@ fn junk_plan_veraendert_nichts_apply_und_undo_stellen_den_zustand_her() {
         before,
         "undo stellt alles byteidentisch her"
     );
+    assert!(
+        !quarantined.exists(),
+        "keine leeren Ordner unter quarantine\\<run-id>"
+    );
 }
 
 #[test]
