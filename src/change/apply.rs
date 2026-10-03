@@ -340,24 +340,39 @@ fn verify_remove_dir(a: &PlannedAction, env: &ApplyEnv) -> Result<FileMeta, Verd
     }
 }
 
+/// Zustand der `remove-dir`-Ordner vor Beginn des Laufs, nach Aktions-ID.
+type DirSnapshot = HashMap<u32, FileMeta>;
+
+fn snapshot_dirs(plan: &Plan, env: &ApplyEnv) -> DirSnapshot {
+    plan.actions
+        .iter()
+        .filter(|a| a.action == ActionType::RemoveDir)
+        .filter_map(|a| Some((a.id, env.fs.metadata(Path::new(&a.path)).ok()?)))
+        .collect()
+}
+
 fn process_remove_dir(
     a: &PlannedAction,
     env: &ApplyEnv,
     journal: &mut JournalWriter,
+    before: &DirSnapshot,
 ) -> Result<ActionStatus, ApplyError> {
     let run = env.run.clone();
     let meta = match verify_remove_dir(a, env) {
         Ok(meta) => meta,
         Err(verdict) => return record_verdict(verdict, run, a.id, journal),
     };
-    // Write-ahead: Attribute und Zeiten stammen vom Zustand unmittelbar vor dem Entfernen.
+    // Write-ahead. Attribute und Zeiten stammen vom Zustand beim Apply, aber vor der ersten
+    // Änderung des Laufs: Das Entfernen leerer Unterordner ändert die mtime ihrer Eltern, und
+    // Undo soll den ursprünglichen Wert wiederherstellen.
+    let saved = before.get(&a.id).unwrap_or(&meta);
     journal.append(&Entry::IntentRemoveDir {
         run: run.clone(),
         action: a.id,
         path: a.path.clone(),
-        attrs: meta.attrs.0,
-        mtime_ticks: meta.mtime_ticks,
-        ctime_ticks: meta.ctime_ticks,
+        attrs: saved.attrs.0,
+        mtime_ticks: saved.mtime_ticks,
+        ctime_ticks: saved.ctime_ticks,
     })?;
     match env.fs.remove_dir(Path::new(&a.path)) {
         Ok(()) => {
@@ -391,10 +406,11 @@ fn process(
     env: &ApplyEnv,
     journal: &mut JournalWriter,
     keeps: &mut HashMap<String, Option<SkipReason>>,
+    before: &DirSnapshot,
 ) -> Result<ActionStatus, ApplyError> {
     match a.action {
         ActionType::Quarantine => process_quarantine(a, root, env, journal, keeps),
-        ActionType::RemoveDir => process_remove_dir(a, env, journal),
+        ActionType::RemoveDir => process_remove_dir(a, env, journal, before),
         ActionType::Move => record_verdict(
             Verdict::Fail("Aktionstyp wird von dieser Version noch nicht ausgeführt".into()),
             env.run.clone(),
@@ -423,6 +439,7 @@ pub fn apply_plan(plan: &Plan, env: &ApplyEnv) -> Result<ApplyOutcome, ApplyErro
     })?;
 
     let mut keeps = HashMap::new();
+    let before = snapshot_dirs(plan, env);
     let mut outcome = ApplyOutcome {
         run: env.run.clone(),
         results: Vec::new(),
@@ -434,7 +451,7 @@ pub fn apply_plan(plan: &Plan, env: &ApplyEnv) -> Result<ApplyOutcome, ApplyErro
             outcome.aborted = true;
             break;
         }
-        let status = process(action, root, env, &mut journal, &mut keeps)?;
+        let status = process(action, root, env, &mut journal, &mut keeps, &before)?;
         if status == ActionStatus::Done {
             outcome.moved_bytes += action.size;
         }
@@ -692,34 +709,36 @@ mod tests {
     }
 
     #[test]
-    fn journal_haelt_attribute_und_zeiten_unmittelbar_vor_dem_entfernen_fest() {
+    fn journal_haelt_attribute_und_zeiten_vom_zustand_vor_dem_lauf_fest() {
         let fx = fx();
         let a = fx.mkdir("a");
-        fx.mkdir("a/b");
+        let b = fx.mkdir("a/b");
         let long_ago = 1_600_000_000 * crate::scan::source::TICKS_PER_SEC;
         let created = 1_500_000_000 * crate::scan::source::TICKS_PER_SEC;
+        RealFs.set_dir_meta(&b, 0x10, long_ago, created).unwrap();
         RealFs
             .set_dir_meta(&a, 0x10 | 0x2, long_ago, created)
             .unwrap();
-        let b = fx.root.join("a/b");
-        RealFs.set_dir_meta(&b, 0x10, long_ago, created).unwrap();
-        // Plan *nach* dem Setzen der Zeiten; das Entfernen von `a\b` ändert die mtime von `a`.
         let plan = fx.dir_plan(&["a/b", "a"]);
+        // Plan und Dateisystem weichen ab: Maßgeblich ist der Zustand beim Apply, nicht der Plan.
+        let mut plan = plan;
+        plan.actions[1].mtime_ticks = 42;
 
         apply(&fx, &plan);
 
         let intents = remove_dir_intents(&fx.journal(RUN));
         assert_eq!(intents.len(), 2);
         let (b_path, b_attrs, b_mtime) = &intents[0];
-        assert!(b_path.ends_with(r"a\b"));
+        assert!(b_path.ends_with(r"a\b"), "{b_path}");
         assert_eq!(*b_mtime, long_ago);
         assert_eq!(b_attrs & 0x2, 0, "b ist nicht versteckt");
         let (a_path, a_attrs, a_mtime) = &intents[1];
         assert!(a_path.ends_with(r"\a"), "{a_path}");
         assert_ne!(a_attrs & 0x2, 0, "a ist versteckt");
-        assert!(
-            *a_mtime > long_ago,
-            "mtime stammt vom Zustand vor dem Entfernen (nach dem Entfernen von b), nicht aus dem Plan"
+        assert_eq!(
+            *a_mtime, long_ago,
+            "das Entfernen von a\\b ändert die mtime von a; festgehalten wird der Zustand \
+             vor dem Lauf, damit Undo den ursprünglichen Wert wiederherstellt"
         );
         let Some(Entry::IntentRemoveDir { ctime_ticks, .. }) = fx
             .journal(RUN)

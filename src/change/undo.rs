@@ -652,11 +652,14 @@ mod tests {
     /// ist gelaufen.
     fn applied_dirs() -> Fx {
         let fx = fx();
-        for rel in ["a", "a/b", "a/b/c", "d"] {
-            let dir = fx.mkdir(rel);
+        for rel in ["a/b/c", "d"] {
+            fx.mkdir(rel);
+        }
+        // Erst alle Ordner anlegen (ändert die mtime der Eltern), dann Zeiten von unten nach oben.
+        for rel in ["a/b/c", "a/b", "a", "d"] {
             let attrs = if rel == "a/b" { 0x10 | 0x2 } else { 0x10 };
             RealFs
-                .set_dir_meta(&dir, attrs, KNOWN_MTIME, KNOWN_CTIME)
+                .set_dir_meta(&fx.root.join(rel), attrs, KNOWN_MTIME, KNOWN_CTIME)
                 .unwrap();
         }
         let plan = fx.dir_plan(&["a/b/c", "a/b", "a", "d"]);
@@ -723,10 +726,15 @@ mod tests {
             .unwrap()
             .attrs
             .is_hidden());
-        // Der Elternordner trägt die Zeit von vor dem Entfernen seines Kindes, nicht „jetzt“.
-        let a_mtime = mtime(&fx, "a");
-        let journaled_a = journaled.iter().find(|j| j.0.ends_with(r"\a")).unwrap();
-        assert_eq!(a_mtime, journaled_a.2);
+        // Auch der Elternordner trägt wieder die ursprüngliche Zeit, nicht die vom Entfernen
+        // seiner Kinder veränderte.
+        for rel in ["a", "a/b", "a/b/c", "d"] {
+            assert_eq!(
+                mtime(&fx, rel),
+                KNOWN_MTIME,
+                "ursprüngliche mtime von {rel}"
+            );
+        }
 
         let entries = fx.journal(RUN);
         assert_eq!(
