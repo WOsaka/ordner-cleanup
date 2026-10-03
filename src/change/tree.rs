@@ -168,6 +168,7 @@ mod tests {
             parent_key: p.parent().map(paths::dir_key),
             summary: false,
             attrs: 0x10,
+            mtime: None,
             is_link: false,
             direct_entries: entries,
             read_error: false,

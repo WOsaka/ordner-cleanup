@@ -30,6 +30,26 @@ pub struct JunkOptions<'a> {
     pub now_ticks: i64,
 }
 
+const SYSTEM_PATTERNS: [&str; 3] = ["Thumbs.db", "ehthumbs.db", ".DS_Store"];
+const TEMP_PATTERNS: [&str; 2] = ["*.tmp", "~$*"];
+const DOWNLOADS_PATTERNS: [&str; 3] = ["*.crdownload", "*.part", "*.partial"];
+
+/// Der Name gehört zu einer eingebauten Müll-Kategorie (ohne `installer` und eigene Regeln).
+/// `plan empty-dirs` nutzt das, um auf Ordner hinzuweisen, die nur Müll enthalten.
+pub fn is_builtin_junk_name(name: &str) -> bool {
+    static SET: std::sync::OnceLock<GlobSet> = std::sync::OnceLock::new();
+    SET.get_or_init(|| {
+        let all: Vec<&str> = SYSTEM_PATTERNS
+            .iter()
+            .chain(&TEMP_PATTERNS)
+            .chain(&DOWNLOADS_PATTERNS)
+            .copied()
+            .collect();
+        globs(&all)
+    })
+    .is_match(name)
+}
+
 /// Eine aktive Kategorie: Namensmuster, optional auf Ordner beschränkt, optional mit Mindestalter.
 struct Category {
     name: String,
@@ -65,9 +85,9 @@ fn category(name: &str, options: &JunkOptions, downloads: &HashSet<String>) -> O
         min_age_days: None,
     };
     match name {
-        "system" => Some(builtin(&["Thumbs.db", "ehthumbs.db", ".DS_Store"])),
-        "temp" => Some(builtin(&["*.tmp", "~$*"])),
-        "downloads" => Some(builtin(&["*.crdownload", "*.part", "*.partial"])),
+        "system" => Some(builtin(&SYSTEM_PATTERNS)),
+        "temp" => Some(builtin(&TEMP_PATTERNS)),
+        "downloads" => Some(builtin(&DOWNLOADS_PATTERNS)),
         "installer" => Some(Category {
             only_in: Some(downloads.clone()),
             min_age_days: Some(options.installer_min_age_days),
@@ -389,6 +409,31 @@ mod tests {
             .actions
             .iter()
             .all(|a| a.action == ActionType::Quarantine && a.hash.is_none() && a.keep.is_none()));
+    }
+
+    #[test]
+    fn eingebaute_muellnamen_ohne_installer_und_eigene_regeln() {
+        for name in [
+            "Thumbs.db",
+            "EHTHUMBS.DB",
+            ".DS_Store",
+            "a.tmp",
+            "~$x.docx",
+            "f.crdownload",
+            "d.part",
+            "d.PARTIAL",
+        ] {
+            assert!(is_builtin_junk_name(name), "{name}");
+        }
+        for name in [
+            "setup.exe",
+            "notizen.txt",
+            "thumbs.db.bak",
+            "~x.docx",
+            "tmp",
+        ] {
+            assert!(!is_builtin_junk_name(name), "{name}");
+        }
     }
 
     #[test]

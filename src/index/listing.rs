@@ -17,6 +17,8 @@ pub struct DirRow {
     /// Nur aufsummiert gescannt (Inhalt im Index unbekannt).
     pub summary: bool,
     pub attrs: u32,
+    /// Änderungszeit des Ordners beim Scan (100-ns-Ticks seit Unix-Epoche).
+    pub mtime: Option<i64>,
     pub is_link: bool,
     /// Einträge, die der Scan im Ordner gesehen hat (inklusive ausgeschlossener und fehlerhafter).
     pub direct_entries: i64,
@@ -43,7 +45,7 @@ impl Index {
         let error_dirs = self.error_dir_keys(dir_key)?;
         let (lo, hi) = paths::prefix_range(dir_key);
         let mut stmt = self.conn().prepare(
-            "SELECT path, path_key, parent_key, mode, attrs, is_link, direct_entries
+            "SELECT path, path_key, parent_key, mode, attrs, is_link, direct_entries, mtime
              FROM dirs WHERE path_key >= ?1 AND path_key < ?2 ORDER BY path_key",
         )?;
         let rows = stmt.query_map(params![lo, hi], |r| {
@@ -57,6 +59,7 @@ impl Index {
                 attrs: r.get(4)?,
                 is_link: r.get(5)?,
                 direct_entries: r.get(6)?,
+                mtime: r.get(7)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -144,6 +147,7 @@ mod tests {
                 },
                 DirRecord {
                     direct_entries: 1,
+                    mtime: Some(777),
                     ..dir(r"D:\Daten\a")
                 },
                 dir(r"D:\Daten\a\tief"),
@@ -229,6 +233,8 @@ mod tests {
         assert_eq!(root.parent_key.as_deref(), Some(r"D:\"));
         assert_eq!(root.direct_entries, 2);
         assert!(!root.summary && !root.is_link && !root.read_error);
+        assert_eq!(root.mtime, None);
+        assert_eq!(by_key(r"D:\daten\a\").mtime, Some(777));
 
         let summary = by_key(r"D:\daten\node_modules\");
         assert!(summary.summary);
