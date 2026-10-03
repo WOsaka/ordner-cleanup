@@ -12,18 +12,19 @@ use crate::analysis::age::parse_old_after;
 use crate::analysis::problems::ProblemCtx;
 use crate::analysis::structure::Thresholds;
 use crate::change::apply::{apply_plan, ActionResult, ActionStatus, ApplyEnv, ApplyOutcome};
-use crate::change::dedupe::plan_dedupe;
 use crate::change::fsops::RealFs;
+use crate::change::limits;
 use crate::change::plan::Plan;
 use crate::change::protect::{ProtectPaths, Protector};
 use crate::change::registry::{self, RunRecord};
 use crate::change::undo::{
-    expired_runs, list_runs, purge_run, undo_run, RestoreStatus, RunStatus, UndoEnv, UndoError,
+    expired_runs, list_runs, purge_run, undo_run, RestoreStatus, RunStatus, RunSummary, UndoEnv,
+    UndoError,
 };
-use crate::change::RunId;
+use crate::change::{ActionCounts, RunId};
 use crate::cli::{
-    ApplyArgs, Cli, Command, IndexCommand, PlanCommand, PlanDedupeArgs, PurgeArgs, ReportArgs,
-    RunsArgs, ScanArgs, UndoArgs,
+    ApplyArgs, Cli, Command, IndexCommand, PlanCommand, PurgeArgs, ReportArgs, RunsArgs, ScanArgs,
+    UndoArgs,
 };
 use crate::config::Config;
 use crate::index::{Index, RootStatus};
@@ -35,13 +36,19 @@ use crate::scan::source::{StdDirSource, TICKS_PER_SEC};
 use crate::scan::walker::Progress;
 use crate::scan::{scan, ScanEnv};
 
+mod plan;
+
 /// Führt den Befehl aus und liefert den Exit-Code (0 OK, 2 OK mit Teilfehlern).
 pub fn run(cli: Cli) -> Result<i32> {
     match cli.command {
         Command::Scan(args) => scan_command(&args),
         Command::Report(args) => report_command(&args),
         Command::Index(cmd) => index_command(&cmd),
-        Command::Plan(PlanCommand::Dedupe(args)) => plan_dedupe_command(&args),
+        Command::Plan(PlanCommand::Dedupe(args)) => plan::plan_dedupe_command(&args),
+        Command::Plan(PlanCommand::Junk(args)) => plan::plan_junk_command(&args),
+        Command::Plan(PlanCommand::EmptyDirs(args)) => plan::plan_empty_dirs_command(&args),
+        Command::Plan(PlanCommand::Archive(args)) => plan::plan_archive_command(&args),
+        Command::Plan(PlanCommand::Versions(args)) => plan::plan_versions_command(&args),
         Command::Apply(args) => apply_command(&args),
         Command::Undo(args) => undo_command(&args),
         Command::Runs(args) => runs_command(&args),
@@ -55,22 +62,18 @@ const STALE_SCAN_DAYS: i64 = 7;
 /// Hinweis, wenn die Wurzel unter einem OneDrive-Ordner liegt: Die Quarantäne läge dann im
 /// synchronisierten Bereich und erzeugt Sync-Traffic.
 fn onedrive_warning(root: &Path, onedrive_roots: &[PathBuf]) -> Option<String> {
-    let key = paths::path_key(root);
-    onedrive_roots
-        .iter()
-        .any(|r| paths::is_under(&key, &paths::path_key(r)))
-        .then(|| {
-            "Warnung: Der Ordner liegt in OneDrive. Die Quarantäne (.ordner-cleanup) wird \
+    limits::under_onedrive(root, onedrive_roots).then(|| {
+        "Warnung: Der Ordner liegt in OneDrive. Die Quarantäne (.ordner-cleanup) wird \
              mitsynchronisiert und erzeugt Sync-Traffic; Dateien lassen sich später mit \
              `purge` endgültig entsorgen."
-                .to_string()
-        })
+            .to_string()
+    })
 }
 
 fn onedrive_roots_from_env() -> Vec<PathBuf> {
     ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"]
         .iter()
-        .filter_map(|v| std::env::var_os(v).map(PathBuf::from))
+        .filter_map(|v| std::env::var_os(v).map(|p| normalize(Path::new(&p))))
         .collect()
 }
 
@@ -88,53 +91,6 @@ fn index_age_note(root: &report::ReportRoot, now: chrono::DateTime<chrono::Utc>)
     (age >= STALE_SCAN_DAYS).then(|| {
         format!("Hinweis: Der letzte Scan ist {age} Tage alt. Bitte neu scannen, falls sich viel geändert hat.")
     })
-}
-
-fn plan_dedupe_command(args: &PlanDedupeArgs) -> Result<i32> {
-    let root = resolve_root(&args.path, false)?;
-    let config = load_config()?;
-    let index = Index::open(&index_path()?)?;
-    let scanned = report::select_root(&index, Some(&root))?;
-    if let Some(note) = index_age_note(&scanned, chrono::Utc::now()) {
-        eprintln!("{note}");
-    }
-    if let Some(warning) = onedrive_warning(&root, &onedrive_roots_from_env()) {
-        eprintln!("{warning}");
-    }
-
-    let protector = Protector::new(&root, &config, &ProtectPaths::from_env());
-    let result = plan_dedupe(&index, &root, &args.keep, &protector, &now_rfc3339())?;
-    let out = match &args.out {
-        Some(out) => out.clone(),
-        None => PathBuf::from(format!(
-            "plan-{}.json",
-            chrono::Local::now().format("%Y%m%d-%H%M%S")
-        )),
-    };
-    result
-        .plan
-        .save(&out)
-        .with_context(|| format!("Plan-Datei {} nicht schreibbar", paths::display(&out)))?;
-
-    let plan = &result.plan;
-    println!(
-        "{} Aktionen, {} freiwerdend, {} übersprungen (Strategie: {})",
-        plan.actions.len(),
-        ByteSize::b(result.freed_bytes),
-        plan.skipped.len(),
-        plan.keep_strategy
-    );
-    let mut reasons = std::collections::BTreeMap::new();
-    for s in &plan.skipped {
-        *reasons.entry(s.reason.to_string()).or_insert(0usize) += 1;
-    }
-    for (reason, count) in reasons {
-        println!("  übersprungen: {count} × {reason}");
-    }
-    let shown = std::path::absolute(&out).unwrap_or(out);
-    println!("Plan: {}", paths::display(&shown));
-    println!("Es wurde nichts verändert. Plan prüfen, danach mit `apply` ausführen.");
-    Ok(0)
 }
 
 fn registry_path() -> Result<PathBuf> {
@@ -191,12 +147,34 @@ fn status_line(result: &ActionResult) -> Option<String> {
     Some(format!("  {text}: {}", result.path))
 }
 
+/// Rückfrage vor `apply`: nennt die Aktionen je Typ.
+fn apply_question(plan: &Plan) -> String {
+    format!("{}? [j/N] ", ActionCounts::from_plan(plan).plan_text())
+}
+
+/// Rückfrage vor `undo`: nennt die Aktionen des Laufs und die Bytes in der Quarantäne.
+fn undo_question(run: &RunId, summary: &RunSummary) -> String {
+    let bytes = if summary.bytes > 0 {
+        format!(", {} in der Quarantäne", ByteSize::b(summary.bytes))
+    } else {
+        String::new()
+    };
+    format!(
+        "Lauf {run} ({}{bytes}) zurückdrehen? [j/N] ",
+        summary.counts.done_text()
+    )
+}
+
 fn print_apply_summary(outcome: &ApplyOutcome) {
+    let moved = if outcome.moved_bytes > 0 {
+        format!(" ({})", ByteSize::b(outcome.moved_bytes))
+    } else {
+        String::new()
+    };
     println!(
-        "Lauf {}: {} verschoben ({}), {} bereits erledigt, {} stale, {} übersprungen, {} Fehler",
+        "Lauf {}: {}{moved}, {} bereits erledigt, {} stale, {} übersprungen, {} Fehler",
         outcome.run,
-        outcome.executed(),
-        ByteSize::b(outcome.moved_bytes),
+        outcome.counts().done_text(),
         outcome.already_done(),
         outcome.stale(),
         outcome.skipped(),
@@ -234,18 +212,21 @@ fn apply_command(args: &ApplyArgs) -> Result<i32> {
         ByteSize::b(plan.total_bytes()),
         plan.root
     );
-    if let Some(warning) = onedrive_warning(&root, &onedrive_roots_from_env()) {
+    let onedrive_roots = onedrive_roots_from_env();
+    if let Some(warning) = onedrive_warning(&root, &onedrive_roots) {
         eprintln!("{warning}");
+    }
+    if let Some(message) = limits::exceeds(&plan, &onedrive_roots, &config) {
+        if !args.allow_large {
+            bail!("{message}");
+        }
+        eprintln!("Hinweis: Obergrenze mit --allow-large aufgehoben.");
     }
     if plan.actions.is_empty() {
         println!("Der Plan enthält keine Aktionen.");
         return Ok(0);
     }
-    let question = format!(
-        "{} Dateien in die Quarantäne verschieben? [j/N] ",
-        plan.actions.len()
-    );
-    if !confirm(&question, args.yes)? {
+    if !confirm(&apply_question(&plan), args.yes)? {
         println!("Abgebrochen. Es wurde nichts verändert.");
         return Ok(1);
     }
@@ -353,13 +334,7 @@ fn undo_command(args: &UndoArgs) -> Result<i32> {
         }
         _ => {}
     }
-    let question = format!(
-        "Lauf {} ({} Dateien, {}) zurückdrehen? [j/N] ",
-        args.run_id,
-        summary.moved,
-        ByteSize::b(summary.bytes)
-    );
-    if !confirm(&question, args.yes)? {
+    if !confirm(&undo_question(&args.run_id, &summary), args.yes)? {
         println!("Abgebrochen. Es wurde nichts verändert.");
         return Ok(1);
     }
@@ -390,7 +365,10 @@ fn undo_command(args: &UndoArgs) -> Result<i32> {
         }
     }
     if outcome.conflicts() > 0 {
-        println!("Kollidierende Dateien bleiben in der Quarantäne; nach dem Auflösen erneut `undo` ausführen.");
+        println!(
+            "Kollidierende Einträge bleiben, wo sie sind (Quarantäne bzw. _Archiv); nach dem \
+             Auflösen erneut `undo` ausführen."
+        );
     }
     Ok(outcome.exit_code())
 }
@@ -431,11 +409,10 @@ fn runs_command(args: &RunsArgs) -> Result<i32> {
         println!("Wurzel: {}", paths::display(&root));
         for r in runs {
             println!(
-                "  {}  {}  {:>5} Dateien  {:>10}  {}{}",
+                "  {}  {}  {}  {}{}",
                 r.run,
                 r.started.as_deref().map(local_time).unwrap_or_default(),
-                r.moved,
-                ByteSize::b(r.bytes).to_string(),
+                r.counts.short_text(r.bytes),
                 status_label(r.status),
                 r.expires
                     .filter(|_| r.status != RunStatus::Purged)
@@ -805,11 +782,80 @@ mod confirm_tests {
     }
 
     #[test]
+    fn apply_frage_nennt_die_aktionen_je_typ() {
+        use crate::change::plan::{ActionType, Plan, PlanKind, PlannedAction, PLAN_VERSION};
+        let action = |id, action| PlannedAction {
+            id,
+            action,
+            path: format!(r"D:\Daten\x{id}"),
+            size: 0,
+            mtime_ticks: 0,
+            mtime: String::new(),
+            hash: None,
+            keep: None,
+            keep_hash: None,
+            reason: String::new(),
+            target: None,
+            is_dir: false,
+            files: None,
+        };
+        let plan = Plan {
+            version: PLAN_VERSION,
+            created: String::new(),
+            kind: PlanKind::EmptyDirs,
+            root: r"D:\Daten".into(),
+            keep_strategy: None,
+            params: Default::default(),
+            actions: vec![
+                action(1, ActionType::RemoveDir),
+                action(2, ActionType::RemoveDir),
+                action(3, ActionType::Move),
+            ],
+            skipped: vec![],
+        };
+        assert_eq!(
+            apply_question(&plan),
+            "1 Elemente nach _Archiv verschieben, 2 leere Ordner entfernen? [j/N] "
+        );
+    }
+
+    #[test]
+    fn undo_frage_nennt_aktionen_und_nur_quarantaene_bytes() {
+        let run = RunId::parse("20261003-120000-ab12").unwrap();
+        let summary = |counts: ActionCounts, bytes| RunSummary {
+            run: run.clone(),
+            started: None,
+            moved: counts.total(),
+            counts,
+            bytes,
+            status: RunStatus::Complete,
+            expires: None,
+        };
+        let quarantine = ActionCounts {
+            quarantined: 2,
+            ..ActionCounts::default()
+        };
+        assert_eq!(
+            undo_question(&run, &summary(quarantine, 30)),
+            "Lauf 20261003-120000-ab12 (2 in die Quarantäne verschoben, 30 B in der Quarantäne) zurückdrehen? [j/N] "
+        );
+        let dirs = ActionCounts {
+            dirs_removed: 4,
+            ..ActionCounts::default()
+        };
+        assert_eq!(
+            undo_question(&run, &summary(dirs, 0)),
+            "Lauf 20261003-120000-ab12 (4 leere Ordner entfernt) zurückdrehen? [j/N] "
+        );
+    }
+
+    #[test]
     fn statuszeilen_nennen_nur_nicht_erledigtes() {
         use crate::change::SkipReason;
         let result = |status| ActionResult {
             id: 1,
             path: r"D:\x.txt".into(),
+            kind: crate::change::plan::ActionType::Quarantine,
             status,
         };
         assert!(status_line(&result(ActionStatus::Done)).is_none());

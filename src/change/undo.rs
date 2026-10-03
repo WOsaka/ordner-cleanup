@@ -7,9 +7,9 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 
 use super::fsops::FsOps;
-use super::journal::{self, EndStatus, Entry, JournalError, JournalWriter};
-use super::plan::has_dot_component;
-use super::{quarantine, RunId};
+use super::journal::{self, Dest, EndStatus, Entry, JournalError, JournalWriter};
+use super::plan::{has_dot_component, ARCHIVE_DIR};
+use super::{quarantine, ActionCounts, RunId};
 use crate::paths;
 
 #[derive(Debug, thiserror::Error)]
@@ -101,58 +101,125 @@ pub enum RunStatus {
 pub struct RunSummary {
     pub run: RunId,
     pub started: Option<String>,
-    /// Verschobene Dateien.
+    /// Ausgeführte Aktionen insgesamt (Dateien, Ordner).
     pub moved: usize,
+    /// Dieselben nach Typ.
+    pub counts: ActionCounts,
     /// Bytes, die noch in der Quarantäne liegen.
     pub bytes: u64,
     pub status: RunStatus,
     pub expires: Option<DateTime<Utc>>,
 }
 
-/// Ein Move aus dem Journal mit seinem bekannten Ausgang.
-struct Moved {
+/// Was eine Aktion laut Journal bewirkt hat.
+enum OpKind {
+    Move {
+        from: String,
+        to: String,
+        size: u64,
+        dest: Dest,
+    },
+    RemoveDir {
+        path: String,
+        attrs: u32,
+        mtime_ticks: i64,
+        ctime_ticks: i64,
+    },
+}
+
+/// Eine Aktion aus dem Journal mit ihrem bekannten Ausgang.
+struct Op {
     action: u32,
-    from: String,
-    to: String,
-    size: u64,
+    kind: OpKind,
     done: bool,
+    /// Fehlgeschlagen oder nach dem `intent` übersprungen: es wurde nichts verändert.
     failed: bool,
     undone: bool,
 }
 
-fn collect_moves(entries: &[Entry]) -> Vec<Moved> {
-    let mut moves: Vec<Moved> = Vec::new();
+impl Op {
+    /// Ursprungspfad: dorthin führt Undo zurück.
+    fn origin(&self) -> &str {
+        match &self.kind {
+            OpKind::Move { from, .. } => from,
+            OpKind::RemoveDir { path, .. } => path,
+        }
+    }
+
+    /// Nach `purge` ist nur der Inhalt der Quarantäne verloren; Archiv-Moves und entfernte
+    /// leere Ordner bleiben wiederherstellbar.
+    fn lives_in_quarantine(&self) -> bool {
+        matches!(
+            self.kind,
+            OpKind::Move {
+                dest: Dest::Quarantine,
+                ..
+            }
+        )
+    }
+}
+
+fn collect_ops(entries: &[Entry]) -> Vec<Op> {
+    let mut ops: Vec<Op> = Vec::new();
     for entry in entries {
-        if let Entry::Intent {
-            action,
-            from,
-            to,
-            size,
-            ..
-        } = entry
-        {
-            moves.push(Moved {
-                action: *action,
-                from: from.clone(),
-                to: to.clone(),
-                size: *size,
+        let started = match entry {
+            Entry::Intent {
+                action,
+                from,
+                to,
+                size,
+                dest,
+                ..
+            } => Some((
+                *action,
+                OpKind::Move {
+                    from: from.clone(),
+                    to: to.clone(),
+                    size: *size,
+                    dest: *dest,
+                },
+            )),
+            Entry::IntentRemoveDir {
+                action,
+                path,
+                attrs,
+                mtime_ticks,
+                ctime_ticks,
+                ..
+            } => Some((
+                *action,
+                OpKind::RemoveDir {
+                    path: path.clone(),
+                    attrs: *attrs,
+                    mtime_ticks: *mtime_ticks,
+                    ctime_ticks: *ctime_ticks,
+                },
+            )),
+            _ => None,
+        };
+        if let Some((action, kind)) = started {
+            ops.push(Op {
+                action,
+                kind,
                 done: false,
                 failed: false,
                 undone: false,
             });
             continue;
         }
-        let (action, mark): (u32, fn(&mut Moved)) = match entry {
-            Entry::Done { action, .. } => (*action, |m| m.done = true),
-            Entry::Fail { action, .. } => (*action, |m| m.failed = true),
-            Entry::UndoDone { action, .. } => (*action, |m| m.undone = true),
+        let (action, mark): (u32, fn(&mut Op)) = match entry {
+            Entry::Done { action, .. } => (*action, |o| o.done = true),
+            Entry::Fail { action, .. } | Entry::Skip { action, .. } => {
+                (*action, |o| o.failed = true)
+            }
+            Entry::UndoDone { action, .. } => (*action, |o| o.undone = true),
             _ => continue,
         };
-        if let Some(m) = moves.iter_mut().rev().find(|m| m.action == action) {
-            mark(m);
+        if let Some(op) = ops.iter_mut().rev().find(|o| o.action == action) {
+            mark(op);
         }
     }
-    moves
+    ops
 }
 
 /// Lädt und prüft das Journal: gehört es zu dieser Wurzel und zu diesem Lauf?
@@ -190,73 +257,124 @@ fn undo_state(entries: &[Entry]) -> Option<Option<EndStatus>> {
     })
 }
 
-fn restore(
-    m: &Moved,
-    root_key: &str,
-    quarantine_key: &str,
-    env: &UndoEnv,
-    journal: &mut JournalWriter,
-    run: &RunId,
-) -> Result<RestoreStatus, UndoError> {
-    let (from, to) = (Path::new(&m.from), Path::new(&m.to));
-    let (from_key, to_key) = (paths::path_key(from), paths::path_key(to));
-    let sane = !has_dot_component(&m.from)
-        && !has_dot_component(&m.to)
-        && from_key != root_key
-        && paths::is_under(&from_key, root_key)
-        && to_key != quarantine_key
-        && paths::is_under(&to_key, quarantine_key);
-    if !sane {
-        return Ok(RestoreStatus::Failed(
-            "Journal-Eintrag verweist außerhalb von Wurzel oder Quarantäne".into(),
-        ));
-    }
-    let (in_quarantine, at_origin) = (env.fs.exists(to), env.fs.exists(from));
-    let mut conflict = |reason: &str| -> Result<(), UndoError> {
-        journal.append(&Entry::UndoConflict {
-            run: run.clone(),
-            action: m.action,
+/// Gemeinsame Angaben für die Wiederherstellung einer Aktion.
+struct Restore<'a> {
+    env: &'a UndoEnv<'a>,
+    journal: &'a mut JournalWriter,
+    run: &'a RunId,
+    root_key: &'a str,
+}
+
+impl Restore<'_> {
+    fn conflict(&mut self, action: u32, reason: &str) -> Result<RestoreStatus, UndoError> {
+        self.journal.append(&Entry::UndoConflict {
+            run: self.run.clone(),
+            action,
             reason: reason.to_string(),
         })?;
-        Ok(())
-    };
-    match (in_quarantine, at_origin) {
-        (true, false) => {
-            if let Some(parent) = from.parent() {
-                if let Err(e) = env.fs.create_dir_all(parent) {
-                    return Ok(RestoreStatus::Failed(e.to_string()));
+        Ok(RestoreStatus::Conflict(reason.to_string()))
+    }
+
+    /// Verschobene Datei oder Ordner zurück an den Ursprungsort. `stop` ist der Bereich
+    /// (Quarantäne-Lauf oder `_Archiv`), in dem `to` liegen muss; danach werden leer gewordene
+    /// Ordner darin bis einschließlich `stop` aufgeräumt.
+    fn move_back(
+        &mut self,
+        action: u32,
+        from: &str,
+        to: &str,
+        stop: &Path,
+    ) -> Result<RestoreStatus, UndoError> {
+        let allowed_key = paths::path_key(stop);
+        let allowed_key = allowed_key.as_str();
+        let (from, to) = (Path::new(from), Path::new(to));
+        let (from_key, to_key) = (paths::path_key(from), paths::path_key(to));
+        let sane = !has_dot_component(&paths::display(from))
+            && !has_dot_component(&paths::display(to))
+            && from_key != self.root_key
+            && paths::is_under(&from_key, self.root_key)
+            && to_key != allowed_key
+            && paths::is_under(&to_key, allowed_key);
+        if !sane {
+            return Ok(RestoreStatus::Failed(
+                "Journal-Eintrag verweist außerhalb von Wurzel oder Quarantäne".into(),
+            ));
+        }
+        let (in_quarantine, at_origin) = (self.env.fs.exists(to), self.env.fs.exists(from));
+        match (in_quarantine, at_origin) {
+            (true, false) => {
+                if let Some(parent) = from.parent() {
+                    if let Err(e) = self.env.fs.create_dir_all(parent) {
+                        return Ok(RestoreStatus::Failed(e.to_string()));
+                    }
+                }
+                match self.env.fs.rename(to, from) {
+                    Ok(()) => {
+                        self.journal.append(&Entry::UndoDone {
+                            run: self.run.clone(),
+                            action,
+                        })?;
+                        if let Some(parent) = to.parent() {
+                            quarantine::cleanup_empty_parents(self.env.fs, parent, stop);
+                        }
+                        Ok(RestoreStatus::Restored)
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                        self.conflict(action, "Ursprungspfad ist belegt")
+                    }
+                    Err(e) => Ok(RestoreStatus::Failed(e.to_string())),
                 }
             }
-            match env.fs.rename(to, from) {
-                Ok(()) => {
-                    journal.append(&Entry::UndoDone {
-                        run: run.clone(),
-                        action: m.action,
-                    })?;
-                    Ok(RestoreStatus::Restored)
-                }
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-                    conflict("Ursprungspfad ist belegt")?;
-                    Ok(RestoreStatus::Conflict("Ursprungspfad ist belegt".into()))
-                }
-                Err(e) => Ok(RestoreStatus::Failed(e.to_string())),
+            (true, true) => self.conflict(action, "Ursprungspfad ist belegt"),
+            (false, true) => Ok(RestoreStatus::NothingToDo),
+            (false, false) => {
+                self.conflict(action, "nicht mehr wiederherstellbar")?;
+                Ok(RestoreStatus::Missing)
             }
         }
-        (true, true) => {
-            conflict("Ursprungspfad ist belegt")?;
-            Ok(RestoreStatus::Conflict("Ursprungspfad ist belegt".into()))
+    }
+
+    /// Legt einen entfernten Ordner wieder an. Attribute und Zeiten setzt erst ein zweiter
+    /// Durchlauf, weil jedes angelegte Kind die Zeit seines Elternordners ändert.
+    fn recreate_dir(&mut self, action: u32, path: &str) -> Result<RestoreStatus, UndoError> {
+        let key = paths::path_key(Path::new(path));
+        let sane = !has_dot_component(path)
+            && key != self.root_key
+            && paths::is_under(&key, self.root_key);
+        if !sane {
+            return Ok(RestoreStatus::Failed(
+                "Journal-Eintrag verweist außerhalb der Wurzel".into(),
+            ));
         }
-        (false, true) => Ok(RestoreStatus::NothingToDo),
-        (false, false) => {
-            conflict("nicht mehr wiederherstellbar")?;
-            Ok(RestoreStatus::Missing)
+        let dir = Path::new(path);
+        match self.env.fs.metadata(dir) {
+            Ok(meta) if meta.is_link || meta.is_reparse_point() => {
+                self.conflict(action, "Pfad ist inzwischen ein Link")
+            }
+            Ok(meta) if meta.is_dir => Ok(RestoreStatus::NothingToDo),
+            Ok(_) => self.conflict(action, "Pfad ist inzwischen eine Datei"),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                if let Some(parent) = dir.parent() {
+                    if let Err(e) = self.env.fs.create_dir_all(parent) {
+                        return Ok(RestoreStatus::Failed(e.to_string()));
+                    }
+                }
+                match self.env.fs.create_dir(dir) {
+                    Ok(()) => Ok(RestoreStatus::Restored),
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                        Ok(RestoreStatus::NothingToDo)
+                    }
+                    Err(e) => Ok(RestoreStatus::Failed(e.to_string())),
+                }
+            }
+            Err(e) => Ok(RestoreStatus::Failed(e.to_string())),
         }
     }
 }
 
 pub fn undo_run(root: &Path, run: &RunId, env: &UndoEnv) -> Result<UndoOutcome, UndoError> {
     let entries = load(root, run)?;
-    let moves = collect_moves(&entries);
+    let ops = collect_ops(&entries);
     let outcome = |results, already_undone, purged| UndoOutcome {
         run: run.clone(),
         results,
@@ -264,13 +382,16 @@ pub fn undo_run(root: &Path, run: &RunId, env: &UndoEnv) -> Result<UndoOutcome, 
         purged,
     };
 
-    if entries.iter().any(|e| matches!(e, Entry::Purged { .. })) {
-        let results = moves
+    let purged = entries.iter().any(|e| matches!(e, Entry::Purged { .. }));
+    let restorable =
+        |o: &Op| o.done && !o.failed && !o.undone && !(purged && o.lives_in_quarantine());
+    if purged && !ops.iter().any(restorable) {
+        let results = ops
             .iter()
-            .filter(|m| m.done && !m.failed && !m.undone)
-            .map(|m| RestoreResult {
-                action: m.action,
-                path: m.from.clone(),
+            .filter(|o| o.done && !o.failed && !o.undone)
+            .map(|o| RestoreResult {
+                action: o.action,
+                path: o.origin().to_string(),
                 status: RestoreStatus::Missing,
             })
             .collect();
@@ -286,20 +407,74 @@ pub fn undo_run(root: &Path, run: &RunId, env: &UndoEnv) -> Result<UndoOutcome, 
         started: env.now.to_string(),
     })?;
     let root_key = paths::path_key(root);
-    let quarantine_key = paths::path_key(&quarantine::run_dir(root, run));
-    let mut results = Vec::new();
-    // Rückwärts: zuletzt Verschobenes zuerst zurück.
-    for m in moves.iter().rev().filter(|m| !m.failed) {
-        let status = if m.undone {
+    let quarantine_dir = quarantine::run_dir(root, run);
+    let archive_dir = root.join(ARCHIVE_DIR);
+    let mut restore = Restore {
+        env,
+        journal: &mut journal,
+        run,
+        root_key: &root_key,
+    };
+
+    let mut results: Vec<RestoreResult> = Vec::new();
+    // Neu angelegte Ordner: Index ihres Ergebnisses; Zeiten und Attribute folgen unten.
+    let mut created: Vec<(usize, &Op)> = Vec::new();
+    // Rückwärts: zuletzt Veränderes zuerst zurück (bei Ordnern also von oben nach unten).
+    for op in ops.iter().rev().filter(|o| !o.failed) {
+        let status = if op.undone {
             RestoreStatus::NothingToDo
+        } else if purged && op.lives_in_quarantine() {
+            RestoreStatus::Missing
         } else {
-            restore(m, &root_key, &quarantine_key, env, &mut journal, run)?
+            match &op.kind {
+                OpKind::Move { from, to, dest, .. } => {
+                    let stop = match dest {
+                        Dest::Quarantine => &quarantine_dir,
+                        Dest::Archive => &archive_dir,
+                    };
+                    restore.move_back(op.action, from, to, stop)?
+                }
+                OpKind::RemoveDir { path, .. } => {
+                    let status = restore.recreate_dir(op.action, path)?;
+                    if status == RestoreStatus::Restored {
+                        created.push((results.len(), op));
+                    }
+                    status
+                }
+            }
         };
         results.push(RestoreResult {
-            action: m.action,
-            path: m.from.clone(),
+            action: op.action,
+            path: op.origin().to_string(),
             status,
         });
+    }
+    // Von unten nach oben: Ein Kind ändert die Zeit seines Elternordners nur beim Anlegen,
+    // nicht beim Setzen seiner eigenen Attribute.
+    for (index, op) in created.iter().rev() {
+        let OpKind::RemoveDir {
+            path,
+            attrs,
+            mtime_ticks,
+            ctime_ticks,
+        } = &op.kind
+        else {
+            continue;
+        };
+        match env
+            .fs
+            .set_dir_meta(Path::new(path), *attrs, *mtime_ticks, *ctime_ticks)
+        {
+            Ok(()) => journal.append(&Entry::UndoDone {
+                run: run.clone(),
+                action: op.action,
+            })?,
+            Err(e) => {
+                results[*index].status = RestoreStatus::Failed(format!(
+                    "Ordner angelegt, Attribute und Zeiten nicht wiederhergestellt: {e}"
+                ))
+            }
+        }
     }
     let result = outcome(results, false, false);
     journal.append(&Entry::UndoEnd {
@@ -314,7 +489,7 @@ pub fn undo_run(root: &Path, run: &RunId, env: &UndoEnv) -> Result<UndoOutcome, 
 }
 
 fn summarize(run: RunId, entries: &[Entry], quarantine_days: u32) -> RunSummary {
-    let moves = collect_moves(entries);
+    let ops = collect_ops(entries);
     let started = entries.iter().find_map(|e| match e {
         Entry::RunStart { started, .. } => Some(started.clone()),
         _ => None,
@@ -337,14 +512,37 @@ fn summarize(run: RunId, entries: &[Entry], quarantine_days: u32) -> RunSummary 
     };
     RunSummary {
         run,
-        moved: moves.iter().filter(|m| m.done && !m.failed).count(),
+        moved: ops.iter().filter(|o| o.done && !o.failed).count(),
+        counts: ops.iter().filter(|o| o.done && !o.failed).fold(
+            ActionCounts::default(),
+            |mut counts, o| {
+                match o.kind {
+                    OpKind::Move {
+                        dest: Dest::Quarantine,
+                        ..
+                    } => counts.quarantined += 1,
+                    OpKind::Move {
+                        dest: Dest::Archive,
+                        ..
+                    } => counts.archived += 1,
+                    OpKind::RemoveDir { .. } => counts.dirs_removed += 1,
+                }
+                counts
+            },
+        ),
         bytes: if purged {
             0
         } else {
-            moves
-                .iter()
-                .filter(|m| m.done && !m.failed && !m.undone)
-                .map(|m| m.size)
+            ops.iter()
+                .filter(|o| o.done && !o.failed && !o.undone)
+                .filter_map(|o| match o.kind {
+                    OpKind::Move {
+                        size,
+                        dest: Dest::Quarantine,
+                        ..
+                    } => Some(size),
+                    _ => None,
+                })
                 .sum()
         },
         expires: started
@@ -378,6 +576,7 @@ pub fn list_runs(root: &Path, quarantine_days: u32) -> Result<Vec<RunSummary>, U
                 run,
                 started: None,
                 moved: 0,
+                counts: ActionCounts::default(),
                 bytes: 0,
                 status: RunStatus::Unreadable,
                 expires: None,
@@ -472,6 +671,557 @@ mod tests {
         RealFs.metadata(&fx.root.join(rel)).unwrap().mtime_ticks
     }
 
+    const KNOWN_MTIME: i64 = 1_600_000_000 * crate::scan::source::TICKS_PER_SEC;
+    const KNOWN_CTIME: i64 = 1_500_000_000 * crate::scan::source::TICKS_PER_SEC;
+
+    /// Wurzel mit `a\b\c` (b versteckt, alle mit bekannten Zeiten) und `d`; `remove-dir`-Apply
+    /// ist gelaufen.
+    fn applied_dirs() -> Fx {
+        let fx = fx();
+        for rel in ["a/b/c", "d"] {
+            fx.mkdir(rel);
+        }
+        // Erst alle Ordner anlegen (ändert die mtime der Eltern), dann Zeiten von unten nach oben.
+        for rel in ["a/b/c", "a/b", "a", "d"] {
+            let attrs = if rel == "a/b" { 0x10 | 0x2 } else { 0x10 };
+            RealFs
+                .set_dir_meta(&fx.root.join(rel), attrs, KNOWN_MTIME, KNOWN_CTIME)
+                .unwrap();
+        }
+        let plan = fx.dir_plan(&["a/b/c", "a/b", "a", "d"]);
+        let out = run_with(&fx, &plan, &RealFs, &fx.protector(), RUN).unwrap();
+        assert_eq!(out.executed(), 4);
+        assert!(!fx.exists("a") && !fx.exists("d"));
+        fx
+    }
+
+    /// `(Pfad, attrs, mtime, ctime)` aller `intent_remove_dir`-Einträge.
+    fn journaled_dirs(fx: &Fx) -> Vec<(String, u32, i64, i64)> {
+        fx.journal(RUN)
+            .into_iter()
+            .filter_map(|e| match e {
+                Entry::IntentRemoveDir {
+                    path,
+                    attrs,
+                    mtime_ticks,
+                    ctime_ticks,
+                    ..
+                } => Some((path, attrs, mtime_ticks, ctime_ticks)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Schreibt das Journal ohne `done`-Einträge und ohne `run_end` neu (Absturz nach dem
+    /// Entfernen, aber vor dem Vermerk).
+    fn drop_done_entries(fx: &Fx) {
+        let path = quarantine::journal_path(&fx.root, &run_id());
+        let kept: Vec<String> = fx
+            .journal(RUN)
+            .iter()
+            .filter(|e| !matches!(e, Entry::Done { .. } | Entry::RunEnd { .. }))
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect();
+        std::fs::write(path, kept.join("\n") + "\n").unwrap();
+    }
+
+    #[test]
+    fn undo_legt_ordner_von_oben_nach_unten_mit_attributen_und_zeiten_wieder_an() {
+        let fx = applied_dirs();
+        let journaled = journaled_dirs(&fx);
+        assert_eq!(journaled.len(), 4);
+
+        let out = undo(&fx);
+
+        assert_eq!((out.restored(), out.exit_code()), (4, 0));
+        for rel in ["a", "a/b", "a/b/c", "d"] {
+            assert!(fx.root.join(rel).is_dir(), "{rel}");
+        }
+        for (path, attrs, mtime, ctime) in &journaled {
+            let meta = RealFs.metadata(Path::new(path)).unwrap();
+            assert_eq!(meta.mtime_ticks, *mtime, "mtime von {path}");
+            assert_eq!(meta.ctime_ticks, *ctime, "ctime von {path}");
+            assert_eq!(
+                meta.attrs.is_hidden(),
+                attrs & 0x2 != 0,
+                "versteckt-Attribut von {path}"
+            );
+        }
+        assert!(RealFs
+            .metadata(&fx.root.join("a/b"))
+            .unwrap()
+            .attrs
+            .is_hidden());
+        // Auch der Elternordner trägt wieder die ursprüngliche Zeit, nicht die vom Entfernen
+        // seiner Kinder veränderte.
+        for rel in ["a", "a/b", "a/b/c", "d"] {
+            assert_eq!(
+                mtime(&fx, rel),
+                KNOWN_MTIME,
+                "ursprüngliche mtime von {rel}"
+            );
+        }
+
+        let entries = fx.journal(RUN);
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|e| matches!(e, Entry::UndoDone { .. }))
+                .count(),
+            4
+        );
+        assert!(matches!(
+            entries.last(),
+            Some(Entry::UndoEnd {
+                status: EndStatus::Complete,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn zweites_undo_nach_remove_dir_aendert_nichts() {
+        let fx = applied_dirs();
+        undo(&fx);
+        let journal_len = fx.journal(RUN).len();
+
+        let again = undo(&fx);
+
+        assert!(again.already_undone && again.results.is_empty());
+        assert_eq!(fx.journal(RUN).len(), journal_len);
+    }
+
+    #[test]
+    fn datei_an_stelle_des_ordners_ist_ein_konflikt_und_bleibt_unberuehrt() {
+        let fx = applied_dirs();
+        fx.write("d", "ich bin jetzt eine datei");
+
+        let out = undo(&fx);
+
+        assert_eq!(
+            (out.restored(), out.conflicts(), out.exit_code()),
+            (3, 1, 2)
+        );
+        assert_eq!(fx.read("d"), "ich bin jetzt eine datei");
+        assert!(fx.root.join("a/b/c").is_dir());
+        assert!(fx
+            .journal(RUN)
+            .iter()
+            .any(|e| matches!(e, Entry::UndoConflict { .. })));
+    }
+
+    #[test]
+    fn vorhandener_ordner_wird_nicht_angefasst() {
+        let fx = applied_dirs();
+        let d = fx.mkdir("d");
+        let before = RealFs.metadata(&d).unwrap();
+
+        let out = undo(&fx);
+
+        assert_eq!((out.restored(), out.exit_code()), (3, 0));
+        let after = RealFs.metadata(&d).unwrap();
+        assert_eq!(
+            (before.mtime_ticks, before.ctime_ticks, before.attrs),
+            (after.mtime_ticks, after.ctime_ticks, after.attrs),
+            "vorhandenen Ordner nicht überschreiben"
+        );
+        assert!(out
+            .results
+            .iter()
+            .any(|r| r.status == RestoreStatus::NothingToDo));
+    }
+
+    #[test]
+    fn absturz_nach_dem_entfernen_ohne_done_stellt_den_ordner_trotzdem_wieder_her() {
+        let fx = applied_dirs();
+        drop_done_entries(&fx);
+
+        let out = undo(&fx);
+
+        assert_eq!((out.restored(), out.exit_code()), (4, 0));
+        assert!(fx.root.join("a/b/c").is_dir() && fx.root.join("d").is_dir());
+    }
+
+    #[test]
+    fn absturz_vor_dem_entfernen_intent_ohne_done_und_ordner_noch_da_ist_nichts_zu_tun() {
+        let fx = fx();
+        fx.mkdir("d");
+        let plan = fx.dir_plan(&["d"]);
+        let faulty = FaultyFs::new().fail(
+            crate::change::fsops::testing::Op::RemoveDir,
+            &fx.root.join("d"),
+        );
+        run_with(&fx, &plan, &faulty, &fx.protector(), RUN).unwrap();
+        // Ein Fail-Eintrag würde den Move ausblenden; für den Absturz-Fall entfernen wir ihn.
+        let path = quarantine::journal_path(&fx.root, &run_id());
+        let kept: Vec<String> = fx
+            .journal(RUN)
+            .iter()
+            .filter(|e| !matches!(e, Entry::Fail { .. } | Entry::RunEnd { .. }))
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect();
+        std::fs::write(path, kept.join("\n") + "\n").unwrap();
+        let before = RealFs.metadata(&fx.root.join("d")).unwrap();
+
+        let out = undo(&fx);
+
+        assert_eq!(out.restored(), 0);
+        assert_eq!(out.exit_code(), 0);
+        assert_eq!(out.results[0].status, RestoreStatus::NothingToDo);
+        assert_eq!(
+            RealFs.metadata(&fx.root.join("d")).unwrap().mtime_ticks,
+            before.mtime_ticks
+        );
+    }
+
+    #[test]
+    fn fehlgeschlagene_und_uebersprungene_aktionen_werden_nicht_zurueckgedreht() {
+        let fx = fx();
+        let a = fx.mkdir("a");
+        fx.mkdir("b");
+        let plan = fx.dir_plan(&["a", "b"]);
+        let faulty = FaultyFs::new().fail(crate::change::fsops::testing::Op::RemoveDirNotEmpty, &a);
+        run_with(&fx, &plan, &faulty, &fx.protector(), RUN).unwrap();
+        assert!(fx.exists("a") && !fx.exists("b"));
+
+        let out = undo(&fx);
+
+        assert_eq!(out.results.len(), 1, "nur b wurde wirklich entfernt");
+        assert_eq!((out.restored(), out.exit_code()), (1, 0));
+        assert!(fx.root.join("b").is_dir());
+    }
+
+    #[test]
+    fn manipuliertes_journal_kann_keine_ordner_ausserhalb_der_wurzel_anlegen() {
+        let fx = fx();
+        let outside = fx.root.parent().unwrap().join("ausserhalb");
+        let mut w = JournalWriter::create(&quarantine::journal_path(&fx.root, &run_id())).unwrap();
+        let bad_paths = [
+            paths::display(&outside),
+            paths::display(&fx.root),
+            format!(r"{}\..\ausserhalb2", paths::display(&fx.root)),
+        ];
+        w.append(&Entry::RunStart {
+            run: run_id(),
+            plan: "p".into(),
+            root: paths::display(&fx.root),
+            started: "2026-10-03T10:00:00Z".into(),
+        })
+        .unwrap();
+        for (action, path) in (1u32..).zip(&bad_paths) {
+            w.append(&Entry::IntentRemoveDir {
+                run: run_id(),
+                action,
+                path: path.clone(),
+                attrs: 0x10,
+                mtime_ticks: 0,
+                ctime_ticks: 0,
+            })
+            .unwrap();
+            w.append(&Entry::Done {
+                run: run_id(),
+                action,
+            })
+            .unwrap();
+        }
+
+        let out = undo(&fx);
+
+        assert_eq!(out.failed(), 3, "{:?}", out.results);
+        assert!(!outside.exists());
+        assert!(!fx.root.parent().unwrap().join("ausserhalb2").exists());
+    }
+
+    #[test]
+    fn purge_beruehrt_remove_dir_laeufe_nicht_undo_geht_weiter() {
+        let fx = applied_dirs();
+        purge_run(&fx.root, &run_id(), &env()).unwrap();
+
+        let out = undo(&fx);
+
+        assert!(!out.purged);
+        assert_eq!((out.restored(), out.missing(), out.exit_code()), (4, 0, 0));
+        assert!(fx.root.join("a/b/c").is_dir());
+    }
+
+    #[test]
+    fn runs_zaehlt_entfernte_ordner_ohne_quarantaene_bytes() {
+        let fx = applied_dirs();
+        let runs = list_runs(&fx.root, 30).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].moved, 4);
+        assert_eq!(runs[0].bytes, 0);
+        assert_eq!(
+            runs[0].counts,
+            ActionCounts {
+                dirs_removed: 4,
+                ..ActionCounts::default()
+            }
+        );
+        assert_eq!(runs[0].status, RunStatus::Complete);
+
+        undo(&fx);
+        assert_eq!(
+            list_runs(&fx.root, 30).unwrap()[0].status,
+            RunStatus::Undone
+        );
+    }
+
+    /// Wurzel mit `Projekt` (verschachtelt); der Archiv-Apply ist gelaufen.
+    fn archived() -> (Fx, String) {
+        let fx = fx();
+        fx.write("Projekt/a.txt", "alpha");
+        fx.write("Projekt/sub/b.txt", "bravo bravo");
+        fx.write("Projekt/sub/tief/c.txt", "charlie");
+        let plan = fx.archive_plan(&["Projekt"]);
+        let target = plan.actions[0].target.clone().unwrap();
+        let out = run_with(&fx, &plan, &RealFs, &fx.protector(), RUN).unwrap();
+        assert_eq!(out.executed(), 1);
+        assert!(!fx.exists("Projekt"));
+        (fx, target)
+    }
+
+    #[test]
+    fn undo_stellt_archivierten_ordner_her_und_raeumt_das_archiv_auf() {
+        let fx = fx();
+        fx.write("Projekt/a.txt", "alpha");
+        fx.write("Projekt/sub/b.txt", "bravo bravo");
+        let m_a = mtime(&fx, "Projekt/a.txt");
+        let m_b = mtime(&fx, "Projekt/sub/b.txt");
+        let plan = fx.archive_plan(&["Projekt"]);
+        run_with(&fx, &plan, &RealFs, &fx.protector(), RUN).unwrap();
+        assert!(fx.exists("_Archiv"));
+
+        let out = undo(&fx);
+
+        assert_eq!((out.restored(), out.exit_code()), (1, 0));
+        assert_eq!(fx.read("Projekt/a.txt"), "alpha");
+        assert_eq!(fx.read("Projekt/sub/b.txt"), "bravo bravo");
+        assert_eq!(
+            (mtime(&fx, "Projekt/a.txt"), mtime(&fx, "Projekt/sub/b.txt")),
+            (m_a, m_b)
+        );
+        assert!(
+            !fx.exists("_Archiv"),
+            "Jahresordner und leeres _Archiv werden aufgeräumt"
+        );
+        let entries = fx.journal(RUN);
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|e| matches!(e, Entry::UndoDone { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn undo_laesst_ein_archiv_mit_anderem_inhalt_stehen() {
+        let (fx, target) = archived();
+        fx.write("_Archiv/2010/Anderes/x.txt", "fremd");
+
+        let out = undo(&fx);
+
+        assert_eq!(out.exit_code(), 0);
+        assert!(fx.exists("Projekt/a.txt"));
+        assert!(
+            !std::path::Path::new(&target).exists()
+                && !std::path::Path::new(&target).parent().unwrap().exists(),
+            "der eigene Jahresordner ist weg"
+        );
+        assert_eq!(fx.read("_Archiv/2010/Anderes/x.txt"), "fremd");
+    }
+
+    #[test]
+    fn belegter_ursprungspfad_ist_ein_konflikt_und_das_archiv_bleibt_unberuehrt() {
+        let (fx, target) = archived();
+        fx.write("Projekt/neu.txt", "inzwischen angelegt");
+
+        let out = undo(&fx);
+
+        assert_eq!(
+            (out.restored(), out.conflicts(), out.exit_code()),
+            (0, 1, 2)
+        );
+        assert_eq!(fx.read("Projekt/neu.txt"), "inzwischen angelegt");
+        assert!(std::path::Path::new(&target).join("a.txt").exists());
+
+        // Nach Auflösen der Kollision lässt sich Undo wiederholen.
+        std::fs::remove_dir_all(fx.root.join("Projekt")).unwrap();
+        let retry = undo(&fx);
+        assert_eq!((retry.restored(), retry.exit_code()), (1, 0));
+        assert!(fx.exists("Projekt/sub/tief/c.txt"));
+    }
+
+    #[test]
+    fn absturz_nach_dem_rename_ohne_done_wird_anhand_des_zustands_zurueckgedreht() {
+        let (fx, _) = archived();
+        drop_done_entries(&fx);
+
+        let out = undo(&fx);
+
+        assert_eq!((out.restored(), out.exit_code()), (1, 0));
+        assert!(fx.exists("Projekt/a.txt"));
+    }
+
+    #[test]
+    fn absturz_vor_dem_rename_intent_ohne_done_und_ordner_noch_am_ursprung_ist_nichts_zu_tun() {
+        let fx = fx();
+        fx.write("Projekt/a.txt", "alpha");
+        let plan = fx.archive_plan(&["Projekt"]);
+        let faulty = FaultyFs::new().crash_before_rename(1);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with(&fx, &plan, &faulty, &fx.protector(), RUN)
+        }));
+        assert!(result.is_err(), "simulierter Absturz");
+        assert!(fx.exists("Projekt/a.txt"));
+
+        let out = undo(&fx);
+
+        assert_eq!(out.results[0].status, RestoreStatus::NothingToDo);
+        assert_eq!(out.exit_code(), 0);
+        assert!(fx.exists("Projekt/a.txt"));
+    }
+
+    #[test]
+    fn purge_macht_archiv_moves_nicht_unwiederbringlich() {
+        let (fx, _) = archived();
+        purge_run(&fx.root, &run_id(), &env()).unwrap();
+
+        let out = undo(&fx);
+
+        assert!(!out.purged);
+        assert_eq!((out.restored(), out.missing(), out.exit_code()), (1, 0, 0));
+        assert!(fx.exists("Projekt/sub/tief/c.txt"));
+    }
+
+    #[test]
+    fn purge_trifft_nur_quarantaene_aktionen_eines_gemischten_laufs() {
+        // Gemischter Lauf (nur über ein handgebautes Journal möglich): ein Quarantäne-Move
+        // und ein Archiv-Move; nach `purge` fehlt nur der erste.
+        let fx = fx();
+        fx.write("lose.txt", "quarantäne");
+        fx.write("Projekt/a.txt", "archiv");
+        let junk = fx.junk_plan(&["lose.txt"]);
+        let archive = fx.archive_plan(&["Projekt"]);
+        let mut plan = junk;
+        plan.kind = crate::change::plan::PlanKind::Junk;
+        let mut moved = archive.actions[0].clone();
+        moved.id = 2;
+        plan.actions.push(moved);
+        // Das Plan-Format erlaubt gemischte Aktionstypen; `apply` führt beide aus.
+        let out = run_with(&fx, &plan, &RealFs, &fx.protector(), RUN).unwrap();
+        assert_eq!(out.executed(), 2);
+        purge_run(&fx.root, &run_id(), &env()).unwrap();
+
+        let result = undo(&fx);
+
+        assert!(!result.purged, "ein Teil ist noch wiederherstellbar");
+        assert_eq!((result.restored(), result.missing()), (1, 1));
+        assert!(fx.exists("Projekt/a.txt") && !fx.exists("lose.txt"));
+    }
+
+    #[test]
+    fn manipuliertes_journal_kann_kein_archiv_ziel_ausserhalb_von_archiv_zurueckholen() {
+        let fx = fx();
+        let victim = fx.write("opfer.txt", "x");
+        let elsewhere = fx.write("woanders.txt", "y");
+        let in_quarantine = fx.quarantined(RUN, "q.txt");
+        std::fs::create_dir_all(in_quarantine.parent().unwrap()).unwrap();
+        std::fs::write(&in_quarantine, "q").unwrap();
+        let mut w = JournalWriter::create(&quarantine::journal_path(&fx.root, &run_id())).unwrap();
+        w.append(&Entry::RunStart {
+            run: run_id(),
+            plan: "p".into(),
+            root: paths::display(&fx.root),
+            started: "2026-10-03T10:00:00Z".into(),
+        })
+        .unwrap();
+        // 1: dest archive, aber `to` liegt irgendwo in der Wurzel
+        // 2: dest archive, aber `to` liegt in der Quarantäne
+        // 3: dest quarantine, aber `to` liegt unter _Archiv
+        let cases = [
+            (
+                paths::display(&elsewhere),
+                paths::display(&victim),
+                Dest::Archive,
+            ),
+            (
+                paths::display(&fx.root.join("ziel2.txt")),
+                paths::display(&in_quarantine),
+                Dest::Archive,
+            ),
+            (
+                paths::display(&fx.root.join("ziel3.txt")),
+                paths::display(&fx.root.join("_Archiv").join("x.txt")),
+                Dest::Quarantine,
+            ),
+        ];
+        for ((from, to, dest), action) in cases.into_iter().zip(1u32..) {
+            w.append(&Entry::Intent {
+                run: run_id(),
+                action,
+                from,
+                to,
+                size: 1,
+                hash: None,
+                dest,
+                is_dir: false,
+            })
+            .unwrap();
+            w.append(&Entry::Done {
+                run: run_id(),
+                action,
+            })
+            .unwrap();
+        }
+
+        let out = undo(&fx);
+
+        assert_eq!(out.failed(), 3, "{:?}", out.results);
+        assert_eq!(fx.read("opfer.txt"), "x");
+        assert_eq!(fx.read("woanders.txt"), "y");
+        assert!(in_quarantine.exists());
+    }
+
+    #[test]
+    fn archivierte_einzeldatei_wird_zurueckgeholt_und_der_ordner_aufgeraeumt() {
+        let fx = fx();
+        fx.write("Bericht_v1.docx", "eins");
+        fx.write("Bericht_v2.docx", "zwei");
+        let m = mtime(&fx, "Bericht_v1.docx");
+        let plan = fx.move_file_plan(&[("Bericht_v1.docx", r"Versionen\Bericht_v1.docx")]);
+        run_with(&fx, &plan, &RealFs, &fx.protector(), RUN).unwrap();
+        assert!(!fx.exists("Bericht_v1.docx"));
+
+        let out = undo(&fx);
+
+        assert_eq!((out.restored(), out.exit_code()), (1, 0));
+        assert_eq!(fx.read("Bericht_v1.docx"), "eins");
+        assert_eq!(mtime(&fx, "Bericht_v1.docx"), m);
+        assert!(!fx.exists("_Archiv"));
+    }
+
+    #[test]
+    fn runs_zaehlt_archiv_moves_ohne_quarantaene_bytes() {
+        let (fx, _) = archived();
+        let runs = list_runs(&fx.root, 30).unwrap();
+        assert_eq!((runs[0].moved, runs[0].bytes), (1, 0));
+        assert_eq!(
+            runs[0].counts,
+            ActionCounts {
+                archived: 1,
+                ..ActionCounts::default()
+            }
+        );
+        assert_eq!(runs[0].status, RunStatus::Complete);
+        undo(&fx);
+        assert_eq!(
+            list_runs(&fx.root, 30).unwrap()[0].status,
+            RunStatus::Undone
+        );
+    }
+
     #[test]
     fn apply_und_undo_stellen_pfad_inhalt_und_zeit_wieder_her() {
         let fx = fx();
@@ -514,6 +1264,38 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn undo_raeumt_leere_ordner_in_der_quarantaene_auf() {
+        let fx = applied();
+        assert!(quarantine::run_dir(&fx.root, &run_id()).exists());
+
+        let out = undo(&fx);
+
+        assert_eq!(out.exit_code(), 0);
+        assert!(
+            !quarantine::run_dir(&fx.root, &run_id()).exists(),
+            "keine leeren Ordner unter quarantine\\<run-id>, auch der Laufordner nicht"
+        );
+        assert!(quarantine::journal_path(&fx.root, &run_id()).exists());
+    }
+
+    #[test]
+    fn undo_laesst_ordner_mit_verbleibenden_dateien_stehen_und_raeumt_den_rest() {
+        let fx = applied();
+        fx.write("b/kopie.txt", "belegt");
+
+        undo(&fx);
+
+        assert!(
+            fx.quarantined(RUN, r"b\kopie.txt").exists(),
+            "Konflikt: bleibt"
+        );
+        assert!(
+            !fx.quarantined(RUN, "c").exists(),
+            "der erfolgreich zurückgeholte Zweig ist weg"
+        );
     }
 
     #[test]
@@ -656,7 +1438,9 @@ mod tests {
                 from: paths::display(&elsewhere),
                 to: paths::display(&victim),
                 size: 1,
-                hash: "00".repeat(16),
+                hash: Some("00".repeat(16)),
+                dest: crate::change::journal::Dest::Quarantine,
+                is_dir: false,
             },
             Entry::Done {
                 run: run_id(),

@@ -2,7 +2,7 @@ use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
-use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, GetDriveTypeW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
@@ -61,6 +61,97 @@ pub fn move_no_replace(from: &Path, to: &Path) -> io::Result<()> {
     } else {
         Ok(())
     }
+}
+
+const FILETIME_UNIX_DIFF: i64 = 116_444_736_000_000_000;
+/// Attribute, die `SetFileAttributesW` für Ordner setzen darf (readonly, hidden, system,
+/// archive, not-content-indexed).
+const SETTABLE_DIR_ATTRS: u32 = 0x1 | 0x2 | 0x4 | 0x20 | 0x2000;
+const FILE_ATTRIBUTE_NORMAL: u32 = 0x80;
+
+fn ticks_to_filetime(ticks: i64) -> FILETIME {
+    let value = ticks.saturating_add(FILETIME_UNIX_DIFF).max(0) as u64;
+    FILETIME {
+        dwLowDateTime: value as u32,
+        dwHighDateTime: (value >> 32) as u32,
+    }
+}
+
+/// Setzt Erstellungs- und Änderungszeit sowie die Attribute eines Ordners (Undo von
+/// `remove-dir`). Öffnet nur mit `FILE_WRITE_ATTRIBUTES`.
+pub fn set_dir_times_and_attrs(
+    path: &Path,
+    attrs: u32,
+    mtime_ticks: i64,
+    ctime_ticks: i64,
+) -> io::Result<()> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        SetFileAttributesW, SetFileTime, FILE_WRITE_ATTRIBUTES,
+    };
+    let name = wide(&paths::extended(path));
+    // SAFETY: `name` ist nullterminiert; das Handle wird unten geschlossen.
+    let handle = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            FILE_WRITE_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    let (created, written) = (
+        ticks_to_filetime(ctime_ticks),
+        ticks_to_filetime(mtime_ticks),
+    );
+    // SAFETY: `handle` ist gültig, die FILETIME-Zeiger leben über den Aufruf.
+    let times_ok = unsafe { SetFileTime(handle, &created, std::ptr::null(), &written) };
+    let times_err = io::Error::last_os_error();
+    unsafe { CloseHandle(handle) };
+    if times_ok == 0 {
+        return Err(times_err);
+    }
+    let settable = attrs & SETTABLE_DIR_ATTRS;
+    let value = if settable == 0 {
+        FILE_ATTRIBUTE_NORMAL
+    } else {
+        settable
+    };
+    // SAFETY: `name` ist nullterminiert.
+    if unsafe { SetFileAttributesW(name.as_ptr(), value) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Downloads-Ordner des Nutzers über die Known Folder API (`FOLDERID_Downloads`), damit auch
+/// umgeleitete Ordner gefunden werden. `None`, wenn Windows keinen Pfad liefert.
+pub fn downloads_dir() -> Option<std::path::PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::UI::Shell::{FOLDERID_Downloads, SHGetKnownFolderPath};
+
+    let mut raw: *mut u16 = std::ptr::null_mut();
+    // SAFETY: `FOLDERID_Downloads` ist eine gültige GUID, `raw` nimmt den von Windows
+    // allozierten, nullterminierten Pfad auf; er wird unten mit `CoTaskMemFree` freigegeben.
+    let hr =
+        unsafe { SHGetKnownFolderPath(&FOLDERID_Downloads, 0, std::ptr::null_mut(), &mut raw) };
+    if raw.is_null() {
+        return None;
+    }
+    let path = (hr >= 0).then(|| {
+        // SAFETY: Bei Erfolg zeigt `raw` auf einen nullterminierten UTF-16-Puffer.
+        let len = (0..).take_while(|&i| unsafe { *raw.add(i) } != 0).count();
+        let units = unsafe { std::slice::from_raw_parts(raw, len) };
+        std::path::PathBuf::from(std::ffi::OsString::from_wide(units))
+    });
+    // SAFETY: `raw` stammt von `SHGetKnownFolderPath` und wird genau einmal freigegeben.
+    unsafe { CoTaskMemFree(raw as *const _) };
+    path
 }
 
 /// Kurzname (8.3) eines existierenden Pfads, falls Windows einen vergibt.
@@ -154,6 +245,17 @@ mod tests {
         assert_eq!(ia.nlinks, 2);
         assert_ne!(ia.file_index, ic.file_index);
         assert_eq!(ic.nlinks, 1);
+    }
+
+    #[test]
+    fn downloads_ordner_kommt_von_der_known_folder_api() {
+        let dir = downloads_dir().expect("Windows kennt immer einen Downloads-Ordner");
+        assert!(dir.is_absolute(), "{}", dir.display());
+        assert!(
+            dir.file_name().is_some(),
+            "kein Laufwerks-Stamm erwartet: {}",
+            dir.display()
+        );
     }
 
     #[test]

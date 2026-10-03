@@ -204,7 +204,11 @@ fn plan_apply_undo_stellt_den_ausgangszustand_byteidentisch_her() {
     let before = env.snapshot();
     let plan = env.plan("plan.json");
 
-    let applied = stdout(env.apply(&plan).success().stdout(contains("2 verschoben")));
+    let applied = stdout(
+        env.apply(&plan)
+            .success()
+            .stdout(contains("2 in die Quarantäne verschoben")),
+    );
     let run = run_id(&applied);
 
     let during = env.snapshot();
@@ -275,7 +279,7 @@ fn geaenderte_datei_ist_stale_der_rest_laeuft_exit_2() {
 
     env.apply(&plan)
         .code(2)
-        .stdout(contains("1 verschoben"))
+        .stdout(contains("1 in die Quarantäne verschoben"))
         .stdout(contains("1 stale"));
 
     assert!(env.root().join("b/kopie.txt").exists());
@@ -346,17 +350,98 @@ fn unbekannter_oder_ungueltiger_lauf() {
         .stderr(contains("Ungültige Lauf-ID"));
 }
 
+impl Env {
+    fn config(&self, text: &str) {
+        let dir = self.home.path().join("config");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.toml"), text).unwrap();
+    }
+
+    /// Wie `apply`, aber der Wurzelordner gilt als OneDrive-Ordner.
+    fn apply_in_onedrive(&self, plan: &Path, extra: &[&str]) -> Assert {
+        self.bin()
+            .env("OneDrive", self.root())
+            .arg("apply")
+            .arg(plan)
+            .arg("--yes")
+            .args(extra)
+            .assert()
+    }
+}
+
+#[test]
+fn apply_verweigert_zu_grossen_plan_unter_onedrive_ohne_aenderung() {
+    let env = Env::new();
+    dup_tree(&env);
+    env.config("onedrive_max_move_files = 1");
+    let plan = env.plan("plan.json");
+    let before = env.snapshot();
+
+    env.apply_in_onedrive(&plan, &[])
+        .code(1)
+        .stderr(contains("--allow-large"));
+
+    assert_eq!(env.snapshot(), before);
+    assert!(
+        !env.quarantine_root().exists(),
+        "es darf nichts angelegt werden"
+    );
+}
+
+#[test]
+fn allow_large_hebt_die_obergrenze_auf() {
+    let env = Env::new();
+    dup_tree(&env);
+    env.config("onedrive_max_move_files = 1");
+    let plan = env.plan("plan.json");
+
+    env.apply_in_onedrive(&plan, &["--allow-large"]).success();
+
+    assert!(env.quarantine_root().exists());
+}
+
+#[test]
+fn obergrenze_gilt_nur_unter_onedrive() {
+    let env = Env::new();
+    dup_tree(&env);
+    env.config("onedrive_max_move_files = 1");
+    let plan = env.plan("plan.json");
+
+    env.apply(&plan).success();
+}
+
+#[test]
+fn plan_weist_auf_ueberschrittene_obergrenze_hin() {
+    let env = Env::new();
+    dup_tree(&env);
+    env.config("onedrive_max_move_files = 1");
+    env.scan();
+
+    let out = env.out.path().join("plan.json");
+    let text = stdout(
+        env.bin()
+            .env("OneDrive", env.root())
+            .args(["plan", "dedupe"])
+            .arg(env.root())
+            .arg("--out")
+            .arg(&out)
+            .assert()
+            .success(),
+    );
+    assert!(text.contains("--allow-large"), "{text}");
+}
+
 #[test]
 fn plan_mit_unbekannter_version_wird_klar_abgelehnt() {
     let env = Env::new();
     dup_tree(&env);
     let plan = env.plan("plan.json");
     let mut json = plan_json(&plan);
-    json["version"] = 2.into();
+    json["version"] = 3.into();
     std::fs::write(&plan, json.to_string()).unwrap();
     let before = env.snapshot();
 
-    env.apply(&plan).code(1).stderr(contains("Version 2"));
+    env.apply(&plan).code(1).stderr(contains("Version 3"));
 
     assert_eq!(env.snapshot(), before);
 }
@@ -441,7 +526,9 @@ fn lange_pfade_umlaute_und_leerzeichen_laufen_durch() {
     let plan = env.plan("plan.json");
 
     let run = run_id(&stdout(
-        env.apply(&plan).success().stdout(contains("1 verschoben")),
+        env.apply(&plan)
+            .success()
+            .stdout(contains("1 in die Quarantäne verschoben")),
     ));
     assert!(!std::fs::exists(paths::extended(&kopie)).unwrap());
 

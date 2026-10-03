@@ -75,6 +75,31 @@ pub fn unique_target(fs: &dyn FsOps, target: PathBuf) -> Option<PathBuf> {
         .find(|candidate| !fs.exists(candidate))
 }
 
+/// Entfernt `start` und seine Elternordner, solange sie leer sind, bis einschließlich `stop`.
+/// Gedacht für die Reste nach dem Zurückholen aus Quarantäne oder `_Archiv`. `remove_dir`
+/// löscht nur leere Ordner; Links und alles außerhalb von `stop` bleiben unangetastet.
+pub fn cleanup_empty_parents(fs: &dyn FsOps, start: &Path, stop: &Path) {
+    let stop_key = paths::path_key(stop);
+    let mut dir = start.to_path_buf();
+    loop {
+        let key = paths::path_key(&dir);
+        if !paths::is_under(&key, &stop_key) {
+            return;
+        }
+        match fs.metadata(&dir) {
+            Ok(meta) if meta.is_dir && !meta.is_reparse_point() => {}
+            _ => return,
+        }
+        if fs.remove_dir(&dir).is_err() || key == stop_key {
+            return;
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent.to_path_buf(),
+            None => return,
+        }
+    }
+}
+
 /// Die Tool-Ordner dürfen keine Links sein, sonst könnte die Quarantäne umgeleitet werden.
 pub fn ensure_plain_dirs(fs: &dyn FsOps, root: &Path, run: &RunId) -> io::Result<()> {
     for dir in [
@@ -184,6 +209,96 @@ mod tests {
             unique_target(&RealFs, plain).unwrap(),
             dir.path().join("README (2)")
         );
+    }
+
+    #[test]
+    fn leere_elternordner_werden_bis_einschliesslich_stop_entfernt() {
+        let dir = tempfile::tempdir().unwrap();
+        let stop = dir.path().join("stop");
+        let deep = stop.join("a").join("b");
+        std::fs::create_dir_all(&deep).unwrap();
+
+        cleanup_empty_parents(&RealFs, &deep, &stop);
+
+        assert!(!stop.exists(), "auch stop selbst ist leer und geht");
+        assert!(dir.path().exists(), "darüber wird nichts angefasst");
+    }
+
+    #[test]
+    fn ein_nicht_leerer_elternordner_beendet_das_aufraeumen() {
+        let dir = tempfile::tempdir().unwrap();
+        let stop = dir.path().join("stop");
+        let deep = stop.join("a").join("b");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(stop.join("a").join("bleibt.txt"), "x").unwrap();
+
+        cleanup_empty_parents(&RealFs, &deep, &stop);
+
+        assert!(!deep.exists());
+        assert!(stop.join("a").join("bleibt.txt").exists());
+        assert!(stop.exists());
+    }
+
+    #[test]
+    fn ordner_mit_inhalt_wird_nie_entfernt_auch_nicht_der_startordner() {
+        let dir = tempfile::tempdir().unwrap();
+        let stop = dir.path().join("stop");
+        std::fs::create_dir_all(&stop).unwrap();
+        std::fs::write(stop.join("datei.txt"), "inhalt").unwrap();
+
+        cleanup_empty_parents(&RealFs, &stop, &stop);
+
+        assert_eq!(
+            std::fs::read_to_string(stop.join("datei.txt")).unwrap(),
+            "inhalt"
+        );
+    }
+
+    #[test]
+    fn start_ausserhalb_von_stop_wird_ignoriert() {
+        let dir = tempfile::tempdir().unwrap();
+        let (stop, other) = (dir.path().join("stop"), dir.path().join("anders"));
+        std::fs::create_dir_all(&stop).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+
+        cleanup_empty_parents(&RealFs, &other, &stop);
+        cleanup_empty_parents(&RealFs, &dir.path().join("stop2"), &stop);
+
+        assert!(other.exists() && stop.exists());
+    }
+
+    #[test]
+    fn fehlender_startordner_ist_kein_fehler() {
+        let dir = tempfile::tempdir().unwrap();
+        let stop = dir.path().join("stop");
+        std::fs::create_dir_all(&stop).unwrap();
+        cleanup_empty_parents(&RealFs, &stop.join("fehlt").join("tief"), &stop);
+        assert!(stop.exists(), "nichts passiert, weil start nicht existiert");
+    }
+
+    #[test]
+    fn junction_wird_nicht_entfernt() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let stop = dir.path().join("stop");
+        std::fs::create_dir_all(&stop).unwrap();
+        let link = stop.join("verweis");
+        let ok = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(elsewhere.path())
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("Junction nicht erzeugbar, Test übersprungen");
+            return;
+        }
+
+        cleanup_empty_parents(&RealFs, &link, &stop);
+
+        assert!(link.exists(), "der Link bleibt");
+        assert!(elsewhere.path().exists());
     }
 
     #[test]
