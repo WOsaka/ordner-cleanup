@@ -73,7 +73,7 @@ fn onedrive_warning(root: &Path, onedrive_roots: &[PathBuf]) -> Option<String> {
 fn onedrive_roots_from_env() -> Vec<PathBuf> {
     ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"]
         .iter()
-        .filter_map(|v| std::env::var_os(v).map(PathBuf::from))
+        .filter_map(|v| std::env::var_os(v).map(|p| normalize(Path::new(&p))))
         .collect()
 }
 
