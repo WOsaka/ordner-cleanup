@@ -10,7 +10,9 @@ use indicatif::{ProgressBar, ProgressStyle};
 use crate::analysis::age::parse_old_after;
 use crate::analysis::problems::ProblemCtx;
 use crate::analysis::structure::Thresholds;
-use crate::cli::{Cli, Command, IndexCommand, ReportArgs, ScanArgs};
+use crate::change::dedupe::plan_dedupe;
+use crate::change::protect::{ProtectPaths, Protector};
+use crate::cli::{Cli, Command, IndexCommand, PlanCommand, PlanDedupeArgs, ReportArgs, ScanArgs};
 use crate::config::Config;
 use crate::index::{Index, RootStatus};
 use crate::paths;
@@ -27,7 +29,96 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Scan(args) => scan_command(&args),
         Command::Report(args) => report_command(&args),
         Command::Index(cmd) => index_command(&cmd),
+        Command::Plan(PlanCommand::Dedupe(args)) => plan_dedupe_command(&args),
     }
+}
+
+/// Ab diesem Alter des letzten Scans weist `plan` auf einen möglicherweise veralteten Index hin.
+const STALE_SCAN_DAYS: i64 = 7;
+
+/// Hinweis, wenn die Wurzel unter einem OneDrive-Ordner liegt: Die Quarantäne läge dann im
+/// synchronisierten Bereich und erzeugt Sync-Traffic.
+fn onedrive_warning(root: &Path, onedrive_roots: &[PathBuf]) -> Option<String> {
+    let key = paths::path_key(root);
+    onedrive_roots
+        .iter()
+        .any(|r| paths::is_under(&key, &paths::path_key(r)))
+        .then(|| {
+            "Warnung: Der Ordner liegt in OneDrive. Die Quarantäne (.ordner-cleanup) wird \
+             mitsynchronisiert und erzeugt Sync-Traffic; Dateien lassen sich später mit \
+             `purge` endgültig entsorgen."
+                .to_string()
+        })
+}
+
+fn onedrive_roots_from_env() -> Vec<PathBuf> {
+    ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"]
+        .iter()
+        .filter_map(|v| std::env::var_os(v).map(PathBuf::from))
+        .collect()
+}
+
+/// Hinweis zum Index-Zustand der Wurzel (kein Abbruch).
+fn index_age_note(root: &report::ReportRoot, now: chrono::DateTime<chrono::Utc>) -> Option<String> {
+    if root.status != RootStatus::Complete {
+        return Some(
+            "Hinweis: Der letzte Scan dieses Ordners war nicht vollständig; der Plan kann \
+             unvollständig sein. Bitte neu scannen."
+                .to_string(),
+        );
+    }
+    let scanned = chrono::DateTime::parse_from_rfc3339(root.scanned_at.as_deref()?).ok()?;
+    let age = now.signed_duration_since(scanned).num_days();
+    (age >= STALE_SCAN_DAYS).then(|| {
+        format!("Hinweis: Der letzte Scan ist {age} Tage alt. Bitte neu scannen, falls sich viel geändert hat.")
+    })
+}
+
+fn plan_dedupe_command(args: &PlanDedupeArgs) -> Result<i32> {
+    let root = resolve_root(&args.path, false)?;
+    let config = load_config()?;
+    let index = Index::open(&index_path()?)?;
+    let scanned = report::select_root(&index, Some(&root))?;
+    if let Some(note) = index_age_note(&scanned, chrono::Utc::now()) {
+        eprintln!("{note}");
+    }
+    if let Some(warning) = onedrive_warning(&root, &onedrive_roots_from_env()) {
+        eprintln!("{warning}");
+    }
+
+    let protector = Protector::new(&root, &config, &ProtectPaths::from_env());
+    let result = plan_dedupe(&index, &root, &args.keep, &protector, &now_rfc3339())?;
+    let out = match &args.out {
+        Some(out) => out.clone(),
+        None => PathBuf::from(format!(
+            "plan-{}.json",
+            chrono::Local::now().format("%Y%m%d-%H%M%S")
+        )),
+    };
+    result
+        .plan
+        .save(&out)
+        .with_context(|| format!("Plan-Datei {} nicht schreibbar", paths::display(&out)))?;
+
+    let plan = &result.plan;
+    println!(
+        "{} Aktionen, {} freiwerdend, {} übersprungen (Strategie: {})",
+        plan.actions.len(),
+        ByteSize::b(result.freed_bytes),
+        plan.skipped.len(),
+        plan.keep_strategy
+    );
+    let mut reasons = std::collections::BTreeMap::new();
+    for s in &plan.skipped {
+        *reasons.entry(s.reason.to_string()).or_insert(0usize) += 1;
+    }
+    for (reason, count) in reasons {
+        println!("  übersprungen: {count} × {reason}");
+    }
+    let shown = std::path::absolute(&out).unwrap_or(out);
+    println!("Plan: {}", paths::display(&shown));
+    println!("Es wurde nichts verändert. Plan prüfen, danach mit `apply` ausführen.");
+    Ok(0)
 }
 
 fn index_path() -> Result<PathBuf> {
@@ -230,5 +321,58 @@ fn index_command(cmd: &IndexCommand) -> Result<i32> {
                 bail!("{} ist nicht im Index", paths::display(&path))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn root(status: RootStatus, scanned_at: Option<&str>) -> report::ReportRoot {
+        report::ReportRoot {
+            path: r"D:\Daten".into(),
+            dir_key: r"d:\daten\".into(),
+            scanned_at: scanned_at.map(String::from),
+            status,
+        }
+    }
+
+    fn at(text: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(text)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn onedrive_warnung_nur_unterhalb_der_onedrive_wurzel() {
+        let roots = [PathBuf::from(r"C:\Users\me\OneDrive")];
+        assert!(onedrive_warning(Path::new(r"C:\Users\me\onedrive\Doku"), &roots).is_some());
+        assert!(onedrive_warning(Path::new(r"C:\Users\me\OneDrive"), &roots).is_some());
+        assert!(onedrive_warning(Path::new(r"C:\Users\me\OneDrive2\x"), &roots).is_none());
+        assert!(onedrive_warning(Path::new(r"D:\Daten"), &roots).is_none());
+        assert!(onedrive_warning(Path::new(r"D:\Daten"), &[]).is_none());
+    }
+
+    #[test]
+    fn unvollstaendiger_scan_wird_gemeldet() {
+        let r = root(RootStatus::Aborted, Some("2026-10-03T10:00:00Z"));
+        assert!(index_age_note(&r, at("2026-10-03T12:00:00Z"))
+            .unwrap()
+            .contains("nicht vollständig"));
+    }
+
+    #[test]
+    fn alter_scan_wird_ab_sieben_tagen_gemeldet() {
+        let r = root(RootStatus::Complete, Some("2026-09-26T12:00:00Z"));
+        assert!(index_age_note(&r, at("2026-10-03T12:00:00Z")).is_some());
+        assert!(index_age_note(&r, at("2026-10-03T11:00:00Z")).is_none());
+    }
+
+    #[test]
+    fn frischer_oder_undatierter_scan_ist_still() {
+        let fresh = root(RootStatus::Complete, Some("2026-10-03T10:00:00Z"));
+        assert!(index_age_note(&fresh, at("2026-10-03T12:00:00Z")).is_none());
+        let undated = root(RootStatus::Complete, None);
+        assert!(index_age_note(&undated, at("2026-10-03T12:00:00Z")).is_none());
     }
 }

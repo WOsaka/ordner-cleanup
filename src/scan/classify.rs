@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 
+use crate::change::protect::TOOL_DIR;
 use crate::config::Config;
 use crate::paths;
 
@@ -83,10 +84,6 @@ fn build_globs(patterns: &[String]) -> Result<GlobSet> {
     Ok(builder.build()?)
 }
 
-fn under(key: &str, prefix_key: &str) -> bool {
-    key == prefix_key || key.starts_with(&format!("{prefix_key}\\"))
-}
-
 impl Classifier {
     pub fn new(root: &Path, config: &Config, default_paths: &DefaultPaths) -> Result<Self> {
         let root_key = paths::path_key(root);
@@ -94,7 +91,7 @@ impl Classifier {
         let keep = |list: &[PathBuf]| -> Vec<String> {
             list.iter()
                 .map(|p| paths::path_key(p))
-                .filter(|k| !under(&root_key, k))
+                .filter(|k| !paths::is_under(&root_key, k))
                 .collect()
         };
         let defaults = (!config.no_default_excludes).then(|| ActiveDefaults {
@@ -116,7 +113,7 @@ impl Classifier {
             .excluded
             .iter()
             .chain(&default_paths.summary)
-            .find(|p| under(&root_key, &paths::path_key(p)))
+            .find(|p| paths::is_under(&root_key, &paths::path_key(p)))
             .cloned()
     }
 
@@ -140,13 +137,14 @@ impl Classifier {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
 
-        if Self::glob_hit(&self.user_exclude, path, &name_str) {
+        // Quarantäne und Journal landen nie im Index, auch nicht ohne Default-Ausschlüsse.
+        if name == TOOL_DIR || Self::glob_hit(&self.user_exclude, path, &name_str) {
             return DirMode::Exclude;
         }
         if let Some(d) = &self.defaults {
             if EXCLUDED_NAMES.contains(&name.as_str())
                 || name.starts_with(REPORT_DIR_PREFIX)
-                || d.excluded.iter().any(|p| under(&key, p))
+                || d.excluded.iter().any(|p| paths::is_under(&key, p))
             {
                 return DirMode::Exclude;
             }
@@ -158,7 +156,7 @@ impl Classifier {
             let build_dir = (name == "bin" || name == "obj") && parent_has_project;
             if SUMMARY_NAMES.contains(&name.as_str())
                 || build_dir
-                || d.summary.iter().any(|p| under(&key, p))
+                || d.summary.iter().any(|p| paths::is_under(&key, p))
             {
                 return DirMode::SummaryOnly;
             }
@@ -228,6 +226,23 @@ mod tests {
     fn default_regeln(#[case] path: &str, #[case] expected: DirMode) {
         let c = classifier(r"C:\Users\me\Dokumente", &Config::default());
         assert_eq!(c.classify_dir(Path::new(path), false), expected);
+    }
+
+    #[rstest]
+    #[case(false)]
+    #[case(true)]
+    fn tool_ordner_wird_nie_gescannt(#[case] no_default_excludes: bool) {
+        let config = Config {
+            no_default_excludes,
+            ..Config::default()
+        };
+        let c = classifier(r"C:\Users\me\Dokumente", &config);
+        for dir in [
+            r"C:\Users\me\Dokumente\.ordner-cleanup",
+            r"C:\Users\me\Dokumente\sub\.ORDNER-CLEANUP",
+        ] {
+            assert_eq!(c.classify_dir(Path::new(dir), false), DirMode::Exclude);
+        }
     }
 
     #[rstest]

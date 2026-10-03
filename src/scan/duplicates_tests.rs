@@ -173,6 +173,26 @@ fn hardlinks_werden_einmal_gezaehlt_und_nicht_als_duplikat_gemeldet() {
 }
 
 #[test]
+fn gruppenmitglieder_tragen_die_datei_identitaet() {
+    let tmp = tempfile::tempdir().unwrap();
+    write(tmp.path(), "a.txt", b"hardlink-inhalt");
+    std::fs::hard_link(tmp.path().join("a.txt"), tmp.path().join("b.txt")).unwrap();
+    write(tmp.path(), "kopie.txt", b"hardlink-inhalt");
+    let mut index = Index::open_in_memory().unwrap();
+    scan_dir(&mut index, tmp.path());
+    let g = groups(&index, tmp.path());
+    let identity = |name: &str| {
+        g[0].files
+            .iter()
+            .find(|f| f.path.ends_with(name))
+            .and_then(|f| f.identity)
+    };
+    assert!(identity("a.txt").is_some());
+    assert_eq!(identity("a.txt"), identity("b.txt"));
+    assert_ne!(identity("a.txt"), identity("kopie.txt"));
+}
+
+#[test]
 fn rescan_ohne_aenderung_hasht_nichts_neu() {
     let tmp = tempfile::tempdir().unwrap();
     write(tmp.path(), "a.bin", &vec![1u8; 300 * 1024]);

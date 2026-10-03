@@ -48,6 +48,26 @@ pub fn drive_kind(path: &Path) -> DriveKind {
     }
 }
 
+/// Kurzname (8.3) eines existierenden Pfads, falls Windows einen vergibt.
+pub fn short_path(path: &Path) -> Option<std::path::PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    let name = wide(path);
+    let mut buf = vec![0u16; 1024];
+    // SAFETY: `name` ist nullterminiert, `buf` bietet die angegebene Länge.
+    let len = unsafe {
+        windows_sys::Win32::Storage::FileSystem::GetShortPathNameW(
+            name.as_ptr(),
+            buf.as_mut_ptr(),
+            buf.len() as u32,
+        )
+    } as usize;
+    if len == 0 || len > buf.len() {
+        return None;
+    }
+    let short = std::path::PathBuf::from(std::ffi::OsString::from_wide(&buf[..len]));
+    (short != path).then_some(short)
+}
+
 /// Liest Volume-Seriennummer, File-ID und Link-Anzahl; öffnet nur mit
 /// `FILE_READ_ATTRIBUTES` (löst keinen Cloud-Recall aus).
 pub fn file_identity(path: &Path) -> io::Result<FileIdentity> {

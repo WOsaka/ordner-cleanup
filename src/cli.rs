@@ -2,11 +2,13 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
+use crate::change::dedupe::KeepStrategy;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "ordner-cleanup",
     version,
-    about = "Scan und Analyse-Bericht für Ordnersysteme (rein lesend)"
+    about = "Scan, Analyse-Bericht und sicheres Aufräumen für Ordnersysteme (Windows)"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -22,6 +24,27 @@ pub enum Command {
     /// Gescannte Wurzeln im Index verwalten
     #[command(subcommand)]
     Index(IndexCommand),
+    /// Änderungsplan erzeugen (verändert nichts)
+    #[command(subcommand)]
+    Plan(PlanCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PlanCommand {
+    /// Exakte Duplikate in die Quarantäne planen
+    Dedupe(PlanDedupeArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PlanDedupeArgs {
+    /// Bereits gescannter Ordner
+    pub path: PathBuf,
+    /// Welche Kopie bleibt: oldest, newest oder path:<absoluter Ordner>
+    #[arg(long, default_value = "oldest")]
+    pub keep: KeepStrategy,
+    /// Zieldatei für den Plan (Default: plan-<Zeitstempel>.json im aktuellen Ordner)
+    #[arg(long)]
+    pub out: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
