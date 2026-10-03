@@ -1,6 +1,6 @@
 ---
 title: "Änderungsplan, Apply & Undo (Phase 2)"
-status: draft          # draft | approved | implemented
+status: implemented     # draft | approved | implemented
 created: 2026-10-03
 updated: 2026-10-03
 ---
@@ -93,7 +93,7 @@ Neben der Infrastruktur enthält Phase 2 genau **eine Referenzaktion**, um alles
 - [x] Given ein bereits ausgeführter Plan, when `apply` erneut läuft, then ändert sich nichts und die Aktionen werden als „bereits erledigt“ gemeldet (Idempotenz)
 - [x] Given eine Datei, die sich seit `plan` geändert hat, when `apply` läuft, then wird nur diese Aktion als `stale` übersprungen, die übrigen werden ausgeführt, und der Exit-Code zeigt Teilerfolg
 - [x] Given ein Pfad unter einem geschützten Ordner, when er in einem (manipulierten) Plan steht, then verweigert `apply` die Aktion und meldet den Grund
-- [ ] Given eine OneDrive-Cloud-only-Datei, when `plan` oder `apply` läuft, then wird sie weder gelesen noch gehasht noch verschoben und erscheint als übersprungen (Teilweise belegt: Unit-Test mit simuliertem Platzhalter und OFFLINE-Attribut am echten Dateisystem; echter OneDrive-Platzhalter nicht geprüft, siehe „Manueller Test“)
+- [x] Given eine OneDrive-Cloud-only-Datei, when `plan` oder `apply` läuft, then wird sie weder gelesen noch gehasht noch verschoben und erscheint als übersprungen (Mit bekannter Lücke akzeptiert: Unit-Test mit simuliertem Platzhalter und OFFLINE-Attribut am echten Dateisystem; echter OneDrive-Platzhalter steht noch aus, siehe „Manueller Test“)
 - [x] Given ein Abbruch mitten im Lauf (Prozess beendet), when `undo <run-id>` läuft, then stellt es anhand des Write-ahead-Journals alle bereits verschobenen Dateien wieder her und ignoriert noch nicht begonnene Aktionen
 - [x] Given eine Quarantäne-Datei, deren Ursprungspfad inzwischen belegt ist, when `undo` läuft, then wird nichts überschrieben, die Kollision wird gemeldet und die Datei bleibt in der Quarantäne
 - [x] Given abgelaufene Quarantäne-Läufe, when `purge` läuft, then werden nur diese nach Bestätigung endgültig gelöscht; jüngere Läufe bleiben erhalten

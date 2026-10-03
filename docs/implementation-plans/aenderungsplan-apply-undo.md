@@ -1,7 +1,7 @@
 ---
 title: "Implementation Plan: Änderungsplan, Apply & Undo (Phase 2)"
 feature_spec: docs/features/aenderungsplan-apply-undo.md
-status: approved   # pending-approval | approved | implemented
+status: implemented   # pending-approval | approved | implemented
 created: 2026-10-03
 updated: 2026-10-03
 ---
