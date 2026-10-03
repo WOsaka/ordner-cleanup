@@ -485,6 +485,19 @@ fn prepare_archive_parent(root: &Path, parent: &Path, env: &ApplyEnv) -> Result<
     }
 }
 
+/// `versions`: Die behaltene jüngste Datei muss noch da, lokal und nicht älter geworden sein als
+/// die verschobene. Es wird nichts gelesen oder gehasht.
+fn verify_keep_present(a: &PlannedAction, keep: &str, env: &ApplyEnv) -> Result<(), Verdict> {
+    let meta = match env.fs.metadata(Path::new(keep)) {
+        Ok(m) if !m.is_dir && !m.is_link && !m.is_cloud_only() => m,
+        _ => return Err(Verdict::Skip(SkipReason::KeepMissing)),
+    };
+    if meta.mtime_ticks < a.mtime_ticks {
+        return Err(Verdict::Skip(SkipReason::Stale));
+    }
+    Ok(())
+}
+
 /// Alle Prüfungen vor dem Journal. `Ok` liefert das freie Ziel unter `_Archiv`.
 fn verify_move(
     a: &PlannedAction,
@@ -530,6 +543,9 @@ fn verify_move(
         }
     } else {
         verify_source(a, env)?;
+        if let Some(keep) = &a.keep {
+            verify_keep_present(a, keep, env)?;
+        }
     }
 
     if paths::display(&target).chars().count() > MAX_TARGET_LEN {
@@ -1443,6 +1459,126 @@ mod tests {
 
         assert_eq!((out.executed(), out.stale()), (0, 1));
         assert!(fx.exists("a.docx") && !fx.exists("_Archiv"));
+    }
+
+    /// Zwei ältere Versionen und die behaltene jüngste; Plan wie `plan versions`.
+    fn versions_fixture() -> (Fx, Plan) {
+        let fx = fx();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(400 * 86_400);
+        let mid = std::time::SystemTime::now() - std::time::Duration::from_secs(200 * 86_400);
+        for (name, time) in [("Bericht_v1.docx", old), ("Bericht_v2.docx", mid)] {
+            let path = fx.write(name, name);
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(time)
+                .unwrap();
+        }
+        fx.write("Bericht final.docx", "final");
+        let mut plan = fx.move_file_plan(&[
+            ("Bericht_v1.docx", r"Versionen\Bericht_v1.docx"),
+            ("Bericht_v2.docx", r"Versionen\Bericht_v2.docx"),
+        ]);
+        let keep = crate::paths::display(&fx.root.join("Bericht final.docx"));
+        for action in &mut plan.actions {
+            action.keep = Some(keep.clone());
+        }
+        (fx, plan)
+    }
+
+    #[test]
+    fn aeltere_versionen_gehen_ins_archiv_die_behaltene_bleibt() {
+        let (fx, plan) = versions_fixture();
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!((out.executed(), out.exit_code()), (2, 0));
+        assert!(!fx.exists("Bericht_v1.docx") && !fx.exists("Bericht_v2.docx"));
+        assert_eq!(fx.read("Bericht final.docx"), "final");
+        assert_eq!(
+            fx.read(r"_Archiv\Versionen\Bericht_v2.docx"),
+            "Bericht_v2.docx"
+        );
+    }
+
+    #[test]
+    fn fehlende_behaltene_datei_ueberspringt_die_ganze_gruppe() {
+        let (fx, plan) = versions_fixture();
+        std::fs::remove_file(fx.root.join("Bericht final.docx")).unwrap();
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(out.executed(), 0);
+        assert!(out
+            .results
+            .iter()
+            .all(|r| r.status == ActionStatus::Skipped(SkipReason::KeepMissing)));
+        assert!(fx.exists("Bericht_v1.docx") && fx.exists("Bericht_v2.docx"));
+        assert!(!fx.exists("_Archiv"));
+    }
+
+    #[test]
+    fn behaltene_datei_die_aelter_als_die_verschobene_geworden_ist_gilt_als_stale() {
+        let (fx, plan) = versions_fixture();
+        let ancient = std::time::SystemTime::now() - std::time::Duration::from_secs(900 * 86_400);
+        std::fs::File::options()
+            .write(true)
+            .open(fx.root.join("Bericht final.docx"))
+            .unwrap()
+            .set_modified(ancient)
+            .unwrap();
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!((out.executed(), out.stale()), (0, 2));
+        assert!(fx.exists("Bericht_v1.docx"));
+    }
+
+    #[test]
+    fn behaltene_datei_als_cloud_platzhalter_oder_ordner_ist_nicht_nutzbar_und_wird_nie_gelesen() {
+        let (fx, plan) = versions_fixture();
+        let keep = fx.root.join("Bericht final.docx");
+        let faulty = FaultyFs::new().cloud_only(&keep);
+
+        let out = run_with(&fx, &plan, &faulty, &fx.protector(), RUN).unwrap();
+
+        assert!(out
+            .results
+            .iter()
+            .all(|r| r.status == ActionStatus::Skipped(SkipReason::KeepMissing)));
+        assert!(faulty.hashed().is_empty(), "keine Inhalte lesen");
+
+        // Ein Ordner an der Stelle der behaltenen Datei ist ebenfalls unbrauchbar.
+        let (fx, plan) = versions_fixture();
+        std::fs::remove_file(fx.root.join("Bericht final.docx")).unwrap();
+        fx.mkdir("Bericht final.docx");
+        let out = apply(&fx, &plan);
+        assert_eq!(out.executed(), 0);
+        assert!(fx.exists("Bericht_v1.docx"));
+    }
+
+    #[test]
+    fn behaltene_datei_mit_gleicher_mtime_ist_zulaessig() {
+        let fx = fx();
+        fx.write("a_v1.doc", "x");
+        fx.write("a_v2.doc", "y");
+        let mtime = std::fs::metadata(fx.root.join("a_v1.doc"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(fx.root.join("a_v2.doc"))
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        let mut plan = fx.move_file_plan(&[("a_v1.doc", "Versionen/a_v1.doc")]);
+        plan.actions[0].keep = Some(crate::paths::display(&fx.root.join("a_v2.doc")));
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(out.executed(), 1);
     }
 
     #[test]

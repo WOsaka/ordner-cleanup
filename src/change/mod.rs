@@ -16,6 +16,7 @@ pub mod registry;
 mod test_support;
 pub mod tree;
 pub mod undo;
+pub mod versions;
 
 use std::collections::hash_map::RandomState;
 use std::fmt;
