@@ -80,6 +80,44 @@ impl Fx {
         }
     }
 
+    /// Quarantäne-Plan ohne Hash (wie `plan junk` ihn schreibt): Größe und mtime aus dem
+    /// aktuellen Dateizustand.
+    pub fn junk_plan(&self, rels: &[&str]) -> Plan {
+        let actions = rels
+            .iter()
+            .zip(1u32..)
+            .map(|(rel, id)| {
+                let path = self.root.join(rel);
+                let meta = RealFs.metadata(&path).unwrap();
+                PlannedAction {
+                    id,
+                    action: ActionType::Quarantine,
+                    path: paths::display(&path),
+                    size: meta.size,
+                    mtime_ticks: meta.mtime_ticks,
+                    mtime: String::new(),
+                    hash: None,
+                    keep: None,
+                    keep_hash: None,
+                    reason: "junk:temp".into(),
+                    target: None,
+                    is_dir: false,
+                    files: None,
+                }
+            })
+            .collect();
+        Plan {
+            version: PLAN_VERSION,
+            created: "t".into(),
+            kind: PlanKind::Junk,
+            root: paths::display(&self.root),
+            keep_strategy: None,
+            params: Default::default(),
+            actions,
+            skipped: vec![],
+        }
+    }
+
     pub fn protector(&self) -> Protector {
         Protector::new(&self.root, &Config::default(), &ProtectPaths::default())
     }

@@ -9,9 +9,9 @@ use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::fsops::FsOps;
+use super::fsops::{FileMeta, FsOps};
 use super::journal::{Dest, EndStatus, Entry, JournalWriter};
-use super::plan::{hex, Plan, PlanError, PlannedAction};
+use super::plan::{hex, ActionType, Plan, PlanError, PlannedAction};
 use super::protect::Protector;
 use super::quarantine;
 use super::{RunId, SkipReason};
@@ -117,17 +117,9 @@ fn io_message(e: &io::Error) -> String {
     }
 }
 
-/// `hash`, `keep` und `keep_hash` einer `dedupe`-Aktion (die Validierung stellt sie sicher).
-fn dedupe_fields(a: &PlannedAction) -> Result<(&str, &str, &str), Verdict> {
-    match (&a.hash, &a.keep, &a.keep_hash) {
-        (Some(h), Some(k), Some(kh)) => Ok((h, k, kh)),
-        _ => Err(Verdict::Fail("Aktion enthält keinen Hash".into())),
-    }
-}
-
 /// Behaltene Datei prüfen (einmal je Datei und Hash, Ergebnis wird gemerkt).
 fn verify_keep(
-    a: &PlannedAction,
+    size: u64,
     keep_path: &str,
     keep_hash: &str,
     env: &ApplyEnv,
@@ -140,7 +132,7 @@ fn verify_keep(
             Ok(m) if !m.is_dir && !m.is_link && !m.is_cloud_only() => m,
             _ => return Some(SkipReason::KeepMissing),
         };
-        if meta.size != a.size {
+        if meta.size != size {
             return Some(SkipReason::Stale);
         }
         match env.fs.hash(keep, meta.size) {
@@ -151,13 +143,10 @@ fn verify_keep(
     })
 }
 
-/// Alle Prüfungen vor dem Journal. `Ok` liefert das freie Ziel in der Quarantäne.
-fn verify(
-    a: &PlannedAction,
-    root: &Path,
-    env: &ApplyEnv,
-    keeps: &mut HashMap<String, Option<SkipReason>>,
-) -> Result<std::path::PathBuf, Verdict> {
+/// Gemeinsame Prüfungen einer Datei-Quelle: Schutzregeln, Existenz, Platzhalter, Link,
+/// Größe und Änderungszeit. Ohne Hash ist das die gesamte Stale-Prüfung (`junk`, `versions`,
+/// `archive`).
+fn verify_source(a: &PlannedAction, env: &ApplyEnv) -> Result<FileMeta, Verdict> {
     let src = Path::new(&a.path);
     if env.protector.check(src).is_some() {
         return Err(Verdict::Skip(SkipReason::Protected));
@@ -179,16 +168,36 @@ fn verify(
     if meta.is_dir || meta.size != a.size || meta.mtime_ticks != a.mtime_ticks {
         return Err(Verdict::Skip(SkipReason::Stale));
     }
-    let (hash, keep_path, keep_hash) = dedupe_fields(a)?;
-    if let Some(reason) = verify_keep(a, keep_path, keep_hash, env, keeps) {
+    Ok(meta)
+}
+
+/// Nur `dedupe`: behaltene Datei und Inhalt der Quelle per Hash bestätigen.
+fn verify_content(
+    a: &PlannedAction,
+    meta: &FileMeta,
+    env: &ApplyEnv,
+    keeps: &mut HashMap<String, Option<SkipReason>>,
+) -> Result<(), Verdict> {
+    let (Some(hash), Some(keep), Some(keep_hash)) = (&a.hash, &a.keep, &a.keep_hash) else {
+        return Ok(());
+    };
+    if let Some(reason) = verify_keep(a.size, keep, keep_hash, env, keeps) {
         return Err(Verdict::Skip(reason));
     }
-    match env.fs.hash(src, meta.size) {
-        Ok(h) if hex(&h) == hash => {}
-        Ok(_) => return Err(Verdict::Skip(SkipReason::Stale)),
-        Err(e) => return Err(Verdict::Fail(io_message(&e))),
+    match env.fs.hash(Path::new(&a.path), meta.size) {
+        Ok(h) if hex(&h) == *hash => Ok(()),
+        Ok(_) => Err(Verdict::Skip(SkipReason::Stale)),
+        Err(e) => Err(Verdict::Fail(io_message(&e))),
     }
+}
 
+/// Freies Ziel in der Quarantäne; legt den Zielordner an und prüft das Volume.
+fn quarantine_target(
+    a: &PlannedAction,
+    root: &Path,
+    env: &ApplyEnv,
+) -> Result<std::path::PathBuf, Verdict> {
+    let src = Path::new(&a.path);
     let target = quarantine::target_for(root, &env.run, src).map_err(Verdict::Skip)?;
     let parent = target.parent().unwrap_or(root);
     env.fs
@@ -205,50 +214,58 @@ fn verify(
         .ok_or_else(|| Verdict::Fail("kein freier Name in der Quarantäne".into()))
 }
 
-fn process(
+/// Alle Prüfungen vor dem Journal. `Ok` liefert das freie Ziel in der Quarantäne.
+fn verify_quarantine(
     a: &PlannedAction,
     root: &Path,
     env: &ApplyEnv,
-    journal: &mut JournalWriter,
     keeps: &mut HashMap<String, Option<SkipReason>>,
+) -> Result<std::path::PathBuf, Verdict> {
+    let meta = verify_source(a, env)?;
+    verify_content(a, &meta, env, keeps)?;
+    quarantine_target(a, root, env)
+}
+
+/// Ergebnis der Vorprüfung in einen Journal-Eintrag und einen Status übersetzen.
+fn record_verdict(
+    verdict: Verdict,
+    run: RunId,
+    action: u32,
+    journal: &mut JournalWriter,
 ) -> Result<ActionStatus, ApplyError> {
-    let run = env.run.clone();
-    let target = match verify(a, root, env, keeps) {
-        Ok(target) => target,
-        Err(Verdict::Skip(reason)) => {
+    match verdict {
+        Verdict::Skip(reason) => {
             journal.append(&Entry::Skip {
                 run,
-                action: a.id,
+                action,
                 reason,
             })?;
-            return Ok(if reason == SkipReason::AlreadyDone {
+            Ok(if reason == SkipReason::AlreadyDone {
                 ActionStatus::AlreadyDone
             } else {
                 ActionStatus::Skipped(reason)
-            });
+            })
         }
-        Err(Verdict::Fail(error)) => {
+        Verdict::Fail(error) => {
             journal.append(&Entry::Fail {
                 run,
-                action: a.id,
+                action,
                 error: error.clone(),
             })?;
-            return Ok(ActionStatus::Failed(error));
+            Ok(ActionStatus::Failed(error))
         }
-    };
+    }
+}
 
-    // Write-ahead: Ohne gesicherten `intent` wird nichts verschoben.
-    journal.append(&Entry::Intent {
-        run: run.clone(),
-        action: a.id,
-        from: a.path.clone(),
-        to: paths::display(&target),
-        size: a.size,
-        hash: a.hash.clone(),
-        dest: Dest::Quarantine,
-        is_dir: false,
-    })?;
-    match env.fs.rename(Path::new(&a.path), &target) {
+/// Führt den Rename aus und schließt die Aktion im Journal ab.
+fn finish_rename(
+    env: &ApplyEnv,
+    journal: &mut JournalWriter,
+    a: &PlannedAction,
+    target: &Path,
+) -> Result<ActionStatus, ApplyError> {
+    let run = env.run.clone();
+    match env.fs.rename(Path::new(&a.path), target) {
         Ok(()) => {
             journal.append(&Entry::Done { run, action: a.id })?;
             Ok(ActionStatus::Done)
@@ -262,6 +279,49 @@ fn process(
             })?;
             Ok(ActionStatus::Failed(error))
         }
+    }
+}
+
+fn process_quarantine(
+    a: &PlannedAction,
+    root: &Path,
+    env: &ApplyEnv,
+    journal: &mut JournalWriter,
+    keeps: &mut HashMap<String, Option<SkipReason>>,
+) -> Result<ActionStatus, ApplyError> {
+    let target = match verify_quarantine(a, root, env, keeps) {
+        Ok(target) => target,
+        Err(verdict) => return record_verdict(verdict, env.run.clone(), a.id, journal),
+    };
+    // Write-ahead: Ohne gesicherten `intent` wird nichts verschoben.
+    journal.append(&Entry::Intent {
+        run: env.run.clone(),
+        action: a.id,
+        from: a.path.clone(),
+        to: paths::display(&target),
+        size: a.size,
+        hash: a.hash.clone(),
+        dest: Dest::Quarantine,
+        is_dir: false,
+    })?;
+    finish_rename(env, journal, a, &target)
+}
+
+fn process(
+    a: &PlannedAction,
+    root: &Path,
+    env: &ApplyEnv,
+    journal: &mut JournalWriter,
+    keeps: &mut HashMap<String, Option<SkipReason>>,
+) -> Result<ActionStatus, ApplyError> {
+    match a.action {
+        ActionType::Quarantine => process_quarantine(a, root, env, journal, keeps),
+        ActionType::RemoveDir | ActionType::Move => record_verdict(
+            Verdict::Fail("Aktionstyp wird von dieser Version noch nicht ausgeführt".into()),
+            env.run.clone(),
+            a.id,
+            journal,
+        ),
     }
 }
 
@@ -403,6 +463,105 @@ mod tests {
         assert!(!fx.quarantined("20261003-130000-cd34", "b.txt").exists());
         assert!(fx.quarantined(RUN, "b.txt").exists());
         assert_eq!(intents(&fx.journal("20261003-130000-cd34")), 0);
+    }
+
+    #[test]
+    fn junk_ohne_hash_wird_ohne_inhalt_zu_lesen_in_die_quarantaene_verschoben() {
+        let fx = fx();
+        fx.write("a/cache.tmp", "temporaer");
+        fx.write("b/~$bericht.docx", "sperrdatei");
+        let plan = fx.junk_plan(&["a/cache.tmp", "b/~$bericht.docx"]);
+        let faulty = FaultyFs::new();
+
+        let out = run_with(&fx, &plan, &faulty, &fx.protector(), RUN).unwrap();
+
+        assert_eq!((out.executed(), out.exit_code()), (2, 0));
+        assert!(!fx.exists("a/cache.tmp") && !fx.exists("b/~$bericht.docx"));
+        assert!(fx.quarantined(RUN, r"a\cache.tmp").exists());
+        assert!(faulty.hashed().is_empty(), "Junk wird nie gehasht");
+        let entries = fx.journal(RUN);
+        let intents: Vec<_> = entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Intent {
+                    hash, dest, is_dir, ..
+                } => Some((hash.clone(), *dest, *is_dir)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            intents,
+            [
+                (None, Dest::Quarantine, false),
+                (None, Dest::Quarantine, false)
+            ]
+        );
+    }
+
+    #[test]
+    fn junk_geaenderte_groesse_ist_stale() {
+        let fx = fx();
+        fx.write("a.tmp", "kurz");
+        let plan = fx.junk_plan(&["a.tmp"]);
+        fx.write("a.tmp", "jetzt deutlich länger");
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!((out.executed(), out.stale(), out.exit_code()), (0, 1, 2));
+        assert!(fx.exists("a.tmp"));
+    }
+
+    #[test]
+    fn junk_geaenderte_mtime_bei_gleicher_groesse_ist_stale_weil_kein_hash_pruefung() {
+        let fx = fx();
+        let file = fx.write("a.tmp", "gleich");
+        let plan = fx.junk_plan(&["a.tmp"]);
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(out.stale(), 1);
+        assert!(fx.exists("a.tmp") && !fx.quarantined(RUN, "a.tmp").exists());
+        assert_eq!(intents(&fx.journal(RUN)), 0, "stale erzeugt kein intent");
+    }
+
+    #[test]
+    fn junk_cloud_platzhalter_wird_uebersprungen_und_nie_gelesen() {
+        let fx = fx();
+        let wolke = fx.write("wolke.tmp", "x");
+        let plan = fx.junk_plan(&["wolke.tmp"]);
+        let faulty = FaultyFs::new().cloud_only(&wolke);
+
+        let out = run_with(&fx, &plan, &faulty, &fx.protector(), RUN).unwrap();
+
+        assert_eq!(out.skipped(), 1);
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::CloudPlaceholder)
+        );
+        assert!(faulty.hashed().is_empty());
+        assert!(fx.exists("wolke.tmp"));
+    }
+
+    #[test]
+    fn junk_fehlende_datei_ist_bereits_erledigt() {
+        let fx = fx();
+        fx.write("a.tmp", "x");
+        let plan = fx.junk_plan(&["a.tmp"]);
+        std::fs::remove_file(fx.root.join("a.tmp")).unwrap();
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(
+            (out.executed(), out.already_done(), out.exit_code()),
+            (0, 1, 0)
+        );
     }
 
     #[test]
