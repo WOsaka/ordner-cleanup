@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{ title }}</title>
+<style>{{ css|safe }}</style>
+</head>
+<body>
+<div class="shell">
+  <nav class="nav" aria-label="Abschnitte">
+    <div class="nav-head">
+      <strong>Analysebericht</strong>
+      <button type="button" id="theme-toggle" class="theme" aria-label="Farbschema wechseln">Automatisch</button>
+    </div>
+    <ol>
+{% for s in sections %}      <li><a href="#{{ s.id }}">{{ s.title }}</a></li>
+{% endfor %}    </ol>
+  </nav>
+  <main class="main">
+    <header class="top">
+      <h1>Analysebericht</h1>
+      <p class="root" id="meta-root">{{ root }}</p>
+      <p class="when" id="meta-when"></p>
+      <p class="warn" id="meta-warn" hidden></p>
+    </header>
+    <noscript><p class="warn">Dieser Bericht braucht JavaScript, um Tabellen und Diagramme darzustellen. Die vollständigen Daten stehen in der JSON- und den CSV-Dateien.</p></noscript>
+{% for s in sections %}    <section id="{{ s.id }}" class="block" aria-labelledby="h-{{ s.id }}">
+      <h2 id="h-{{ s.id }}">{{ s.title }}</h2>
+      <div data-slot="{{ s.id }}"></div>
+    </section>
+{% endfor %}    <footer class="foot">
+      <p>{{ notice }}</p>
+      <p>Erzeugt mit ordner-cleanup {{ version }}. Der Bericht enthält nur Metadaten und Hashes, keine Dateiinhalte, und lädt keine externen Ressourcen.</p>
+    </footer>
+  </main>
+</div>
+<script type="application/json" id="report-data">{{ data|safe }}</script>
+<script>{{ js|safe }}</script>
+</body>
+</html>
