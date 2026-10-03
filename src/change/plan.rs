@@ -107,6 +107,16 @@ pub struct Skipped {
     pub reason: SkipReason,
 }
 
+/// Ergebnis eines Planers der Aufräumaktionen (`junk`, `empty-dirs`, `archive`, `versions`).
+#[derive(Debug)]
+pub struct CleanupPlan {
+    pub plan: Plan,
+    /// Betroffene Bytes (bei `remove-dir` 0).
+    pub bytes: u64,
+    /// Hinweise für die Zusammenfassung, z. B. „kein Downloads-Ordner unter der Wurzel“.
+    pub notes: Vec<String>,
+}
+
 pub fn ticks_to_rfc3339(ticks: i64) -> String {
     let secs = ticks.div_euclid(TICKS_PER_SEC);
     chrono::DateTime::from_timestamp(secs, 0)
