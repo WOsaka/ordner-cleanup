@@ -184,6 +184,8 @@ mod tests {
             name: p.file_name().unwrap().to_string_lossy().into_owned(),
             size,
             mtime,
+            ctime: None,
+            first_seen: None,
             attrs: 0x20,
             cloud_only: false,
             is_link: false,

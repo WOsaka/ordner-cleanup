@@ -1,7 +1,7 @@
 ---
 title: "Implementation Plan: Inhaltsbasierte Klassifikation (Phase 6a)"
 feature_spec: docs/features/inhalts-klassifikation.md
-status: pending-approval   # pending-approval | approved | implemented
+status: approved   # pending-approval | approved | implemented
 created: 2026-10-04
 updated: 2026-10-04
 ---

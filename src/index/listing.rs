@@ -34,6 +34,10 @@ pub struct FileRow {
     pub name: String,
     pub size: i64,
     pub mtime: i64,
+    /// NTFS-Erstellzeit (100-ns-Ticks seit Unix-Epoche).
+    pub ctime: Option<i64>,
+    /// Erstmals in einem Scan gesehen (Ticks); `None` = schon beim ersten Scan der Wurzel da.
+    pub first_seen: Option<i64>,
     pub attrs: u32,
     pub cloud_only: bool,
     pub is_link: bool,
@@ -69,7 +73,8 @@ impl Index {
     pub fn files_under(&self, dir_key: &str) -> Result<Vec<FileRow>> {
         let (lo, hi) = paths::prefix_range(dir_key);
         let mut stmt = self.conn().prepare(
-            "SELECT path, path_key, dir_key, name, size, mtime, attrs, cloud_only, is_link
+            "SELECT path, path_key, dir_key, name, size, mtime, attrs, cloud_only, is_link,
+                    ctime, first_seen
              FROM files WHERE path_key >= ?1 AND path_key < ?2 ORDER BY path_key",
         )?;
         let rows = stmt.query_map(params![lo, hi], |r| {
@@ -83,6 +88,8 @@ impl Index {
                 attrs: r.get(6)?,
                 cloud_only: r.get(7)?,
                 is_link: r.get(8)?,
+                ctime: r.get(9)?,
+                first_seen: r.get(10)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)

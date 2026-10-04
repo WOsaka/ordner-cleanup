@@ -41,6 +41,7 @@ CREATE TABLE files (
     size INTEGER NOT NULL,
     mtime INTEGER NOT NULL,
     ctime INTEGER,
+    first_seen INTEGER,                -- v3: 100-ns-Ticks; NULL = schon beim ersten Scan da
     attrs INTEGER NOT NULL,
     cloud_only INTEGER NOT NULL,
     is_link INTEGER NOT NULL,
@@ -70,6 +71,39 @@ CREATE TABLE exif_cache (
     size INTEGER NOT NULL,
     mtime INTEGER NOT NULL,
     taken INTEGER
+);
+
+-- Schema v3: Inhalts-Cache (Phase 6a). Kein Volltext; eigene Tabellen ohne generation,
+-- damit Re-Scans sie nicht löschen.
+CREATE TABLE content_cache (
+    path_key TEXT PRIMARY KEY,
+    size INTEGER NOT NULL,
+    mtime INTEGER NOT NULL,
+    extractor_version INTEGER NOT NULL,
+    defs_fingerprint TEXT NOT NULL,
+    status TEXT NOT NULL,              -- ok | unreadable:<grund> | unsupported | too-large
+    category TEXT,
+    confidence REAL,
+    category2 TEXT,
+    confidence2 REAL,
+    source TEXT,                       -- rules | llm
+    hits TEXT,                         -- JSON-Liste der ausschlaggebenden Treffer
+    fields TEXT NOT NULL DEFAULT '{}',
+    field_sources TEXT NOT NULL DEFAULT '{}',
+    text_source TEXT,                  -- layer | office | ocr | none
+    llm_model TEXT,
+    classified_at TEXT NOT NULL
+);
+
+-- OCR-Text, DPAPI-verschlüsselt (data); nie im Klartext
+CREATE TABLE ocr_text (
+    path_key TEXT PRIMARY KEY,
+    size INTEGER NOT NULL,
+    mtime INTEGER NOT NULL,
+    ocr_version INTEGER NOT NULL,
+    languages TEXT NOT NULL,
+    pages INTEGER NOT NULL,
+    data BLOB NOT NULL
 );
 
 CREATE INDEX files_size ON files(size) WHERE cloud_only = 0 AND is_link = 0;

@@ -197,7 +197,14 @@ mod tests {
                 )
                 .unwrap();
             // Zustand von Phase 1 bis 3 nachstellen.
-            index.conn().execute("DROP TABLE exif_cache", []).unwrap();
+            for sql in [
+                "DROP TABLE exif_cache",
+                "DROP TABLE content_cache",
+                "DROP TABLE ocr_text",
+                "ALTER TABLE files DROP COLUMN first_seen",
+            ] {
+                index.conn().execute(sql, []).unwrap();
+            }
             index
                 .conn()
                 .execute("UPDATE meta SET value='1' WHERE key='schema_version'", [])
@@ -219,6 +226,6 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(version, "2");
+        assert_eq!(version, "3");
     }
 }

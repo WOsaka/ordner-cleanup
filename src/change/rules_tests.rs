@@ -921,6 +921,8 @@ mod cached_exif {
             name: path.file_name().unwrap().to_string_lossy().into_owned(),
             size: meta.len() as i64,
             mtime: 1234,
+            ctime: None,
+            first_seen: None,
             attrs: 0x20,
             cloud_only: false,
             is_link: false,
