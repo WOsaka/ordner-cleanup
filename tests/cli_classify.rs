@@ -442,3 +442,121 @@ fn bericht_enthaelt_den_abschnitt_inhalte_und_content_csv() {
     let json = std::fs::read_to_string(out2.join("report.json")).unwrap();
     assert!(json.contains("doc_number") && json.contains("RE-2026-0042"));
 }
+
+// ---- Synthetischer Korpus: erwartete Kategorie und Felder je Datei ----
+
+#[test]
+fn korpus_stimmt_mit_der_erwarteten_liste_ueberein() {
+    use ordner_cleanup::content::extract::image::testing::png_header;
+    use ordner_cleanup::content::extract::office::testing::{ole_container, pptx, xlsx};
+    use ordner_cleanup::content::extract::video::testing::{mac_seconds, mp4};
+
+    let env = Env::new();
+    env.write_bytes("rechnung.pdf", &pdf_with_pages(&[INVOICE], None, None));
+    env.write_bytes(
+        "mahnung.docx",
+        &docx(
+            &[
+                "Letzte Mahnung",
+                "Zahlungserinnerung: Ihre Rechnung ist überfällig",
+                "Mahngebühren 5,00 EUR",
+                "Zahlungsaufforderung",
+            ],
+            "",
+            "",
+            "2026-01-01T00:00:00Z",
+        ),
+    );
+    env.write_bytes(
+        "konto.xlsx",
+        &xlsx(&[
+            "Kontoauszug",
+            "Alter Kontostand 100,00",
+            "Neuer Kontostand 90,00",
+            "Buchungstag",
+        ]),
+    );
+    env.write_bytes(
+        "vertrag.pptx",
+        &pptx(&[
+            "Mietvertrag Vertragsnummer: V-7788",
+            "Kündigungsfrist 3 Monate",
+            "Vertragslaufzeit 24 Monate",
+        ]),
+    );
+    let mut photo = jpeg_with_camera("Apple", "iPhone 15", Some((38.7223, -9.1393)));
+    photo.resize(40_000, 0);
+    env.write_bytes("IMG_4711.jpg", &photo);
+    let mut shot = png_header(1920, 1080);
+    shot.resize(30_000, 0);
+    env.write_bytes("Screenshot 2026-09-01.png", &shot);
+    env.write_bytes(
+        "urlaub.mp4",
+        &mp4(mac_seconds(2025, 7, 14, 12), false, true),
+    );
+    env.write_bytes("verschluesselt.docx", &ole_container());
+    env.write_bytes("kaputt.pdf", b"%PDF-1.4 kaputt");
+    env.write_bytes("notiz.txt", b"Rechnung");
+    env.scan();
+    env.classify(&["--no-llm"])
+        .success()
+        .stdout(contains("Nicht lesbar: 2"));
+
+    let out = env.out.path().join("b");
+    env.bin()
+        .arg("report")
+        .arg(env.root())
+        .arg("--out")
+        .arg(&out)
+        .assert()
+        .success();
+    let dir = std::fs::read_dir(&out)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let csv = std::fs::read_to_string(dir.join("content.csv")).unwrap();
+    let rows: BTreeMap<String, Vec<String>> = csv
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .skip(1)
+        .map(|l| {
+            let c: Vec<String> = l.split(';').map(String::from).collect();
+            (c[0].rsplit('\\').next().unwrap().to_string(), c)
+        })
+        .collect();
+    // Spalten: Pfad;Status;Kategorie;Konfidenz;Quelle;Datum;Absender;Nummer;Betrag;Titel;Zum Prüfen
+    let expect = [
+        ("rechnung.pdf", "ok", "rechnung"),
+        ("mahnung.docx", "ok", "mahnung"),
+        ("konto.xlsx", "ok", "kontoauszug"),
+        ("vertrag.pptx", "ok", "vertrag"),
+        ("IMG_4711.jpg", "ok", "foto"),
+        ("Screenshot 2026-09-01.png", "ok", "screenshot"),
+        ("urlaub.mp4", "ok", ""),
+        ("verschluesselt.docx", "unreadable:encrypted", ""),
+        ("kaputt.pdf", "unreadable:corrupt", ""),
+        ("notiz.txt", "unsupported", ""),
+    ];
+    assert_eq!(rows.len(), expect.len(), "{rows:?}");
+    for (name, status, category) in expect {
+        let row = &rows[name];
+        assert_eq!(
+            (row[1].as_str(), row[2].as_str()),
+            (status, category),
+            "{name}: {row:?}"
+        );
+        if !category.is_empty() {
+            let conf: f32 = row[3].parse().unwrap();
+            assert!(conf >= 0.8, "{name} Konfidenz {conf}");
+            assert_eq!(row[10], "false", "{name} nicht zum Prüfen");
+        }
+    }
+    let r = &rows["rechnung.pdf"];
+    assert_eq!(
+        (r[5].as_str(), r[7].as_str(), r[8].as_str()),
+        ("2026-09-30", "RE-2026-0042", "119,00")
+    );
+    assert_eq!(rows["vertrag.pptx"][7], "V-7788");
+}

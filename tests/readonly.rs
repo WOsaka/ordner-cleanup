@@ -86,3 +86,49 @@ fn scan_veraendert_den_baum_nicht() {
 
     assert_eq!(before, after);
 }
+
+#[test]
+fn classify_veraendert_den_baum_nicht() {
+    use ordner_cleanup::content::extract::office::testing::docx;
+    use ordner_cleanup::content::extract::pdf::testing::pdf_with_pages;
+    let home = tempfile::tempdir().unwrap();
+    let tree = tempfile::tempdir().unwrap();
+    let cfg = home.path().join("config");
+    std::fs::create_dir_all(&cfg).unwrap();
+    std::fs::write(cfg.join("config.toml"), "[classify]\nocr = false\n").unwrap();
+    std::fs::create_dir_all(tree.path().join("a")).unwrap();
+    std::fs::write(
+        tree.path().join("a").join("r.pdf"),
+        pdf_with_pages(
+            &["Rechnung Rechnungsnummer: R-1 Gesamtbetrag: 5,00 EUR"],
+            None,
+            None,
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        tree.path().join("b.docx"),
+        docx(&["Vertrag"], "", "", "2026-01-01T00:00:00Z"),
+    )
+    .unwrap();
+    std::fs::write(tree.path().join("kaputt.pdf"), b"%PDF-1.4 kaputt").unwrap();
+    std::fs::write(tree.path().join("n.txt"), "x").unwrap();
+
+    scan(home.path(), tree.path());
+    let before = snapshot(tree.path());
+    for args in [vec![], vec!["--force"], vec!["--clear"]] {
+        Command::cargo_bin("ordner-cleanup")
+            .unwrap()
+            .env("ORDNER_CLEANUP_HOME", home.path())
+            .arg("classify")
+            .arg(tree.path())
+            .args(args)
+            .assert()
+            .success();
+    }
+    assert_eq!(
+        before,
+        snapshot(tree.path()),
+        "inkl. mtime, Erstellzeit und Attribute"
+    );
+}
