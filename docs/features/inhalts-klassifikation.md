@@ -1,6 +1,6 @@
 ---
 title: "Inhaltsbasierte Klassifikation (Phase 6a)"
-status: draft          # draft | approved | implemented
+status: approved          # draft | approved | implemented
 created: 2026-10-04
 updated: 2026-10-04
 ---
