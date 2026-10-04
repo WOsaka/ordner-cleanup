@@ -23,8 +23,8 @@ use crate::change::undo::{
 };
 use crate::change::{ActionCounts, RunId};
 use crate::cli::{
-    ApplyArgs, Cli, Command, IndexCommand, PlanCommand, PurgeArgs, ReportArgs, RunsArgs, ScanArgs,
-    UndoArgs,
+    ApplyArgs, Cli, Command, HistoryArgs, IndexCommand, PlanCommand, PurgeArgs, ReportArgs,
+    RunsArgs, ScanArgs, UndoArgs,
 };
 use crate::config::Config;
 use crate::index::{Index, RootStatus};
@@ -39,6 +39,7 @@ use crate::scan::{scan, ScanEnv};
 
 mod history;
 mod plan;
+mod profile;
 mod snapshot;
 
 /// Führt den Befehl aus und liefert den Exit-Code (0 OK, 2 OK mit Teilfehlern).
@@ -46,7 +47,8 @@ pub fn run(cli: Cli) -> Result<i32> {
     match cli.command {
         Command::Scan(args) => scan_command(&args),
         Command::Report(args) => report_command(&args),
-        Command::History(args) => history::history_command(&args, args.path.as_deref()),
+        Command::History(args) => history_command(&args),
+        Command::Profiles => profile::profiles_command(),
         Command::Index(cmd) => index_command(&cmd),
         Command::Plan(PlanCommand::Dedupe(args)) => plan::plan_dedupe_command(&args),
         Command::Plan(PlanCommand::Junk(args)) => plan::plan_junk_command(&args),
@@ -534,9 +536,19 @@ fn resolve_root(path: &Path, force: bool) -> Result<PathBuf> {
     Ok(absolute)
 }
 
+fn history_command(args: &HistoryArgs) -> Result<i32> {
+    let path = match &args.profile {
+        Some(name) => Some(profile::target(None, Some(name))?.root),
+        None => args.path.clone(),
+    };
+    history::history_command(args, path.as_deref())
+}
+
 fn scan_command(args: &ScanArgs) -> Result<i32> {
-    let root = resolve_root(&args.path, args.force)?;
-    let mut config = load_config()?;
+    let target = profile::target(args.path.as_deref(), args.profile.as_deref())?;
+    let root = resolve_root(&target.root, args.force || target.force())?;
+    let profile_name = target.profile_name().map(String::from);
+    let mut config = target.config;
     config.apply_scan_args(args);
     let default_paths = DefaultPaths::from_env();
     if !config.no_default_excludes {
@@ -593,7 +605,13 @@ fn scan_command(args: &ScanArgs) -> Result<i32> {
         return Ok(1);
     }
     println!("Index: {}", paths::display(&index_file));
-    match snapshot::record(&index, &root, &config, None, outcome.errors) {
+    match snapshot::record(
+        &index,
+        &root,
+        &config,
+        profile_name.as_deref(),
+        outcome.errors,
+    ) {
         Ok(recorded) => println!(
             "{}",
             report::history::score_line(recorded.score(), recorded.comparison().as_ref())
@@ -630,13 +648,19 @@ fn show_progress(progress: &Progress, finished: &AtomicBool) {
 }
 
 fn report_command(args: &ReportArgs) -> Result<i32> {
-    let mut config = load_config()?;
+    let (mut config, requested) = match &args.profile {
+        Some(name) => {
+            let target = profile::target(None, Some(name))?;
+            (target.config, Some(target.root))
+        }
+        None => (load_config()?, args.path.clone()),
+    };
     config.apply_report_args(args);
     let old_after_days = parse_old_after(&config.old_after).map_err(anyhow::Error::msg)?;
     let formats = Format::parse_list(&args.format)?;
 
     let index = Index::open(&index_path()?)?;
-    let requested = args.path.as_deref().map(normalize);
+    let requested = requested.as_deref().map(normalize);
     let root = report::select_root(&index, requested.as_deref())?;
 
     let now = SystemTime::now()

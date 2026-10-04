@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -23,6 +24,72 @@ pub struct JunkRule {
     /// Nur Dateien direkt in diesen Ordnern; leer = überall.
     #[serde(default)]
     pub dirs: Vec<String>,
+}
+
+/// Pläne, die ein Profil bei `run` zusätzlich erzeugen darf.
+pub const PROFILE_PLAN_KINDS: [&str; 6] = [
+    "rules",
+    "junk",
+    "empty-dirs",
+    "archive",
+    "versions",
+    "dedupe",
+];
+
+/// Profilnamen: Kleinbuchstaben, Ziffern und `-` (sie landen in Dateipfaden und Aufgabennamen).
+pub fn valid_profile_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// `[profiles.<name>]`: Wurzel samt Abweichungen von der globalen Config.
+/// Listen werden ergänzt, Einzelwerte ersetzt.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Profile {
+    pub root: String,
+    /// Regeldatei für `plan rules`, relativ zum Config-Ordner
+    pub rules_file: Option<String>,
+    /// Was `run` zusätzlich plant (`rules`, `junk`, `empty-dirs`, `archive`, `versions`, `dedupe`)
+    pub plans: Vec<String>,
+    /// Eingebaute Vorlage oder Pfad (relativ zum Config-Ordner)
+    pub template: Option<String>,
+    /// Netzlaufwerk erlauben
+    pub force: bool,
+    pub exclude: Vec<String>,
+    pub summary_only: Vec<String>,
+    pub protected_paths: Vec<String>,
+    pub junk_categories: Vec<String>,
+    pub no_default_excludes: Option<bool>,
+    pub old_after: Option<String>,
+    pub installer_min_age: Option<String>,
+    pub archive_older_than: Option<String>,
+    pub versions_min_age: Option<String>,
+    pub top: Option<usize>,
+    pub max_depth_warning: Option<usize>,
+    pub huge_dir_entries: Option<usize>,
+    pub threads: Option<usize>,
+}
+
+/// `[notify]`: wann `run --notify` eine Benachrichtigung zeigt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NotifyConfig {
+    /// Score fällt um mindestens so viele Punkte gegenüber dem letzten vergleichbaren Lauf
+    pub score_drop: u32,
+    /// Score liegt unter diesem Wert
+    pub score_below: u32,
+}
+
+impl Default for NotifyConfig {
+    fn default() -> Self {
+        Self {
+            score_drop: 5,
+            score_below: 60,
+        }
+    }
 }
 
 /// `[health]` in der Config.
@@ -59,6 +126,10 @@ pub struct Config {
     /// Regeldatei für `plan rules`; ohne Angabe `rules.toml` neben der Config.
     pub rules_file: Option<String>,
     pub health: HealthConfig,
+    pub notify: NotifyConfig,
+    /// Wie viele Berichte und Pläne je Profil `run` aufbewahrt
+    pub reports_keep: usize,
+    pub profiles: BTreeMap<String, Profile>,
 }
 
 const DEFAULT_INSTALLER_MIN_AGE_DAYS: i64 = 90;
@@ -90,7 +161,19 @@ impl Default for Config {
             onedrive_max_move_bytes: "5GB".to_string(),
             rules_file: None,
             health: HealthConfig::default(),
+            notify: NotifyConfig::default(),
+            reports_keep: 12,
+            profiles: BTreeMap::new(),
         }
+    }
+}
+
+/// Relative Pfade gelten ab dem Config-Ordner; ohne Config-Ordner bleibt der Pfad, wie er ist.
+pub fn resolve_in(file: &str, config_dir: Option<&Path>) -> String {
+    let path = Path::new(file);
+    match config_dir {
+        Some(dir) if path.is_relative() => PathBuf::from(dir).join(path).display().to_string(),
+        _ => file.to_string(),
     }
 }
 
@@ -118,8 +201,110 @@ impl Config {
             config.quarantine_days >= 1,
             "quarantine_days muss mindestens 1 sein"
         );
+        anyhow::ensure!(
+            config.reports_keep >= 1,
+            "reports_keep muss mindestens 1 sein"
+        );
         config.validate_cleanup()?;
+        config.validate_profiles()?;
         Ok(config)
+    }
+
+    /// Prüft alle Profile beim Laden: Name, Wurzel, Pläne, Dauern und die zusammengeführte Config.
+    fn validate_profiles(&self) -> Result<()> {
+        for (name, p) in &self.profiles {
+            let fail = |msg: String| anyhow::anyhow!("profiles.{name}: {msg}");
+            if !valid_profile_name(name) {
+                return Err(fail(
+                    "ungültiger Name (erlaubt: Kleinbuchstaben, Ziffern, '-')".into(),
+                ));
+            }
+            if p.root.trim().is_empty() {
+                return Err(fail("root darf nicht leer sein".into()));
+            }
+            let mut seen = std::collections::HashSet::new();
+            for kind in &p.plans {
+                if !PROFILE_PLAN_KINDS.contains(&kind.as_str()) {
+                    return Err(fail(format!(
+                        "unbekannter Plan '{kind}' (erlaubt: {})",
+                        PROFILE_PLAN_KINDS.join(", ")
+                    )));
+                }
+                if !seen.insert(kind) {
+                    return Err(fail(format!("Plan '{kind}' kommt doppelt vor")));
+                }
+            }
+            for (key, value) in [
+                ("old_after", &p.old_after),
+                ("installer_min_age", &p.installer_min_age),
+                ("archive_older_than", &p.archive_older_than),
+                ("versions_min_age", &p.versions_min_age),
+            ] {
+                if let Some(v) = value {
+                    parse_old_after(v).map_err(|e| fail(format!("{key}: {e}")))?;
+                }
+            }
+            self.with_profile(p, None)
+                .validate_cleanup()
+                .map_err(|e| fail(format!("{e:#}")))?;
+        }
+        Ok(())
+    }
+
+    /// Die Profile mit Namen, falls es keines mit diesem gibt: fertige Fehlermeldung.
+    pub fn profile(&self, name: &str) -> Result<&Profile> {
+        self.profiles.get(name).ok_or_else(|| {
+            let known: Vec<&str> = self.profiles.keys().map(String::as_str).collect();
+            anyhow::anyhow!(
+                "Unbekanntes Profil '{name}'. Vorhandene Profile: {}",
+                if known.is_empty() {
+                    "keine (Profile stehen als [profiles.<name>] in der config.toml)".to_string()
+                } else {
+                    known.join(", ")
+                }
+            )
+        })
+    }
+
+    /// Führt ein Profil in die globale Config ein: Listen ergänzen, Einzelwerte ersetzen.
+    /// `config_dir` löst relative Pfade des Profils (Regeldatei) auf.
+    pub fn with_profile(&self, p: &Profile, config_dir: Option<&Path>) -> Config {
+        let mut c = self.clone();
+        fn extend(target: &mut Vec<String>, extra: &[String]) {
+            for item in extra {
+                if !target.contains(item) {
+                    target.push(item.clone());
+                }
+            }
+        }
+        extend(&mut c.exclude, &p.exclude);
+        extend(&mut c.summary_only, &p.summary_only);
+        extend(&mut c.protected_paths, &p.protected_paths);
+        extend(&mut c.junk_categories, &p.junk_categories);
+        if let Some(v) = p.no_default_excludes {
+            c.no_default_excludes = v;
+        }
+        macro_rules! replace {
+            ($($field:ident),*) => {$(
+                if let Some(v) = &p.$field {
+                    c.$field = v.clone();
+                }
+            )*};
+        }
+        replace!(
+            old_after,
+            installer_min_age,
+            archive_older_than,
+            versions_min_age,
+            top,
+            max_depth_warning,
+            huge_dir_entries,
+            threads
+        );
+        if let Some(file) = &p.rules_file {
+            c.rules_file = Some(resolve_in(file, config_dir));
+        }
+        c
     }
 
     /// Prüft die Einstellungen der Aufräumaktionen schon beim Laden statt erst beim Planen.
@@ -220,7 +405,8 @@ mod tests {
 
     fn scan_args() -> ScanArgs {
         ScanArgs {
-            path: PathBuf::from("C:\\x"),
+            path: Some(PathBuf::from("C:\\x")),
+            profile: None,
             exclude: vec![],
             summary_only: vec![],
             no_default_excludes: false,
@@ -423,6 +609,86 @@ muell = 1"
     }
 
     #[test]
+    fn profile_werden_gelesen() {
+        let c = Config::parse(
+            "reports_keep = 5
+[notify]
+score_drop = 3
+[profiles.downloads]
+root = 'D:/x'
+plans = [\"junk\"]
+template = \"para\"
+force = true",
+        )
+        .unwrap();
+        let p = &c.profiles["downloads"];
+        assert_eq!(p.root, "D:/x");
+        assert_eq!(p.plans, ["junk"]);
+        assert_eq!(p.template.as_deref(), Some("para"));
+        assert!(p.force);
+        assert_eq!(c.reports_keep, 5);
+        assert_eq!((c.notify.score_drop, c.notify.score_below), (3, 60));
+        assert_eq!(Config::default().reports_keep, 12);
+    }
+
+    #[test]
+    fn ungueltige_profile_scheitern_beim_laden_mit_klarem_text() {
+        for (text, needle) in [
+            (
+                "[profiles.\"Gross\"]
+root = 'D:/x'",
+                "Gross",
+            ),
+            (
+                "[profiles.\"a b\"]
+root = 'D:/x'",
+                "a b",
+            ),
+            (
+                "[profiles.a]
+root = ''",
+                "root",
+            ),
+            ("[profiles.a]", "root"),
+            (
+                "[profiles.a]
+root = 'D:/x'
+plans = [\"apply\"]",
+                "apply",
+            ),
+            (
+                "[profiles.a]
+root = 'D:/x'
+plans = [\"junk\", \"junk\"]",
+                "doppelt",
+            ),
+            (
+                "[profiles.a]
+root = 'D:/x'
+old_after = \"bald\"",
+                "old_after",
+            ),
+            (
+                "[profiles.a]
+root = 'D:/x'
+junk_categories = [\"nix\"]",
+                "nix",
+            ),
+            (
+                "[profiles.a]
+root = 'D:/x'
+muell = 1",
+                "muell",
+            ),
+            ("reports_keep = 0", "reports_keep"),
+        ] {
+            let err = Config::parse(text).unwrap_err();
+            let shown = format!("{err:#}");
+            assert!(shown.contains(needle), "{text}: {shown}");
+        }
+    }
+
+    #[test]
     fn unbekannte_felder_sind_fehler() {
         assert!(Config::parse("tpo = 3").is_err());
     }
@@ -471,6 +737,7 @@ muell = 1"
         let mut c = Config::parse("top = 10\nold_after = \"2y\"").unwrap();
         c.apply_report_args(&ReportArgs {
             path: None,
+            profile: None,
             out: None,
             format: vec![],
             old_after: Some("18m".into()),

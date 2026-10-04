@@ -24,6 +24,8 @@ pub enum Command {
     Report(ReportArgs),
     /// Verlauf der Kennzahlen und des Health-Scores anzeigen
     History(HistoryArgs),
+    /// Profile aus der Config mit Wurzel, letztem Stand und Score auflisten
+    Profiles,
     /// Gescannte Wurzeln im Index verwalten
     #[command(subcommand)]
     Index(IndexCommand),
@@ -43,7 +45,11 @@ pub enum Command {
 #[derive(Debug, Args)]
 pub struct HistoryArgs {
     /// Wurzel (optional, wenn der Verlauf nur eine kennt)
+    #[arg(conflicts_with = "profile")]
     pub path: Option<PathBuf>,
+    /// Profil aus der Config statt Pfad
+    #[arg(long)]
+    pub profile: Option<String>,
     /// Nur diesen Ordner der ersten Ebene anzeigen (`*` = Sonstige)
     #[arg(long)]
     pub folder: Option<String>,
@@ -113,8 +119,12 @@ pub enum PlanCommand {
 
 #[derive(Debug, Args)]
 pub struct PlanRulesArgs {
-    /// Bereits gescannter Ordner
-    pub path: PathBuf,
+    /// Bereits gescannter Ordner (oder `--profile`)
+    #[arg(required_unless_present = "profile", conflicts_with = "profile")]
+    pub path: Option<PathBuf>,
+    /// Profil aus der Config statt Pfad und Optionen
+    #[arg(long)]
+    pub profile: Option<String>,
     /// Regeldatei (Default: `rules_file` aus der Config, sonst `rules.toml` neben der Config)
     #[arg(long)]
     pub rules: Option<PathBuf>,
@@ -128,8 +138,12 @@ pub struct PlanRulesArgs {
 
 #[derive(Debug, Args)]
 pub struct PlanDedupeArgs {
-    /// Bereits gescannter Ordner
-    pub path: PathBuf,
+    /// Bereits gescannter Ordner (oder `--profile`)
+    #[arg(required_unless_present = "profile", conflicts_with = "profile")]
+    pub path: Option<PathBuf>,
+    /// Profil aus der Config statt Pfad und Optionen
+    #[arg(long)]
+    pub profile: Option<String>,
     /// Welche Kopie bleibt: oldest, newest oder path:<absoluter Ordner>
     #[arg(long, default_value = "oldest")]
     pub keep: KeepStrategy,
@@ -140,8 +154,12 @@ pub struct PlanDedupeArgs {
 
 #[derive(Debug, Args)]
 pub struct PlanJunkArgs {
-    /// Bereits gescannter Ordner
-    pub path: PathBuf,
+    /// Bereits gescannter Ordner (oder `--profile`)
+    #[arg(required_unless_present = "profile", conflicts_with = "profile")]
+    pub path: Option<PathBuf>,
+    /// Profil aus der Config statt Pfad und Optionen
+    #[arg(long)]
+    pub profile: Option<String>,
     /// Kategorien, kommagetrennt: system, temp, downloads, installer oder eigene aus der Config
     /// (Default: `junk_categories` aus der Config, sonst alle eingebauten)
     #[arg(long, value_delimiter = ',')]
@@ -153,8 +171,12 @@ pub struct PlanJunkArgs {
 
 #[derive(Debug, Args)]
 pub struct PlanEmptyDirsArgs {
-    /// Bereits gescannter Ordner
-    pub path: PathBuf,
+    /// Bereits gescannter Ordner (oder `--profile`)
+    #[arg(required_unless_present = "profile", conflicts_with = "profile")]
+    pub path: Option<PathBuf>,
+    /// Profil aus der Config statt Pfad und Optionen
+    #[arg(long)]
+    pub profile: Option<String>,
     /// Zieldatei für den Plan (Default: plan-<Zeitstempel>.json im aktuellen Ordner)
     #[arg(long)]
     pub out: Option<PathBuf>,
@@ -162,8 +184,12 @@ pub struct PlanEmptyDirsArgs {
 
 #[derive(Debug, Args)]
 pub struct PlanArchiveArgs {
-    /// Bereits gescannter Ordner
-    pub path: PathBuf,
+    /// Bereits gescannter Ordner (oder `--profile`)
+    #[arg(required_unless_present = "profile", conflicts_with = "profile")]
+    pub path: Option<PathBuf>,
+    /// Profil aus der Config statt Pfad und Optionen
+    #[arg(long)]
+    pub profile: Option<String>,
     /// Ab welchem Alter der jüngsten Datei ein Ordner archiviert wird, z. B. 2y, 18m, 90d
     /// (Default: `archive_older_than` aus der Config, sonst 2y)
     #[arg(long)]
@@ -175,8 +201,12 @@ pub struct PlanArchiveArgs {
 
 #[derive(Debug, Args)]
 pub struct PlanVersionsArgs {
-    /// Bereits gescannter Ordner
-    pub path: PathBuf,
+    /// Bereits gescannter Ordner (oder `--profile`)
+    #[arg(required_unless_present = "profile", conflicts_with = "profile")]
+    pub path: Option<PathBuf>,
+    /// Profil aus der Config statt Pfad und Optionen
+    #[arg(long)]
+    pub profile: Option<String>,
     /// Mindestalter einer älteren Version, z. B. 30d, 2m
     /// (Default: `versions_min_age` aus der Config, sonst 30d)
     #[arg(long)]
@@ -188,8 +218,12 @@ pub struct PlanVersionsArgs {
 
 #[derive(Debug, Args)]
 pub struct ScanArgs {
-    /// Zu scannender Ordner
-    pub path: PathBuf,
+    /// Zu scannender Ordner (oder `--profile`)
+    #[arg(required_unless_present = "profile", conflicts_with = "profile")]
+    pub path: Option<PathBuf>,
+    /// Profil aus der Config statt Pfad und Optionen
+    #[arg(long)]
+    pub profile: Option<String>,
     /// Zusätzliches Ausschluss-Glob (mehrfach möglich)
     #[arg(long = "exclude")]
     pub exclude: Vec<String>,
@@ -213,7 +247,11 @@ pub struct ScanArgs {
 #[derive(Debug, Args)]
 pub struct ReportArgs {
     /// Gescannte Wurzel (optional, wenn nur eine im Index ist)
+    #[arg(conflicts_with = "profile")]
     pub path: Option<PathBuf>,
+    /// Profil aus der Config statt Pfad und Optionen
+    #[arg(long)]
+    pub profile: Option<String>,
     /// Zielordner für die Berichtsdateien
     #[arg(long)]
     pub out: Option<PathBuf>,

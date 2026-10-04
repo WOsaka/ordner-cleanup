@@ -7,9 +7,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use bytesize::ByteSize;
 
+use super::profile;
 use super::{
-    index_age_note, index_path, load_config, normalize, now_rfc3339, now_ticks,
-    onedrive_roots_from_env, onedrive_warning, resolve_root,
+    index_age_note, index_path, normalize, now_rfc3339, now_ticks, onedrive_roots_from_env,
+    onedrive_warning, resolve_root,
 };
 use crate::analysis::age::parse_old_after;
 use crate::change::archive::{plan_archive, ArchiveOptions};
@@ -41,14 +42,15 @@ struct Prepared {
 }
 
 /// Wurzel auflösen, Index öffnen und die Hinweise zu Index-Alter und OneDrive ausgeben.
-fn prepare(path: &Path) -> Result<Prepared> {
-    let (root, config) = start(path)?;
+fn prepare(path: Option<&Path>, profile: Option<&str>) -> Result<Prepared> {
+    let (root, config) = start(path, profile)?;
     open_prepared(root, config)
 }
 
 /// Erster Teil von [`prepare`]: Wurzel und Config, ohne den Index zu öffnen.
-fn start(path: &Path) -> Result<(PathBuf, Config)> {
-    Ok((resolve_root(path, false)?, load_config()?))
+fn start(path: Option<&Path>, profile: Option<&str>) -> Result<(PathBuf, Config)> {
+    let target = profile::target(path, profile)?;
+    Ok((resolve_root(&target.root, target.force())?, target.config))
 }
 
 fn open_prepared(root: PathBuf, config: Config) -> Result<Prepared> {
@@ -111,7 +113,7 @@ fn finish(
 }
 
 pub(super) fn plan_dedupe_command(args: &PlanDedupeArgs) -> Result<i32> {
-    let p = prepare(&args.path)?;
+    let p = prepare(args.path.as_deref(), args.profile.as_deref())?;
     let result = plan_dedupe(&p.index, &p.root, &args.keep, &p.protector, &now_rfc3339())?;
     let plan = &result.plan;
     let headline = format!(
@@ -165,7 +167,7 @@ pub(super) fn downloads_dirs(config: &Config) -> Vec<PathBuf> {
 }
 
 pub(super) fn plan_junk_command(args: &PlanJunkArgs) -> Result<i32> {
-    let p = prepare(&args.path)?;
+    let p = prepare(args.path.as_deref(), args.profile.as_deref())?;
     let categories = resolve_categories(&args.category, &p.config)?;
     let result = plan_junk(
         &p.index,
@@ -192,7 +194,7 @@ pub(super) fn plan_junk_command(args: &PlanJunkArgs) -> Result<i32> {
 }
 
 pub(super) fn plan_empty_dirs_command(args: &PlanEmptyDirsArgs) -> Result<i32> {
-    let p = prepare(&args.path)?;
+    let p = prepare(args.path.as_deref(), args.profile.as_deref())?;
     let result = plan_empty_dirs(&p.index, &p.root, &p.protector, &now_rfc3339())?;
     let plan = &result.plan;
     let headline = format!(
@@ -204,7 +206,7 @@ pub(super) fn plan_empty_dirs_command(args: &PlanEmptyDirsArgs) -> Result<i32> {
 }
 
 pub(super) fn plan_archive_command(args: &PlanArchiveArgs) -> Result<i32> {
-    let p = prepare(&args.path)?;
+    let p = prepare(args.path.as_deref(), args.profile.as_deref())?;
     let older_than = args
         .older_than
         .clone()
@@ -232,7 +234,7 @@ pub(super) fn plan_archive_command(args: &PlanArchiveArgs) -> Result<i32> {
 }
 
 pub(super) fn plan_versions_command(args: &PlanVersionsArgs) -> Result<i32> {
-    let p = prepare(&args.path)?;
+    let p = prepare(args.path.as_deref(), args.profile.as_deref())?;
     let min_age = args
         .min_age
         .clone()
@@ -322,7 +324,7 @@ fn rules_headline(result: &RulesPlan) -> String {
 
 pub(super) fn plan_rules_command(args: &PlanRulesArgs) -> Result<i32> {
     // Die Regeldatei wird vollständig geprüft, bevor der Index geöffnet wird.
-    let (root, config) = start(&args.path)?;
+    let (root, config) = start(args.path.as_deref(), args.profile.as_deref())?;
     let rules_path = resolve_rules_path(
         args.rules.as_deref(),
         &config,
