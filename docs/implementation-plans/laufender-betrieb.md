@@ -1,7 +1,7 @@
 ---
 title: "Implementation Plan: Laufender Betrieb (Phase 5)"
 feature_spec: docs/features/laufender-betrieb.md
-status: approved # pending-approval | approved | implemented
+status: implemented # pending-approval | approved | implemented
 created: 2026-10-04
 updated: 2026-10-04
 ---
@@ -342,4 +342,17 @@ pub trait Notifier { fn notify(&self, title: &str, body: &str, open: &Path) -> i
 - **Grenzen der Schwellen:** Die Kurven sind Erfahrungswerte. Abhilfe: `METRICS_VERSION` macht spätere Anpassungen sichtbar (Vergleich „eingeschränkt“ statt falscher Trends), und im manuellen Test wird geprüft, ob echte Ordner plausible Werte bekommen.
 - **Zwei Profile mit derselben Wurzel:** Der Verlauf gehört zur Wurzel. Verschiedene Vorlagen ergeben verschiedene Fingerabdrücke, und der Vergleich nutzt den letzten Lauf mit demselben Abdruck. So stören sich die Profile nicht.
 - **Sperre und manueller Scan:** Die Sperre gilt für `scan` und `run`, nicht für `report`, `plan` und `apply`. SQLite im WAL-Modus erlaubt dort gleichzeitiges Lesen, wie bisher.
-- [ ] Ergebnis der Spikes 0a bis 0c hier eintragen, bevor Schritt 7 bzw. 8 beginnt.
+- [x] Ergebnis der Spikes 0a bis 0c (beim Umsetzen der Schritte 7, 8 und 10 gewonnen statt als Wegwerf-Code):
+  - **0a Toast:** `register_aumid()` legt den Schlüssel unter `HKCU` an (per `reg query` bestätigt), `ToastNotificationManager::…Show` kehrt ohne Fehler zurück (ignorierter Test `toast_wird_angezeigt`). Ob der Toast sichtbar erscheint und ein Klick die `file:///`-HTML öffnet, ließ sich ohne Bildschirm nicht prüfen und gehört in den manuellen Test. Der Rückfall (Startmenü-Verknüpfung bzw. PowerShell-AUMID) ist nicht umgesetzt.
+  - **0b schtasks:** `/Create /XML` mit UTF-16-LE-Datei und `InteractiveToken` funktioniert ohne Adminrechte; `/Query /XML` liefert den Programmpfad, `/Create … /F` ersetzt, `/Delete` entfernt (ignorierter Test `echte_aufgabe_anlegen_abfragen_loeschen`, dazu ein Rauchtest von `schedule add|list|remove` mit echter Aufgabe). Dass `ordner-cleanup-bg.exe` kein Fenster öffnet, belegt der Test auf den PE-Subsystem-Wert (GUI statt Konsole); das tatsächliche Starten durch die Aufgabenplanung, Akku-Verhalten und Nachholen sind manuell zu prüfen.
+  - **0c Kosten:** Kennzahlen + Score für 100.000 Dateien 0,14 s (Ziel < 2 s). Im Verhältnis zum Scan ca. 10 % im Messaufbau (Scan ~17 µs je Datei aus dem Dateicache, Kennzahlen ~2 µs je Datei); das 5-%-Ziel hält erst bei Scans ab etwa 40 µs je Datei. Maßnahmen: parallele Auswertung (rayon), kein Laden der Hashes, Duplikatgruppen per SQL statt in Rust.
+
+## Umsetzungsnotizen (Abweichungen vom Plan)
+
+- Die Integrationstests für `run` und die Benachrichtigung stehen in `tests/cli_run.rs` (nicht in `cli_profiles_run.rs`). Weil `--notify` im Testprozess keinen echten Toast zeigen darf, schreibt die Umgebungsvariable `ORDNER_CLEANUP_NOTIFY_LOG` die Benachrichtigung stattdessen als JSON-Zeile in eine Datei (`platform::toast::system_notifier`).
+- `health::collect` liefert `Collected { snapshot, template }`, damit Verlauf und Soll/Ist dieselben Zeilen nutzen; `Report.history` und `Report.template` werden nach `report::build` gesetzt (`app::snapshot::attach_history`).
+- Zum Programmpfad der Aufgabe prüft `schedule list` sowohl den per `/Query /XML` gelesenen als auch den registrierten Pfad, weil die Konsolenausgabe von `schtasks` Sonderzeichen verfälschen kann.
+- Eine unbrauchbare Vorlage kippt `run` nicht: Scan und Bericht entstehen ohne Vorlage, der Fehler steht im Protokoll (Status `partial`, Exit 2).
+- Johnny.Decimal: Dateien sind auf den Ebenen 1 bis 3 nicht vorgesehen (nicht nur 1 und 2), weil Ebene 3 die Kategorie-Ordner enthält und die Dateien in den ID-Ordnern (Ebene 4) liegen. Die eingebauten Vorlagen setzen kein `max_depth`, um tiefe Ordner nicht doppelt gegen die Struktur-Befunde zu zählen.
+- Der Absender der Benachrichtigung wird zusätzlich bei jedem Toast registriert (idempotent), nicht nur bei `schedule add`.
+
