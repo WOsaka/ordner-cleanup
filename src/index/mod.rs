@@ -1,4 +1,5 @@
 mod dups;
+mod exif_cache;
 mod listing;
 mod store;
 
@@ -7,10 +8,11 @@ use std::path::Path;
 use rusqlite::Connection;
 
 pub use dups::{DupFile, DupGroup, HashCandidate, HashUpdate};
+pub use exif_cache::ExifEntry;
 pub use listing::{DirRow, FileRow};
 pub use store::{DirRecord, FileRecord, PrevFile, RootInfo, RootRun, RootStatus, ScanErrorRecord};
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 #[derive(Debug, thiserror::Error)]
@@ -82,7 +84,9 @@ impl Index {
                 .map_err(unreadable)?
                 .parse()
                 .map_err(|_| IndexError::Unreadable("schema_version ungültig".into()))?;
-            if found != SCHEMA_VERSION {
+            if found == 1 {
+                Self::migrate_v1_to_v2(&conn)?;
+            } else if found != SCHEMA_VERSION {
                 return Err(IndexError::SchemaMismatch {
                     found,
                     expected: SCHEMA_VERSION,
@@ -96,6 +100,22 @@ impl Index {
             )?;
         }
         Ok(Self { conn })
+    }
+
+    /// v1 (Phase 1 bis 3) kennt nur die EXIF-Tabelle nicht; alles andere bleibt unverändert.
+    fn migrate_v1_to_v2(conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE IF NOT EXISTS exif_cache (
+                 path_key TEXT PRIMARY KEY,
+                 size INTEGER NOT NULL,
+                 mtime INTEGER NOT NULL,
+                 taken INTEGER
+             );
+             UPDATE meta SET value = '2' WHERE key = 'schema_version';
+             COMMIT;",
+        )?;
+        Ok(())
     }
 
     pub(crate) fn conn(&self) -> &Connection {

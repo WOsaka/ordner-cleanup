@@ -1,7 +1,7 @@
 ---
 title: "Roadmap & Feature-Ideen"
 created: 2026-10-02
-updated: 2026-10-03
+updated: 2026-10-04
 ---
 
 # Roadmap & Feature-Ideen
@@ -41,14 +41,14 @@ Ideensammlung und grobe Priorisierung für ordner-cleanup. Einzelne Features wer
 
 ## 3. Neuorganisation
 
-- **Regel-Engine (YAML):** Match auf Pfad/Endung/Regex/Alter, Aktionen move/rename/archive, Platzhalter `{year}`, `{month}`, `{ext}`, `{exif.date}`, `{parent}`
+- **Regel-Engine (TOML):** Match auf Pfad/Endung/Regex/Alter, Aktionen move/rename/archive, Platzhalter `{year}`, `{month}`, `{ext}`, `{exif.date}`, `{parent}`
 - **Umbenennen:** ISO-Datum voranstellen, Normalisierung (Leerzeichen, Umlaute, „Kopie“-Suffixe), Kollisionen durchnummerieren
 - **Zielstruktur-Vorlagen:** PARA, Johnny.Decimal, eigene Firmenvorlage; Soll/Ist-Abgleich
 - **Inhaltsbasierte Klassifikation:** EXIF, PDF-/Office-Metadaten, Textextraktion; optional LLM-Vorschläge (nur als Plan, Datenschutz beachten)
 
 ## 4. Laufender Betrieb
 
-- Watch-Mode für Downloads/Desktop
+- Watch-Mode für Downloads/Desktop (nicht in Phase 5, später)
 - Geplante Läufe (Windows-Aufgabenplanung), wöchentlicher Bericht
 - Verlauf von Speicherverbrauch und Health-Score
 - Profile (Privat / Firma / Downloads)
@@ -75,7 +75,7 @@ Ideensammlung und grobe Priorisierung für ordner-cleanup. Einzelne Features wer
 | **1 – MVP** | Scan + Index, Analyse-Bericht (Größe, Typen, Alter, leere Ordner, Problemdateien), exakte Duplikate | Nur lesend, sofort nützlich, kein Risiko |
 | **2** | Änderungsplan-Format, Apply, Undo-Journal, Papierkorb/Quarantäne, geschützte Pfade | Sicherheitsfundament |
 | **3** | Aufräumaktionen (Duplikate, leere Ordner, Müll, Archivieren) | Erste schreibende Features |
-| **4** | Regel-Engine (YAML) + Umbenennen | Eigentliche Neuorganisation |
+| **4** | Regel-Engine (TOML) + Umbenennen | Eigentliche Neuorganisation |
 | **5** | Watch-Mode, geplante Läufe, Verlauf, Vorlagen | Ordnung dauerhaft halten |
 | **6** | Inhalts-/KI-Klassifikation, GUI | Ausbaustufe |
 
@@ -85,4 +85,6 @@ Ideensammlung und grobe Priorisierung für ordner-cleanup. Einzelne Features wer
 |---|---|---|
 | Phase 1: Scan & Analyse-Bericht | [`features/scan-analyse-bericht.md`](features/scan-analyse-bericht.md), Plan: [`implementation-plans/scan-analyse-bericht.md`](implementation-plans/scan-analyse-bericht.md) | Umgesetzt (Schritte 0 bis 12), manuell auf echtem OneDrive-Ordner geprüft |
 | Phase 2: Änderungsplan, Apply & Undo | [`features/aenderungsplan-apply-undo.md`](features/aenderungsplan-apply-undo.md) | Umgesetzt (`plan dedupe`, `apply`, `undo`, `runs`, `purge`), manuell auf OneDrive-Testordner geprüft; offen: Test mit echtem Cloud-only-Platzhalter und echtem Terminal |
-| Phase 3: Aufräumaktionen (junk, empty-dirs, archive, versions) | [`features/aufraeumaktionen.md`](features/aufraeumaktionen.md), Plan: [`implementation-plans/aufraeumaktionen.md`](implementation-plans/aufraeumaktionen.md) | Umgesetzt (`plan junk`, `plan empty-dirs`, `plan archive`, `plan versions`, Plan-Format v2, OneDrive-Obergrenze `--allow-large`, Undo-Aufräumen); offen: manueller Test im OneDrive-Testordner und auf einem Alltagsordner |
+| Phase 3: Aufräumaktionen (junk, empty-dirs, archive, versions) | [`features/aufraeumaktionen.md`](features/aufraeumaktionen.md), Plan: [`implementation-plans/aufraeumaktionen.md`](implementation-plans/aufraeumaktionen.md) | Umgesetzt (`plan junk`, `plan empty-dirs`, `plan archive`, `plan versions`, Plan-Format v2, OneDrive-Obergrenze `--allow-large`, Undo-Aufräumen), manuell im OneDrive-Testordner und auf einem Alltagsordner geprüft; offen: Test mit echtem Cloud-only-Platzhalter |
+| Phase 4: Regel-Engine & Umbenennen | [`features/regel-engine-umbenennen.md`](features/regel-engine-umbenennen.md), Plan: [`implementation-plans/regel-engine-umbenennen.md`](implementation-plans/regel-engine-umbenennen.md) | Umgesetzt (manueller Test offen); Regelformat TOML statt YAML (Begründung in der Spec) |
+| Phase 5: Laufender Betrieb (Verlauf, Health-Score, geplante Läufe, Profile, Vorlagen) | [`features/laufender-betrieb.md`](features/laufender-betrieb.md), Plan: [`implementation-plans/laufender-betrieb.md`](implementation-plans/laufender-betrieb.md) | Spec approved, Plan pending-approval; Watch-Mode und Auto-Apply ausgeklammert |

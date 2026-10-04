@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 use crate::config::Config;
 use crate::paths;
@@ -109,6 +109,8 @@ pub struct Protector {
     appdata: Vec<String>,
     probe: Box<dyn MarkerProbe>,
     marker_cache: Mutex<HashMap<String, Option<String>>>,
+    /// Aufgelöste Elternordner für [`Protector::check_cached`].
+    dir_cache: Mutex<HashMap<String, PathBuf>>,
 }
 
 /// Entfernt `.` und `..` rein textlich; Extended-Präfixe verschwinden vorher, weil Windows
@@ -190,6 +192,7 @@ impl Protector {
             appdata,
             probe: Box::new(RealMarkerProbe),
             marker_cache: Mutex::new(HashMap::new()),
+            dir_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -201,6 +204,32 @@ impl Protector {
     /// Grund, warum der Pfad nicht angefasst werden darf; `None`, wenn er frei ist.
     pub fn check(&self, path: &Path) -> Option<Protection> {
         variants(path).iter().find_map(|v| self.check_variant(v))
+    }
+
+    /// Wie [`Protector::check`], löst aber den Elternordner nur einmal auf (ein Dateisystem-Aufruf
+    /// je Ordner statt je Datei). Nur der letzte Pfadteil bleibt unaufgelöst; für Planer mit
+    /// vielen Tausend Dateien. `apply` prüft weiter streng mit `check`.
+    pub fn check_cached(&self, path: &Path) -> Option<Protection> {
+        let cleaned = lexical_clean(path);
+        let (Some(parent), Some(name)) = (cleaned.parent(), cleaned.file_name()) else {
+            return self.check(path);
+        };
+        let resolved_parent = {
+            // Ein vergifteter Lock darf den Schutz nie abschalten: Der Cache bleibt nutzbar.
+            let mut cache = self
+                .dir_cache
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            cache
+                .entry(paths::path_key(parent))
+                .or_insert_with(|| resolve(parent))
+                .clone()
+        };
+        let resolved = resolved_parent.join(name);
+        let same = paths::path_key(&resolved) == paths::path_key(&cleaned);
+        std::iter::once(&cleaned)
+            .chain((!same).then_some(&resolved))
+            .find_map(|v| self.check_variant(v))
     }
 
     /// Ein `move` verändert Quelle und Ziel; beide unterliegen denselben Regeln.
@@ -258,7 +287,10 @@ impl Protector {
     }
 
     fn marker_in(&self, dir_key: &str, dir: &Path) -> Option<String> {
-        let mut cache = self.marker_cache.lock().ok()?;
+        let mut cache = self
+            .marker_cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         cache
             .entry(dir_key.to_string())
             .or_insert_with(|| self.probe.marker_in(dir))
@@ -348,6 +380,27 @@ mod tests {
             p.check_move(&free(r"D:\Daten\a"), &free(r"C:\Windows\a")),
             Some(Protection::System(_))
         ));
+    }
+
+    #[test]
+    fn check_cached_stimmt_mit_check_ueberein() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("wurzel");
+        std::fs::create_dir_all(root.join("proj").join("node_modules")).unwrap();
+        std::fs::create_dir_all(root.join("frei")).unwrap();
+        let p = Protector::new(&root, &Config::default(), &ProtectPaths::default());
+        for path in [
+            root.join("frei").join("a.txt"),
+            root.join("frei").join("neu").join("a.txt"),
+            root.join("proj").join("node_modules").join("x.js"),
+            root.join(".ordner-cleanup").join("q"),
+            std::path::PathBuf::from(r"C:\Windows\x.dll"),
+            root.join("frei").join("..").join("a.txt"),
+        ] {
+            assert_eq!(p.check_cached(&path), p.check(&path), "{}", path.display());
+            // Zweiter Aufruf kommt aus dem Cache und liefert dasselbe.
+            assert_eq!(p.check_cached(&path), p.check(&path), "{}", path.display());
+        }
     }
 
     #[test]

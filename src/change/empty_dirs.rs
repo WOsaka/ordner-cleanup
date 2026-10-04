@@ -135,6 +135,7 @@ pub fn plan_empty_dirs(
                 target: None,
                 is_dir: true,
                 files: None,
+                rule: None,
             });
         }
     }

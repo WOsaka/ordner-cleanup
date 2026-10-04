@@ -1,9 +1,9 @@
 ---
 title: "Implementation Plan: Scan & Analyse-Bericht (Phase 1)"
 feature_spec: docs/features/scan-analyse-bericht.md
-status: approved           # pending-approval | approved | implemented
+status: implemented        # pending-approval | approved | implemented
 created: 2026-10-02
-updated: 2026-10-02
+updated: 2026-10-04
 ---
 
 # Implementation Plan: Scan & Analyse-Bericht (Phase 1)

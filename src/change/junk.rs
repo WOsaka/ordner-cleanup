@@ -183,6 +183,7 @@ pub fn plan_junk(
                 target: None,
                 is_dir: false,
                 files: None,
+                rule: None,
             },
         ));
     }

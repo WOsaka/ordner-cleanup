@@ -10,10 +10,12 @@ use ordner_cleanup::change::archive::{plan_archive, ArchiveOptions};
 use ordner_cleanup::change::empty_dirs::plan_empty_dirs;
 use ordner_cleanup::change::junk::{plan_junk, JunkOptions};
 use ordner_cleanup::change::protect::{ProtectPaths, Protector};
+use ordner_cleanup::change::rules::{plan_rules, CachedExif, LiveContent, RulesEnv};
 use ordner_cleanup::change::versions::{plan_versions, VersionsOptions};
 use ordner_cleanup::config::Config;
 use ordner_cleanup::index::{DirRecord, FileRecord, Index};
 use ordner_cleanup::paths;
+use ordner_cleanup::rules::RuleSet;
 
 const LIMIT: Duration = Duration::from_secs(10);
 const TICKS_PER_SEC: i64 = 10_000_000;
@@ -181,4 +183,187 @@ fn jeder_planer_schafft_100000_dateien_in_unter_10_sekunden() {
     assert_eq!(empty.plan.actions.len(), TOP * SUB / 10);
     assert!(archive.plan.actions.len() > 100);
     assert!(versions.plan.actions.len() > 1000);
+}
+
+const TEN_RULES: &str = r#"
+[[rules]]
+name = "berichte"
+ext = ["docx"]
+name_regex = '^bericht(\d+)_v(\d)'
+target = "Berichte/{1}/"
+[[rules]]
+name = "cache"
+ext = ["tmp"]
+target = "Temp/"
+[[rules]]
+name = "alt-txt"
+ext = ["txt"]
+min_age = "365d"
+target = "Alt/{year}/{parent}_{name}.{ext}"
+[[rules]]
+name = "txt-gross"
+ext = ["txt"]
+min_size = "1MB"
+target = "Gross/"
+[[rules]]
+name = "txt"
+ext = ["txt"]
+target = "Texte/{year}/"
+[[rules]]
+name = "pdf"
+ext = ["pdf"]
+target = "Pdf/"
+[[rules]]
+name = "xlsx"
+ext = ["xlsx"]
+target = "Tabellen/"
+[[rules]]
+name = "bilder"
+ext = ["png", "gif"]
+target = "Bilder/"
+[[rules]]
+name = "downloads"
+glob = "Downloads/**"
+target = "Eingang/"
+[[rules]]
+name = "rest"
+glob = "**/rest*"
+target = "Rest/"
+"#;
+
+#[test]
+#[ignore = "Performance-Messung, siehe Modul-Dokumentation"]
+fn plan_rules_schafft_100000_dateien_mit_10_regeln_ohne_exif_in_unter_10_sekunden() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("wurzel");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut index = timed("Index aufbauen (100.000 Dateien)", || build(&root));
+    let protector = Protector::new(&root, &Config::default(), &ProtectPaths::from_env());
+    let rules = RuleSet::parse(TEN_RULES, Path::new("rules.toml")).unwrap();
+    let content = LiveContent::default();
+
+    let result = timed("plan rules", || {
+        plan_rules(
+            &mut index,
+            &root,
+            &rules,
+            &RulesEnv {
+                protector: &protector,
+                exif: &CachedExif,
+                content: &content,
+                created: "t",
+                now_ticks: NOW,
+            },
+        )
+        .unwrap()
+    });
+
+    println!(
+        "Aktionen: {}, übersprungen: {}, ohne Regel: {}",
+        result.plan.actions.len(),
+        result.plan.skipped.len(),
+        result.unmatched
+    );
+    assert!(result.plan.actions.len() > 10_000);
+    result.plan.validate().unwrap();
+}
+
+#[test]
+#[ignore = "Performance-Messung, siehe Modul-Dokumentation"]
+fn plan_rules_mit_10000_jpegs_liest_beim_zweiten_lauf_aus_dem_cache() {
+    use chrono::NaiveDate;
+    use ordner_cleanup::scan::exif::testing::{jpeg_with_date, DATE_TIME_ORIGINAL};
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("wurzel");
+    let taken = NaiveDate::from_ymd_opt(2019, 8, 15)
+        .unwrap()
+        .and_hms_opt(10, 0, 0)
+        .unwrap();
+    let jpeg = jpeg_with_date(DATE_TIME_ORIGINAL, taken);
+    let mut index = Index::open_in_memory().unwrap();
+    let root_str = paths::display(&root);
+    let root_key = paths::dir_key(&root);
+    let run = index.begin_root(&root_str, &root_key, "t").unwrap();
+    let mut dirs = vec![DirRecord {
+        path: root_str.clone(),
+        path_key: root_key.clone(),
+        mode: "full".into(),
+        attrs: 0x10,
+        direct_entries: 100,
+        ..DirRecord::default()
+    }];
+    let mut files = Vec::new();
+    for d in 0..100 {
+        let sub = root.join(format!("alben{d:02}"));
+        std::fs::create_dir_all(&sub).unwrap();
+        dirs.push(DirRecord {
+            path: paths::display(&sub),
+            path_key: paths::dir_key(&sub),
+            parent_key: Some(root_key.clone()),
+            depth: 1,
+            mode: "full".into(),
+            attrs: 0x10,
+            direct_entries: 100,
+            ..DirRecord::default()
+        });
+        for f in 0..100 {
+            let name = format!("IMG_{d:02}{f:02}.jpg");
+            let path = sub.join(&name);
+            std::fs::write(&path, &jpeg).unwrap();
+            files.push(FileRecord {
+                dir_key: paths::dir_key(&sub),
+                path: paths::display(&path),
+                path_key: paths::path_key(&path),
+                name,
+                size: jpeg.len() as i64,
+                mtime: NOW - DAY,
+                attrs: 0x20,
+                ..FileRecord::default()
+            });
+        }
+    }
+    index.upsert_dirs(&dirs, run.generation).unwrap();
+    index.upsert_files(&files, run.generation).unwrap();
+    let protector = Protector::new(&root, &Config::default(), &ProtectPaths::from_env());
+    let rules = RuleSet::parse(
+        "[[rules]]\nname = \"fotos\"\next = [\"jpg\"]\ntarget = \"Fotos/{exif.date:%Y}/\"\n",
+        Path::new("rules.toml"),
+    )
+    .unwrap();
+    let content = LiveContent::default();
+    let run_plan = |index: &mut Index| {
+        plan_rules(
+            index,
+            &root,
+            &rules,
+            &RulesEnv {
+                protector: &protector,
+                exif: &CachedExif,
+                content: &content,
+                created: "t",
+                now_ticks: NOW,
+            },
+        )
+        .unwrap()
+    };
+
+    let start = Instant::now();
+    let first = run_plan(&mut index);
+    println!("erster Lauf (10.000 JPEGs lesen): {:.2?}", start.elapsed());
+    assert_eq!(first.plan.actions.len(), 10_000);
+    assert!(first.plan.actions[0]
+        .target
+        .as_deref()
+        .unwrap()
+        .contains("2019"));
+
+    // Dateien weg: Der zweite Lauf darf nichts mehr lesen müssen.
+    std::fs::remove_dir_all(&root).unwrap();
+    let second = timed("zweiter Lauf (Cache)", || run_plan(&mut index));
+    assert_eq!(second.plan.actions.len(), 10_000);
+    assert!(
+        start.elapsed() > Duration::ZERO
+            && second.plan.actions[0].target == first.plan.actions[0].target
+    );
 }

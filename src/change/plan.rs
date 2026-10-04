@@ -6,6 +6,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use super::protect::TOOL_DIR;
 use super::SkipReason;
 use crate::paths;
 use crate::scan::source::TICKS_PER_SEC;
@@ -37,6 +38,7 @@ pub enum PlanKind {
     EmptyDirs,
     Archive,
     Versions,
+    Rules,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +96,9 @@ pub struct PlannedAction {
     /// Dateianzahl eines verschobenen Ordners.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<u64>,
+    /// Name der auslösenden Regel (nur `move` in Plänen der Art `rules`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -135,6 +140,13 @@ fn is_hash(s: &str) -> bool {
     s.len() == 32
         && s.bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Schlüssel der Wurzel und der gesperrten Zielbereiche.
+struct Keys<'a> {
+    root: &'a str,
+    archive: &'a str,
+    tool: &'a str,
 }
 
 /// `path_key` löst `.`/`..` nicht auf; ein Pfad wie `Wurzel\..\Anders` würde die
@@ -196,6 +208,7 @@ impl Plan {
         let root = Path::new(&self.root);
         let root_key = paths::path_key(root);
         let archive_key = paths::path_key(&root.join(ARCHIVE_DIR));
+        let tool_key = paths::path_key(&root.join(TOOL_DIR));
         let mut ids = HashSet::new();
         let mut sources = HashSet::new();
         let mut targets = HashSet::new();
@@ -219,7 +232,15 @@ impl Plan {
                     a.id, a.path
                 ));
             }
-            self.validate_fields(a, &key, &archive_key)?;
+            self.validate_fields(
+                a,
+                &key,
+                &Keys {
+                    root: &root_key,
+                    archive: &archive_key,
+                    tool: &tool_key,
+                },
+            )?;
             if let Some(target) = &a.target {
                 if !targets.insert(paths::path_key(Path::new(target))) {
                     return invalid(format!("Aktion {}: Ziel {target} kommt doppelt vor", a.id));
@@ -238,6 +259,13 @@ impl Plan {
             }
             if let Some(target) = &a.target {
                 let target_key = paths::path_key(Path::new(target));
+                let own_key = paths::path_key(Path::new(&a.path));
+                if target_key != own_key && sources.contains(&target_key) {
+                    return invalid(format!(
+                        "Aktion {}: Ziel {target} ist die Quelle einer anderen Aktion",
+                        a.id
+                    ));
+                }
                 let nested = self.actions.iter().any(|o| {
                     o.is_dir && o.id != a.id && {
                         let dir = paths::path_key(Path::new(&o.path));
@@ -256,13 +284,19 @@ impl Plan {
     }
 
     /// Pflicht- und Verbotsfelder je Aktionstyp.
-    fn validate_fields(
-        &self,
-        a: &PlannedAction,
-        key: &str,
-        archive_key: &str,
-    ) -> Result<(), PlanError> {
+    fn validate_fields(&self, a: &PlannedAction, key: &str, keys: &Keys) -> Result<(), PlanError> {
         let invalid = |msg: String| Err(PlanError::Invalid(format!("Aktion {}: {msg}", a.id)));
+        let is_rules = self.kind == PlanKind::Rules;
+        if is_rules && a.action != ActionType::Move {
+            return invalid("ein Regel-Plan enthält nur move-Aktionen".into());
+        }
+        if a.rule.is_some() != is_rules {
+            return invalid(if is_rules {
+                "move braucht den Namen der Regel (rule)".into()
+            } else {
+                "rule gibt es nur in Plänen der Art rules".into()
+            });
+        }
         match a.action {
             ActionType::Quarantine => {
                 let present = [&a.hash, &a.keep, &a.keep_hash]
@@ -309,7 +343,26 @@ impl Plan {
                     return invalid("move braucht ein Ziel".into());
                 };
                 let target_key = paths::path_key(Path::new(target));
-                if target_key == archive_key || !paths::is_under(&target_key, archive_key) {
+                if is_rules {
+                    if !paths::is_under(&target_key, keys.root) || target_key == keys.root {
+                        return invalid(format!("Ziel {target} liegt nicht in der Wurzel"));
+                    }
+                    if paths::is_under(&target_key, keys.archive)
+                        || paths::is_under(&target_key, keys.tool)
+                    {
+                        return invalid(format!(
+                            "Ziel {target} liegt unter {ARCHIVE_DIR} oder {TOOL_DIR}"
+                        ));
+                    }
+                    if a.is_dir {
+                        return invalid("Regeln verschieben nur Dateien".into());
+                    }
+                    // Dasselbe Ziel ist nur ein Umbenennen, wenn sich die Schreibweise ändert.
+                    if target_key == key && target == &a.path {
+                        return invalid("Ziel ist identisch mit der Quelle".into());
+                    }
+                } else if target_key == keys.archive || !paths::is_under(&target_key, keys.archive)
+                {
                     return invalid(format!(
                         "Ziel {target} liegt nicht unter {}\\{ARCHIVE_DIR}",
                         self.root
@@ -318,7 +371,7 @@ impl Plan {
                 if a.is_dir && a.files.is_none() {
                     return invalid("verschobener Ordner braucht die Dateianzahl (files)".into());
                 }
-                if paths::is_under(&target_key, key) {
+                if paths::is_under(&target_key, key) && !(is_rules && target_key == key) {
                     return invalid("Ziel liegt in der Quelle selbst".into());
                 }
                 if a.keep.as_deref().map(|k| paths::path_key(Path::new(k))) == Some(key.into()) {
@@ -351,6 +404,7 @@ mod tests {
             target: None,
             is_dir: false,
             files: None,
+            rule: None,
         }
     }
 
@@ -732,5 +786,120 @@ mod tests {
                 || ticks_to_rfc3339(0).starts_with("1969")
         );
         assert_eq!(hex(&[0x01, 0xab]), "01ab");
+    }
+
+    fn rules_mv(id: u32, path: &str, target: &str) -> PlannedAction {
+        PlannedAction {
+            rule: Some("fotos".into()),
+            reason: "rule:fotos".into(),
+            ..mv(id, path, target)
+        }
+    }
+
+    fn rules_plan(actions: Vec<PlannedAction>) -> Plan {
+        plan_of(PlanKind::Rules, actions)
+    }
+
+    #[test]
+    fn rules_move_darf_ueberall_unter_der_wurzel_landen() {
+        let ok = rules_mv(1, r"D:\Daten\Downloads\a.jpg", r"D:\Daten\Fotos\2026\a.jpg");
+        let p = rules_plan(vec![ok]);
+        assert!(p.validate().is_ok());
+        assert_eq!(Plan::from_json(&p.to_json()).unwrap(), p);
+        assert!(p.to_json().contains("\"rule\": \"fotos\""));
+    }
+
+    #[test]
+    fn archive_move_darf_weiterhin_nur_ins_archiv() {
+        let p = plan_of(
+            PlanKind::Archive,
+            vec![mv(1, r"D:\Daten\a.txt", r"D:\Daten\Fotos\a.txt")],
+        );
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn rules_ziel_ausserhalb_der_wurzel_im_archiv_oder_im_werkzeugordner_ist_ungueltig() {
+        for bad in [
+            r"E:\Fotos\a.jpg",
+            r"D:\Daten2\a.jpg",
+            r"D:\Daten\_Archiv\a.jpg",
+            r"D:\Daten\_archiv",
+            r"D:\Daten\.ordner-cleanup\q\a.jpg",
+            r"D:\Daten",
+            r"D:\Daten\..\a.jpg",
+        ] {
+            let p = rules_plan(vec![rules_mv(1, r"D:\Daten\Downloads\a.jpg", bad)]);
+            assert!(
+                matches!(p.validate(), Err(PlanError::Invalid(_))),
+                "Ziel {bad} muss abgelehnt werden"
+            );
+        }
+    }
+
+    #[test]
+    fn rules_ziel_nur_in_der_schreibweise_ist_gueltig_identisches_nicht() {
+        let rename = rules_mv(1, r"D:\Daten\foto.JPG", r"D:\Daten\foto.jpg");
+        assert!(rules_plan(vec![rename]).validate().is_ok());
+        let same = rules_mv(1, r"D:\Daten\foto.jpg", r"D:\Daten\foto.jpg");
+        assert!(rules_plan(vec![same]).validate().is_err());
+    }
+
+    #[test]
+    fn rules_ziel_in_der_eigenen_quelle_ist_ungueltig() {
+        let nested = rules_mv(1, r"D:\Daten\a.jpg", r"D:\Daten\a.jpg\x");
+        assert!(rules_plan(vec![nested]).validate().is_err());
+    }
+
+    #[test]
+    fn rules_braucht_den_regelnamen_und_keine_ordner() {
+        let mut no_rule = rules_mv(1, r"D:\Daten\a.jpg", r"D:\Daten\F\a.jpg");
+        no_rule.rule = None;
+        assert!(rules_plan(vec![no_rule]).validate().is_err());
+        let mut dir = rules_mv(1, r"D:\Daten\a", r"D:\Daten\F\a");
+        dir.is_dir = true;
+        dir.files = Some(1);
+        assert!(rules_plan(vec![dir]).validate().is_err());
+        let quarantine = PlannedAction {
+            rule: Some("x".into()),
+            ..junk(1, r"D:\Daten\x.tmp")
+        };
+        assert!(rules_plan(vec![quarantine]).validate().is_err());
+    }
+
+    #[test]
+    fn rule_gibt_es_nur_bei_rules_plaenen() {
+        let a = rules_mv(1, r"D:\Daten\a.txt", r"D:\Daten\_Archiv\a.txt");
+        assert!(plan_of(PlanKind::Archive, vec![a]).validate().is_err());
+    }
+
+    #[test]
+    fn ziel_darf_nicht_die_quelle_einer_anderen_aktion_sein() {
+        let p = rules_plan(vec![
+            rules_mv(1, r"D:\Daten\a.jpg", r"D:\Daten\b.jpg"),
+            rules_mv(2, r"D:\Daten\B.jpg", r"D:\Daten\c.jpg"),
+        ]);
+        assert!(matches!(p.validate(), Err(PlanError::Invalid(m)) if m.contains("Quelle")));
+        let p = plan_of(
+            PlanKind::Archive,
+            vec![
+                mv(1, r"D:\Daten\_Archiv\1\a", r"D:\Daten\_Archiv\2\a"),
+                mv(2, r"D:\Daten\_Archiv\2\a", r"D:\Daten\_Archiv\3\a"),
+            ],
+        );
+        assert!(p.validate().is_err(), "gilt für alle Arten");
+    }
+
+    #[test]
+    fn plan_ohne_rule_feld_aus_phase_3_wird_unveraendert_gelesen() {
+        let p = plan_of(
+            PlanKind::Archive,
+            vec![mv(1, r"D:\Daten\a.txt", r"D:\Daten\_Archiv\2020\a.txt")],
+        );
+        let json = p.to_json();
+        assert!(!json.contains("\"rule\""), "leer wird nicht geschrieben");
+        let loaded = Plan::from_json(&json).unwrap();
+        assert_eq!(loaded.actions[0].rule, None);
+        assert_eq!(loaded.version, PLAN_VERSION);
     }
 }

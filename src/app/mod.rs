@@ -49,6 +49,7 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Plan(PlanCommand::EmptyDirs(args)) => plan::plan_empty_dirs_command(&args),
         Command::Plan(PlanCommand::Archive(args)) => plan::plan_archive_command(&args),
         Command::Plan(PlanCommand::Versions(args)) => plan::plan_versions_command(&args),
+        Command::Plan(PlanCommand::Rules(args)) => plan::plan_rules_command(&args),
         Command::Apply(args) => apply_command(&args),
         Command::Undo(args) => undo_command(&args),
         Command::Runs(args) => runs_command(&args),
@@ -798,6 +799,7 @@ mod confirm_tests {
             target: None,
             is_dir: false,
             files: None,
+            rule: None,
         };
         let plan = Plan {
             version: PLAN_VERSION,
@@ -856,6 +858,7 @@ mod confirm_tests {
             id: 1,
             path: r"D:\x.txt".into(),
             kind: crate::change::plan::ActionType::Quarantine,
+            sorted: false,
             status,
         };
         assert!(status_line(&result(ActionStatus::Done)).is_none());

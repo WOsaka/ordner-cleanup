@@ -151,6 +151,7 @@ pub fn plan_archive(
                 target: Some(paths::display(&target)),
                 is_dir: true,
                 files: Some(stats.files),
+                rule: None,
             },
         ));
     }

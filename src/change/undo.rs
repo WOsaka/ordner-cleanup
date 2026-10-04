@@ -276,14 +276,16 @@ impl Restore<'_> {
     }
 
     /// Verschobene Datei oder Ordner zurück an den Ursprungsort. `stop` ist der Bereich
-    /// (Quarantäne-Lauf oder `_Archiv`), in dem `to` liegen muss; danach werden leer gewordene
-    /// Ordner darin bis einschließlich `stop` aufgeräumt.
+    /// (Quarantäne-Lauf, `_Archiv` oder die Wurzel bei `rules`), in dem `to` liegen muss. Mit
+    /// `cleanup` werden leer gewordene Ordner darin bis einschließlich `stop` aufgeräumt; bei
+    /// `rules` nicht, dort entfernt Undo nur die Ordner mit `created_dir`-Eintrag.
     fn move_back(
         &mut self,
         action: u32,
         from: &str,
         to: &str,
         stop: &Path,
+        cleanup: bool,
     ) -> Result<RestoreStatus, UndoError> {
         let allowed_key = paths::path_key(stop);
         let allowed_key = allowed_key.as_str();
@@ -300,6 +302,9 @@ impl Restore<'_> {
                 "Journal-Eintrag verweist außerhalb von Wurzel oder Quarantäne".into(),
             ));
         }
+        if from_key == to_key {
+            return self.rename_back_case(action, from, to);
+        }
         let (in_quarantine, at_origin) = (self.env.fs.exists(to), self.env.fs.exists(from));
         match (in_quarantine, at_origin) {
             (true, false) => {
@@ -314,7 +319,7 @@ impl Restore<'_> {
                             run: self.run.clone(),
                             action,
                         })?;
-                        if let Some(parent) = to.parent() {
+                        if let Some(parent) = to.parent().filter(|_| cleanup) {
                             quarantine::cleanup_empty_parents(self.env.fs, parent, stop);
                         }
                         Ok(RestoreStatus::Restored)
@@ -332,6 +337,69 @@ impl Restore<'_> {
                 Ok(RestoreStatus::Missing)
             }
         }
+    }
+
+    /// Umbenennen nur in der Schreibweise zurück: Quelle und Ziel sind derselbe Pfadschlüssel.
+    /// Maßgeblich ist der Name, der im Ordner wirklich steht.
+    fn rename_back_case(
+        &mut self,
+        action: u32,
+        from: &Path,
+        to: &Path,
+    ) -> Result<RestoreStatus, UndoError> {
+        let Some(parent) = to.parent() else {
+            return Ok(RestoreStatus::Failed("Journal-Eintrag ohne Ordner".into()));
+        };
+        let to_key = paths::path_key(to);
+        let entries = match self.env.fs.read_dir(parent) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => return Ok(RestoreStatus::Failed(e.to_string())),
+        };
+        let Some((actual, _)) = entries
+            .into_iter()
+            .find(|(path, _)| paths::path_key(path) == to_key)
+        else {
+            self.conflict(action, "nicht mehr wiederherstellbar")?;
+            return Ok(RestoreStatus::Missing);
+        };
+        if actual.file_name() == from.file_name() {
+            return Ok(RestoreStatus::NothingToDo);
+        }
+        match self.env.fs.rename(&actual, from) {
+            Ok(()) => {
+                self.journal.append(&Entry::UndoDone {
+                    run: self.run.clone(),
+                    action,
+                })?;
+                Ok(RestoreStatus::Restored)
+            }
+            Err(e) => Ok(RestoreStatus::Failed(e.to_string())),
+        }
+    }
+
+    /// Entfernt einen vom Lauf angelegten Ordner, aber nur, wenn er leer ist (nie Inhalt, nie
+    /// Links, nie außerhalb der Wurzel). `Some` nur bei einem unzulässigen Journal-Eintrag.
+    fn remove_created_dir(&mut self, path: &str) -> Option<RestoreStatus> {
+        let key = paths::path_key(Path::new(path));
+        let sane = !has_dot_component(path)
+            && key != self.root_key
+            && paths::is_under(&key, self.root_key);
+        if !sane {
+            return Some(RestoreStatus::Failed(
+                "Journal-Eintrag verweist außerhalb der Wurzel".into(),
+            ));
+        }
+        let dir = Path::new(path);
+        let plain_dir = matches!(
+            self.env.fs.metadata(dir),
+            Ok(meta) if meta.is_dir && !meta.is_link && !meta.is_reparse_point()
+        );
+        if plain_dir && matches!(self.env.fs.read_dir(dir), Ok(entries) if entries.is_empty()) {
+            // Ein Fehler (z. B. gesperrt, inzwischen belegt) lässt den Ordner einfach stehen.
+            let _ = self.env.fs.remove_dir(dir);
+        }
+        None
     }
 
     /// Legt einen entfernten Ordner wieder an. Attribute und Zeiten setzt erst ein zweiter
@@ -428,11 +496,12 @@ pub fn undo_run(root: &Path, run: &RunId, env: &UndoEnv) -> Result<UndoOutcome, 
         } else {
             match &op.kind {
                 OpKind::Move { from, to, dest, .. } => {
-                    let stop = match dest {
-                        Dest::Quarantine => &quarantine_dir,
-                        Dest::Archive => &archive_dir,
+                    let (stop, cleanup) = match dest {
+                        Dest::Quarantine => (&quarantine_dir, true),
+                        Dest::Archive => (&archive_dir, true),
+                        Dest::Rules => (&root.to_path_buf(), false),
                     };
-                    restore.move_back(op.action, from, to, stop)?
+                    restore.move_back(op.action, from, to, stop, cleanup)?
                 }
                 OpKind::RemoveDir { path, .. } => {
                     let status = restore.recreate_dir(op.action, path)?;
@@ -448,6 +517,18 @@ pub fn undo_run(root: &Path, run: &RunId, env: &UndoEnv) -> Result<UndoOutcome, 
             path: op.origin().to_string(),
             status,
         });
+    }
+    // Vom Lauf angelegte Zielordner (`rules`) von unten nach oben, nur wenn sie leer sind.
+    for entry in entries.iter().rev() {
+        if let Entry::CreatedDir { action, path, .. } = entry {
+            if let Some(status) = restore.remove_created_dir(path) {
+                results.push(RestoreResult {
+                    action: *action,
+                    path: path.clone(),
+                    status,
+                });
+            }
+        }
     }
     // Von unten nach oben: Ein Kind ändert die Zeit seines Elternordners nur beim Anlegen,
     // nicht beim Setzen seiner eigenen Attribute.
@@ -525,6 +606,9 @@ fn summarize(run: RunId, entries: &[Entry], quarantine_days: u32) -> RunSummary 
                         dest: Dest::Archive,
                         ..
                     } => counts.archived += 1,
+                    OpKind::Move {
+                        dest: Dest::Rules, ..
+                    } => counts.sorted += 1,
                     OpKind::RemoveDir { .. } => counts.dirs_removed += 1,
                 }
                 counts
@@ -1603,5 +1687,337 @@ mod tests {
         undo(&fx);
         let entries = journal::read(&quarantine::journal_path(&fx.root, &run_id())).unwrap();
         assert!(matches!(entries[0], Entry::RunStart { .. }));
+    }
+
+    // --- Phase 4: Regel-Moves (`rules`) ---
+
+    fn apply_rules(fx: &Fx, pairs: &[(&str, &str)]) {
+        let plan = fx.rules_plan(pairs);
+        let out = run_with(fx, &plan, &RealFs, &fx.protector(), RUN).unwrap();
+        assert_eq!(out.executed(), pairs.len(), "{:?}", out.results);
+    }
+
+    fn file_names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn undo_stellt_regel_moves_vollstaendig_her_und_entfernt_neue_ordner() {
+        let fx = fx();
+        fx.write("Eingang/x.txt", "inhalt x");
+        fx.write("Eingang/y.txt", "inhalt y");
+        let before = RealFs.metadata(&fx.root.join("Eingang/x.txt")).unwrap();
+        apply_rules(
+            &fx,
+            &[
+                ("Eingang/x.txt", r"Neu\Sub\x.txt"),
+                ("Eingang/y.txt", r"Neu\y.txt"),
+            ],
+        );
+        assert!(fx.exists("Neu/Sub/x.txt"));
+
+        let out = undo(&fx);
+
+        assert_eq!((out.restored(), out.exit_code()), (2, 0));
+        assert_eq!(fx.read("Eingang/x.txt"), "inhalt x");
+        assert_eq!(fx.read("Eingang/y.txt"), "inhalt y");
+        let after = RealFs.metadata(&fx.root.join("Eingang/x.txt")).unwrap();
+        assert_eq!(
+            (after.size, after.mtime_ticks, after.attrs),
+            (before.size, before.mtime_ticks, before.attrs)
+        );
+        assert!(!fx.exists("Neu"), "neu angelegte, leere Ordner sind weg");
+        assert!(fx.root.exists(), "die Wurzel bleibt");
+    }
+
+    #[test]
+    fn vorher_vorhandener_leerer_ordner_bleibt_nach_undo_erhalten() {
+        let fx = fx();
+        fx.write("x.txt", "a");
+        fx.mkdir("Neu");
+        apply_rules(&fx, &[("x.txt", r"Neu\Sub\x.txt")]);
+
+        undo(&fx);
+
+        assert!(fx.exists("Neu"), "war vorher da");
+        assert!(!fx.exists("Neu/Sub"), "wurde vom Lauf angelegt");
+        assert_eq!(fx.read("x.txt"), "a");
+    }
+
+    #[test]
+    fn leerer_ordner_der_nicht_im_journal_steht_bleibt_auch_ohne_inhalt_stehen() {
+        let fx = fx();
+        fx.write("a/x.txt", "a");
+        fx.mkdir("a/leer");
+        apply_rules(&fx, &[("a/x.txt", r"b\x.txt")]);
+
+        undo(&fx);
+
+        assert!(fx.exists("a/leer"));
+        assert!(!fx.exists("b"));
+    }
+
+    #[test]
+    fn angelegter_ordner_mit_neuem_inhalt_des_nutzers_bleibt_erhalten() {
+        let fx = fx();
+        fx.write("x.txt", "a");
+        apply_rules(&fx, &[("x.txt", r"Neu\x.txt")]);
+        fx.write("Neu/eigene.txt", "vom nutzer");
+
+        let out = undo(&fx);
+
+        assert_eq!((out.restored(), out.exit_code()), (1, 0));
+        assert_eq!(fx.read("x.txt"), "a");
+        assert_eq!(fx.read("Neu/eigene.txt"), "vom nutzer");
+    }
+
+    #[test]
+    fn belegter_ursprungspfad_ist_ein_konflikt_und_nichts_wird_ueberschrieben() {
+        let fx = fx();
+        fx.write("x.txt", "original");
+        apply_rules(&fx, &[("x.txt", r"Neu\x.txt")]);
+        fx.write("x.txt", "inzwischen neu");
+
+        let out = undo(&fx);
+
+        assert_eq!((out.conflicts(), out.exit_code()), (1, 2));
+        assert_eq!(fx.read("x.txt"), "inzwischen neu");
+        assert_eq!(fx.read("Neu/x.txt"), "original");
+    }
+
+    #[test]
+    fn zweites_undo_aendert_nichts() {
+        let fx = fx();
+        fx.write("x.txt", "a");
+        apply_rules(&fx, &[("x.txt", r"Neu\x.txt")]);
+        undo(&fx);
+        let len = fx.journal(RUN).len();
+
+        let again = undo(&fx);
+
+        assert!(again.already_undone && again.results.is_empty());
+        assert_eq!(fx.journal(RUN).len(), len);
+    }
+
+    #[test]
+    fn umbenennen_nur_in_der_schreibweise_wird_zurueckgedreht() {
+        let fx = fx();
+        fx.write("Fotos/foto.JPG", "bild");
+        apply_rules(&fx, &[("Fotos/foto.JPG", r"Fotos\foto.jpg")]);
+        assert_eq!(file_names(&fx.root.join("Fotos")), ["foto.jpg"]);
+
+        let out = undo(&fx);
+
+        assert_eq!((out.restored(), out.exit_code()), (1, 0));
+        assert_eq!(file_names(&fx.root.join("Fotos")), ["foto.JPG"]);
+        assert_eq!(fx.read("Fotos/foto.JPG"), "bild");
+        assert!(undo(&fx).already_undone);
+    }
+
+    #[test]
+    fn schreibweisen_undo_nach_teilweisem_lauf_erkennt_den_ursprungsnamen() {
+        let fx = fx();
+        fx.write("Fotos/foto.JPG", "bild");
+        apply_rules(&fx, &[("Fotos/foto.JPG", r"Fotos\foto.jpg")]);
+        // Der Nutzer hat selbst schon zurückbenannt: nichts zu tun, kein Konflikt.
+        std::fs::rename(
+            fx.root.join("Fotos/foto.jpg"),
+            fx.root.join("Fotos/zwischen.tmp"),
+        )
+        .unwrap();
+        std::fs::rename(
+            fx.root.join("Fotos/zwischen.tmp"),
+            fx.root.join("Fotos/foto.JPG"),
+        )
+        .unwrap();
+
+        let out = undo(&fx);
+
+        assert_eq!(out.exit_code(), 0, "{:?}", out.results);
+        assert_eq!(file_names(&fx.root.join("Fotos")), ["foto.JPG"]);
+    }
+
+    #[test]
+    fn absturz_nach_dem_rename_wird_von_undo_aufgeraeumt() {
+        let fx = fx();
+        fx.write("x.txt", "a");
+        let plan = fx.rules_plan(&[("x.txt", r"Neu\x.txt")]);
+        let fs = FaultyFs::new().crash_after_rename(1);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with(&fx, &plan, &fs, &fx.protector(), RUN)
+        }));
+        assert!(fx.exists("Neu/x.txt") && !fx.exists("x.txt"));
+
+        let out = undo(&fx);
+
+        assert_eq!((out.restored(), out.exit_code()), (1, 0));
+        assert_eq!(fx.read("x.txt"), "a");
+        assert!(!fx.exists("Neu"));
+    }
+
+    #[test]
+    fn absturz_vor_create_dir_hinterlaesst_nichts_zu_tun() {
+        let fx = fx();
+        fx.write("x.txt", "a");
+        let plan = fx.rules_plan(&[("x.txt", r"Neu\x.txt")]);
+        let fs = FaultyFs::new().crash_before_create_dir(1);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with(&fx, &plan, &fs, &fx.protector(), RUN)
+        }));
+
+        let out = undo(&fx);
+
+        assert_eq!(out.exit_code(), 0, "{:?}", out.results);
+        assert_eq!(fx.read("x.txt"), "a");
+        assert!(!fx.exists("Neu"));
+    }
+
+    fn manipulated(fx: &Fx, entries: &[Entry]) {
+        let mut w = JournalWriter::create(&quarantine::journal_path(&fx.root, &run_id())).unwrap();
+        w.append(&Entry::RunStart {
+            run: run_id(),
+            plan: "p".into(),
+            root: paths::display(&fx.root),
+            started: "2026-10-03T10:00:00Z".into(),
+        })
+        .unwrap();
+        for entry in entries {
+            w.append(entry).unwrap();
+        }
+    }
+
+    #[test]
+    fn manipuliertes_journal_mit_ziel_ausserhalb_der_wurzel_wird_abgelehnt() {
+        let fx = fx();
+        let outside = fx.root.parent().unwrap().join("ausserhalb");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("geheim.txt"), "x").unwrap();
+        manipulated(
+            &fx,
+            &[
+                Entry::Intent {
+                    run: run_id(),
+                    action: 1,
+                    from: paths::display(&fx.root.join("x.txt")),
+                    to: paths::display(&outside.join("geheim.txt")),
+                    size: 1,
+                    hash: None,
+                    dest: Dest::Rules,
+                    is_dir: false,
+                },
+                Entry::Done {
+                    run: run_id(),
+                    action: 1,
+                },
+            ],
+        );
+
+        let out = undo(&fx);
+
+        assert_eq!(out.failed(), 1, "{:?}", out.results);
+        assert!(outside.join("geheim.txt").exists());
+        assert!(!fx.exists("x.txt"));
+    }
+
+    #[test]
+    fn manipuliertes_journal_kann_keine_ordner_ausserhalb_der_wurzel_entfernen() {
+        let fx = fx();
+        let outside = fx.root.parent().unwrap().join("ausserhalb2");
+        std::fs::create_dir_all(&outside).unwrap();
+        manipulated(
+            &fx,
+            &[
+                Entry::CreatedDir {
+                    run: run_id(),
+                    action: 1,
+                    path: paths::display(&outside),
+                },
+                Entry::CreatedDir {
+                    run: run_id(),
+                    action: 2,
+                    path: paths::display(&fx.root),
+                },
+                Entry::CreatedDir {
+                    run: run_id(),
+                    action: 3,
+                    path: format!(r"{}\..\ausserhalb2", paths::display(&fx.root)),
+                },
+            ],
+        );
+
+        let out = undo(&fx);
+
+        assert_eq!(out.failed(), 3, "{:?}", out.results);
+        assert!(outside.exists(), "außerhalb darf nichts entfernt werden");
+        assert!(fx.root.exists());
+    }
+
+    #[test]
+    fn links_werden_beim_aufraeumen_nie_angefasst() {
+        let fx = fx();
+        let outside = tempfile::tempdir().unwrap();
+        let link = fx.root.join("Neu");
+        let ok = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(outside.path())
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("Junction nicht erzeugbar, Test übersprungen");
+            return;
+        }
+        manipulated(
+            &fx,
+            &[Entry::CreatedDir {
+                run: run_id(),
+                action: 1,
+                path: paths::display(&link),
+            }],
+        );
+
+        undo(&fx);
+
+        assert!(link.exists() && outside.path().exists());
+    }
+
+    #[test]
+    fn purge_laesst_regel_laeufe_undo_faehig() {
+        let fx = fx();
+        fx.write("x.txt", "a");
+        apply_rules(&fx, &[("x.txt", r"Neu\x.txt")]);
+        purge_run(&fx.root, &run_id(), &env()).unwrap();
+
+        let out = undo(&fx);
+
+        assert!(!out.purged);
+        assert_eq!((out.restored(), out.missing(), out.exit_code()), (1, 0, 0));
+        assert_eq!(fx.read("x.txt"), "a");
+    }
+
+    #[test]
+    fn runs_zaehlt_regel_moves_als_einsortiert() {
+        let fx = fx();
+        fx.write("a.txt", "aa");
+        fx.write("b.txt", "bb");
+        apply_rules(&fx, &[("a.txt", r"Neu\a.txt"), ("b.txt", r"Neu\b.txt")]);
+
+        let runs = list_runs(&fx.root, 30).unwrap();
+
+        assert_eq!(runs[0].moved, 2);
+        assert_eq!(
+            runs[0].counts,
+            ActionCounts {
+                sorted: 2,
+                ..ActionCounts::default()
+            }
+        );
+        assert_eq!(runs[0].bytes, 0);
     }
 }

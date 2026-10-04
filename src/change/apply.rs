@@ -12,10 +12,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use super::archive::is_in_archive;
 use super::fsops::{FileMeta, FsOps};
 use super::journal::{Dest, EndStatus, Entry, JournalWriter};
-use super::plan::{hex, ActionType, Plan, PlanError, PlannedAction, ARCHIVE_DIR};
+use super::plan::{hex, ActionType, Plan, PlanError, PlanKind, PlannedAction, ARCHIVE_DIR};
 use super::protect::Protector;
 use super::quarantine::{self, MAX_TARGET_LEN};
 use super::{ActionCounts, RunId, SkipReason};
+use crate::analysis::problems::MAX_PATH_CHARS;
 use crate::paths;
 use crate::scan::hasher;
 
@@ -56,6 +57,8 @@ pub struct ActionResult {
     pub id: u32,
     pub path: String,
     pub kind: ActionType,
+    /// `move` einer Regel (Einsortieren oder Umbenennen).
+    pub sorted: bool,
     pub status: ActionStatus,
 }
 
@@ -80,7 +83,11 @@ impl ApplyOutcome {
             .iter()
             .filter(|r| r.status == ActionStatus::Done)
         {
-            counts.count(r.kind);
+            if r.sorted {
+                counts.count_sorted();
+            } else {
+                counts.count(r.kind);
+            }
         }
         counts
     }
@@ -517,6 +524,7 @@ fn verify_move(
     a: &PlannedAction,
     root: &Path,
     env: &ApplyEnv,
+    kind: PlanKind,
 ) -> Result<std::path::PathBuf, Verdict> {
     let src = Path::new(&a.path);
     let Some(target) = a.target.as_deref().map(std::path::PathBuf::from) else {
@@ -562,6 +570,9 @@ fn verify_move(
         }
     }
 
+    if kind == PlanKind::Rules {
+        return verify_rules_target(a, src, target, env);
+    }
     if paths::display(&target).chars().count() > MAX_TARGET_LEN {
         return Err(Verdict::Skip(SkipReason::TooLong));
     }
@@ -580,16 +591,130 @@ fn verify_move(
     Ok(target)
 }
 
+/// Ziel eines Regel-Moves: Länge, Schreibweisen-Umbenennen oder freies Ziel. Der Zielordner
+/// wird erst danach angelegt ([`prepare_rules_parent`]), weil das ins Journal gehört.
+fn verify_rules_target(
+    a: &PlannedAction,
+    src: &Path,
+    target: std::path::PathBuf,
+    env: &ApplyEnv,
+) -> Result<std::path::PathBuf, Verdict> {
+    if paths::display(&target).chars().count() > MAX_PATH_CHARS {
+        return Err(Verdict::Skip(SkipReason::PathTooLong));
+    }
+    if is_case_only_rename(src, &target) {
+        // Das Ziel „existiert“, weil es die Quelle selbst ist: nur dann erlaubt.
+        return match env.fs.same_file(src, &target) {
+            Ok(true) if paths::display(&target) != a.path => Ok(target),
+            Ok(_) => Err(Verdict::Skip(SkipReason::TargetExists)),
+            Err(e) => Err(Verdict::Fail(io_message(&e))),
+        };
+    }
+    if env.fs.exists(&target) {
+        return Err(Verdict::Skip(SkipReason::TargetExists));
+    }
+    Ok(target)
+}
+
+/// Quelle und Ziel unterscheiden sich höchstens in der Groß-/Kleinschreibung.
+fn is_case_only_rename(src: &Path, target: &Path) -> bool {
+    paths::path_key(src) == paths::path_key(target)
+}
+
+enum PrepareError {
+    Verdict(Verdict),
+    Apply(ApplyError),
+}
+
+impl From<Verdict> for PrepareError {
+    fn from(v: Verdict) -> Self {
+        Self::Verdict(v)
+    }
+}
+
+impl From<io::Error> for PrepareError {
+    fn from(e: io::Error) -> Self {
+        Self::Apply(ApplyError::Journal(e))
+    }
+}
+
+/// Legt fehlende Zielordner von oben nach unten an. Jeder neue Ordner wird **vorher** als
+/// `created_dir` ins Journal geschrieben (Undo entfernt genau diese). Jede Ebene muss ein
+/// echter Ordner sein: Ein Link würde das Ziel aus der Wurzel hinaus umleiten.
+fn prepare_rules_parent(
+    a: &PlannedAction,
+    root: &Path,
+    parent: &Path,
+    env: &ApplyEnv,
+    journal: &mut JournalWriter,
+) -> Result<(), PrepareError> {
+    let root_key = paths::path_key(root);
+    let mut missing = Vec::new();
+    let mut dir = parent;
+    while paths::path_key(dir) != root_key {
+        match env.fs.metadata(dir) {
+            Ok(_) => ensure_plain_dir(env, dir)?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => missing.push(dir),
+            Err(e) => return Err(Verdict::Fail(io_message(&e)).into()),
+        }
+        match dir.parent() {
+            Some(up) if paths::is_under(&paths::path_key(up), &root_key) => dir = up,
+            _ => {
+                return Err(Verdict::Fail("Ziel liegt nicht in der Wurzel".into()).into());
+            }
+        }
+    }
+    for dir in missing.into_iter().rev() {
+        journal.append(&Entry::CreatedDir {
+            run: env.run.clone(),
+            action: a.id,
+            path: paths::display(dir),
+        })?;
+        match env.fs.create_dir(dir) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(Verdict::Fail(io_message(&e)).into()),
+        }
+        ensure_plain_dir(env, dir)?;
+    }
+    Ok(())
+}
+
 fn process_move(
     a: &PlannedAction,
     root: &Path,
     env: &ApplyEnv,
     journal: &mut JournalWriter,
+    kind: PlanKind,
 ) -> Result<ActionStatus, ApplyError> {
-    let target = match verify_move(a, root, env) {
+    let target = match verify_move(a, root, env, kind) {
         Ok(target) => target,
         Err(verdict) => return record_verdict(verdict, env.run.clone(), a.id, journal),
     };
+    if kind == PlanKind::Rules && !is_case_only_rename(Path::new(&a.path), &target) {
+        let parent = target.parent().unwrap_or(root);
+        let prepared = prepare_rules_parent(a, root, parent, env, journal).and_then(|()| {
+            let same_volume = match (
+                env.fs.volume_serial(Path::new(&a.path)),
+                env.fs.volume_serial(parent),
+            ) {
+                (Ok(x), Ok(y)) => x == y,
+                (Err(e), _) | (_, Err(e)) => return Err(Verdict::Fail(io_message(&e)).into()),
+            };
+            if same_volume {
+                Ok(())
+            } else {
+                Err(Verdict::Skip(SkipReason::DifferentVolume).into())
+            }
+        });
+        match prepared {
+            Ok(()) => {}
+            Err(PrepareError::Verdict(verdict)) => {
+                return record_verdict(verdict, env.run.clone(), a.id, journal)
+            }
+            Err(PrepareError::Apply(e)) => return Err(e),
+        }
+    }
     // Write-ahead: Ohne gesicherten `intent` wird nichts verschoben.
     journal.append(&Entry::Intent {
         run: env.run.clone(),
@@ -598,7 +723,11 @@ fn process_move(
         to: paths::display(&target),
         size: a.size,
         hash: None,
-        dest: Dest::Archive,
+        dest: if kind == PlanKind::Rules {
+            Dest::Rules
+        } else {
+            Dest::Archive
+        },
         is_dir: a.is_dir,
     })?;
     finish_rename(env, journal, a, &target)
@@ -611,11 +740,12 @@ fn process(
     journal: &mut JournalWriter,
     keeps: &mut HashMap<String, Option<SkipReason>>,
     before: &DirSnapshot,
+    kind: PlanKind,
 ) -> Result<ActionStatus, ApplyError> {
     match a.action {
         ActionType::Quarantine => process_quarantine(a, root, env, journal, keeps),
         ActionType::RemoveDir => process_remove_dir(a, env, journal, before),
-        ActionType::Move => process_move(a, root, env, journal),
+        ActionType::Move => process_move(a, root, env, journal, kind),
     }
 }
 
@@ -650,7 +780,15 @@ pub fn apply_plan(plan: &Plan, env: &ApplyEnv) -> Result<ApplyOutcome, ApplyErro
             outcome.aborted = true;
             break;
         }
-        let status = process(action, root, env, &mut journal, &mut keeps, &before)?;
+        let status = process(
+            action,
+            root,
+            env,
+            &mut journal,
+            &mut keeps,
+            &before,
+            plan.kind,
+        )?;
         if status == ActionStatus::Done {
             outcome.moved_bytes += action.size;
         }
@@ -658,6 +796,7 @@ pub fn apply_plan(plan: &Plan, env: &ApplyEnv) -> Result<ApplyOutcome, ApplyErro
             id: action.id,
             path: action.path.clone(),
             kind: action.action,
+            sorted: plan.kind == PlanKind::Rules && action.action == ActionType::Move,
             status,
         };
         (env.progress)(&result);
@@ -1955,6 +2094,7 @@ mod tests {
                     id: 1,
                     path: String::new(),
                     kind: ActionType::Quarantine,
+                    sorted: false,
                     status,
                 })
                 .collect(),
@@ -1971,5 +2111,271 @@ mod tests {
             2
         );
         assert_eq!(out(vec![ActionStatus::Done], true).exit_code(), 1);
+    }
+
+    // --- Phase 4: Regel-Moves (`rules`) ---
+
+    fn created_dirs(entries: &[Entry]) -> Vec<String> {
+        entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::CreatedDir { path, .. } => Some(path.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn rel(fx: &Fx, path: &str) -> String {
+        path.trim_start_matches(&crate::paths::display(&fx.root))
+            .trim_start_matches('\\')
+            .to_string()
+    }
+
+    #[test]
+    fn regel_move_legt_zielordner_an_und_protokolliert_sie_vor_dem_intent() {
+        let fx = fx();
+        fx.write("Eingang/x.txt", "inhalt");
+        let mtime = RealFs
+            .metadata(&fx.root.join("Eingang/x.txt"))
+            .unwrap()
+            .mtime_ticks;
+        let plan = fx.rules_plan(&[("Eingang/x.txt", r"Neu\Sub\x.txt")]);
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!((out.executed(), out.exit_code()), (1, 0));
+        assert_eq!(
+            out.counts(),
+            ActionCounts {
+                sorted: 1,
+                ..ActionCounts::default()
+            }
+        );
+        assert_eq!(fx.read("Neu/Sub/x.txt"), "inhalt");
+        assert!(!fx.exists("Eingang/x.txt"));
+        assert_eq!(
+            RealFs
+                .metadata(&fx.root.join("Neu/Sub/x.txt"))
+                .unwrap()
+                .mtime_ticks,
+            mtime
+        );
+        let entries = fx.journal(RUN);
+        let dirs: Vec<_> = created_dirs(&entries).iter().map(|p| rel(&fx, p)).collect();
+        assert_eq!(dirs, ["Neu", r"Neu\Sub"], "von oben nach unten");
+        let first_created = entries
+            .iter()
+            .position(|e| matches!(e, Entry::CreatedDir { .. }))
+            .unwrap();
+        let intent = entries
+            .iter()
+            .position(|e| matches!(e, Entry::Intent { .. }))
+            .unwrap();
+        assert!(first_created < intent, "write-ahead: Ordner vor dem Move");
+        assert!(matches!(
+            &entries[intent],
+            Entry::Intent {
+                dest: Dest::Rules,
+                is_dir: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn vorhandener_zielordner_bekommt_keinen_created_dir_eintrag() {
+        let fx = fx();
+        fx.write("x.txt", "a");
+        fx.mkdir("Neu");
+        let plan = fx.rules_plan(&[("x.txt", r"Neu\Sub\x.txt")]);
+
+        apply(&fx, &plan);
+
+        let dirs: Vec<_> = created_dirs(&fx.journal(RUN))
+            .iter()
+            .map(|p| rel(&fx, p))
+            .collect();
+        assert_eq!(dirs, [r"Neu\Sub"]);
+    }
+
+    #[test]
+    fn zielordner_der_ein_link_ist_wird_abgelehnt() {
+        let fx = fx();
+        fx.write("x.txt", "a");
+        let outside = tempfile::tempdir().unwrap();
+        let link = fx.root.join("Neu");
+        let ok = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(outside.path())
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("Junction nicht erzeugbar, Test übersprungen");
+            return;
+        }
+        let plan = fx.rules_plan(&[("x.txt", r"Neu\x.txt")]);
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(out.executed(), 0);
+        assert!(matches!(out.results[0].status, ActionStatus::Failed(_)));
+        assert!(fx.exists("x.txt"));
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn regel_ziel_das_inzwischen_belegt_ist_wird_nicht_ueberschrieben() {
+        let fx = fx();
+        fx.write("x.txt", "neu");
+        let plan = fx.rules_plan(&[("x.txt", r"Neu\x.txt")]);
+        fx.write("Neu/x.txt", "schon da");
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::TargetExists)
+        );
+        assert_eq!(fx.read("Neu/x.txt"), "schon da");
+        assert_eq!(fx.read("x.txt"), "neu");
+        assert!(created_dirs(&fx.journal(RUN)).is_empty());
+    }
+
+    #[test]
+    fn regel_move_einer_geaenderten_quelle_ist_stale() {
+        let fx = fx();
+        fx.write("x.txt", "alt");
+        let plan = fx.rules_plan(&[("x.txt", r"Neu\x.txt")]);
+        fx.write("x.txt", "ganz anders und laenger");
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(out.stale(), 1);
+        assert!(fx.exists("x.txt") && !fx.exists("Neu"));
+    }
+
+    #[test]
+    fn umbenennen_nur_in_der_schreibweise_klappt_ohne_target_exists() {
+        let fx = fx();
+        fx.write("Fotos/foto.JPG", "bild");
+        let plan = fx.rules_plan(&[("Fotos/foto.JPG", r"Fotos\foto.jpg")]);
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!((out.executed(), out.exit_code()), (1, 0));
+        let names: Vec<_> = std::fs::read_dir(fx.root.join("Fotos"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["foto.jpg"]);
+        assert_eq!(fx.read("Fotos/foto.jpg"), "bild");
+        assert!(created_dirs(&fx.journal(RUN)).is_empty());
+    }
+
+    #[test]
+    fn umbenennen_auf_den_namen_einer_anderen_datei_wird_nicht_als_schreibweise_behandelt() {
+        let fx = fx();
+        fx.write("a.txt", "eins");
+        fx.write("b.txt", "zwei");
+        let plan = fx.rules_plan(&[("a.txt", "b.txt")]);
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::TargetExists)
+        );
+        assert_eq!(fx.read("b.txt"), "zwei");
+    }
+
+    #[test]
+    fn gesperrte_datei_ist_ein_fehler_und_der_lauf_geht_weiter() {
+        let fx = fx();
+        fx.write("a.txt", "a");
+        fx.write("b.txt", "b");
+        let plan = fx.rules_plan(&[("a.txt", r"Neu\a.txt"), ("b.txt", r"Neu\b.txt")]);
+        let fs = FaultyFs::new().fail(Op::Rename, &fx.root.join("a.txt"));
+
+        let out = run_with(&fx, &plan, &fs, &fx.protector(), RUN).unwrap();
+
+        assert!(matches!(out.results[0].status, ActionStatus::Failed(_)));
+        assert_eq!(out.results[1].status, ActionStatus::Done);
+        assert_eq!(out.exit_code(), 2);
+        assert!(fx.exists("a.txt") && fx.exists("Neu/b.txt"));
+    }
+
+    #[test]
+    fn absturz_vor_create_dir_hinterlaesst_created_dir_ohne_ordner() {
+        let fx = fx();
+        fx.write("x.txt", "a");
+        let plan = fx.rules_plan(&[("x.txt", r"Neu\x.txt")]);
+        let fs = FaultyFs::new().crash_before_create_dir(1);
+
+        let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with(&fx, &plan, &fs, &fx.protector(), RUN)
+        }));
+
+        assert!(crashed.is_err());
+        let entries = fx.journal(RUN);
+        assert_eq!(created_dirs(&entries).len(), 1);
+        assert!(!fx.exists("Neu"), "Ordner wurde nie angelegt");
+        assert_eq!(intents(&entries), 0);
+        assert!(fx.exists("x.txt"));
+    }
+
+    #[test]
+    fn absturz_nach_dem_rename_hinterlaesst_intent_ohne_done() {
+        let fx = fx();
+        fx.write("x.txt", "a");
+        let plan = fx.rules_plan(&[("x.txt", r"Neu\x.txt")]);
+        let fs = FaultyFs::new().crash_after_rename(1);
+
+        let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with(&fx, &plan, &fs, &fx.protector(), RUN)
+        }));
+
+        assert!(crashed.is_err());
+        let entries = fx.journal(RUN);
+        assert_eq!(intents(&entries), 1);
+        assert!(!entries.iter().any(|e| matches!(e, Entry::Done { .. })));
+        assert!(fx.exists("Neu/x.txt") && !fx.exists("x.txt"));
+    }
+
+    #[test]
+    fn regel_ziel_ueber_260_zeichen_wird_uebersprungen_und_legt_nichts_an() {
+        let fx = fx();
+        fx.write("x.txt", "a");
+        let long = "l".repeat(200);
+        let plan = fx.rules_plan(&[("x.txt", &format!(r"{long}\{long}\x.txt"))]);
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::PathTooLong)
+        );
+        assert!(fx.exists("x.txt") && !fx.root.join(&long).exists());
+    }
+
+    #[test]
+    fn geschuetztes_regel_ziel_wird_beim_apply_erneut_geprueft() {
+        let fx = fx();
+        fx.write("x.txt", "a");
+        let plan = fx.rules_plan(&[("x.txt", r"Tabu\x.txt")]);
+        let config = Config {
+            protected_paths: vec![crate::paths::display(&fx.root.join("Tabu"))],
+            ..Config::default()
+        };
+        let protector = Protector::new(&fx.root, &config, &ProtectPaths::default());
+
+        let out = run_with(&fx, &plan, &RealFs, &protector, RUN).unwrap();
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::Protected)
+        );
+        assert!(fx.exists("x.txt") && !fx.exists("Tabu"));
     }
 }

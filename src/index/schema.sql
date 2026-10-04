@@ -63,6 +63,15 @@ CREATE TABLE errors (
     generation INTEGER NOT NULL
 );
 
+-- Schema v2: EXIF-Aufnahmedatum (lokale Sekunden seit Epoche; NULL = kein EXIF),
+-- gültig bei gleicher Größe und mtime. Eigene Tabelle, damit Re-Scans sie nicht löschen.
+CREATE TABLE exif_cache (
+    path_key TEXT PRIMARY KEY,
+    size INTEGER NOT NULL,
+    mtime INTEGER NOT NULL,
+    taken INTEGER
+);
+
 CREATE INDEX files_size ON files(size) WHERE cloud_only = 0 AND is_link = 0;
 CREATE INDEX files_dir ON files(dir_key);
 CREATE INDEX files_hash ON files(full_hash) WHERE full_hash IS NOT NULL;

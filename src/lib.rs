@@ -7,4 +7,5 @@ pub mod index;
 pub mod paths;
 pub mod platform;
 pub mod report;
+pub mod rules;
 pub mod scan;

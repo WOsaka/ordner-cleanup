@@ -1,5 +1,6 @@
 pub mod classify;
 pub mod duplicates;
+pub mod exif;
 pub mod hasher;
 pub mod source;
 pub mod walker;

@@ -48,6 +48,8 @@ pub struct Config {
     pub versions_min_age: String,
     pub onedrive_max_move_files: u64,
     pub onedrive_max_move_bytes: String,
+    /// Regeldatei für `plan rules`; ohne Angabe `rules.toml` neben der Config.
+    pub rules_file: Option<String>,
 }
 
 const DEFAULT_INSTALLER_MIN_AGE_DAYS: i64 = 90;
@@ -77,11 +79,12 @@ impl Default for Config {
             versions_min_age: "30d".to_string(),
             onedrive_max_move_files: 1000,
             onedrive_max_move_bytes: "5GB".to_string(),
+            rules_file: None,
         }
     }
 }
 
-fn parse_bytes(text: &str) -> Option<u64> {
+pub(crate) fn parse_bytes(text: &str) -> Option<u64> {
     text.parse::<bytesize::ByteSize>()
         .ok()
         .map(|b| b.as_u64())
