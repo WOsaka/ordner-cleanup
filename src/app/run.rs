@@ -14,7 +14,9 @@ use crate::cli::{
     PlanArchiveArgs, PlanDedupeArgs, PlanEmptyDirsArgs, PlanJunkArgs, PlanRulesArgs,
     PlanVersionsArgs, RunArgs,
 };
+use crate::notify::{self, OpenTarget};
 use crate::paths;
+use crate::platform::toast;
 use crate::runlog::{self, PlanRecord, RunRecord, RunStatus};
 use crate::scan::lock::{LockError, ScanLock};
 
@@ -57,6 +59,9 @@ pub(super) fn run_command(args: &RunArgs) -> Result<i32> {
         }
     };
     record.ended = now_rfc3339();
+    if args.notify {
+        notify_if_relevant(name, &target, &log, &mut record);
+    }
     if let Err(e) = runlog::append(&log, &record) {
         eprintln!(
             "Warnung: Lauf-Protokoll {} nicht geschrieben: {e}",
@@ -64,6 +69,23 @@ pub(super) fn run_command(args: &RunArgs) -> Result<i32> {
         );
     }
     Ok(code)
+}
+
+/// Zeigt bei relevanter Veränderung eine Benachrichtigung; ein Fehler dabei kippt den Lauf nicht
+/// (Benachrichtigungen können systemweit abgeschaltet sein, das Ergebnis steht im Bericht).
+fn notify_if_relevant(name: &str, target: &Target, log: &Path, record: &mut RunRecord) {
+    let previous = runlog::read_all(log).pop();
+    let Some(n) = notify::decide(name, record, previous.as_ref(), &target.config.notify) else {
+        return;
+    };
+    let open = match (n.open, &record.report) {
+        (OpenTarget::Report, Some(report)) => PathBuf::from(report),
+        _ => log.to_path_buf(),
+    };
+    match toast::system_notifier().notify(&n.title, &n.body, &open) {
+        Ok(()) => record.notified = true,
+        Err(e) => eprintln!("Warnung: Benachrichtigung nicht angezeigt: {e}"),
+    }
 }
 
 fn stamp() -> String {

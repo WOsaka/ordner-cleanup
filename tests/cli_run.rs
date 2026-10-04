@@ -275,3 +275,105 @@ fn hintergrundprogramm_hat_kein_konsolenfenster_und_laeuft_wie_die_konsolen_exe(
         .success();
     assert_eq!(log_of(home.path())[0]["status"], "ok");
 }
+
+fn notify_lines(file: &Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(file)
+        .unwrap_or_default()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+fn run_notify(home: &Path, notify_file: &Path, notify: bool) -> assert_cmd::assert::Assert {
+    let mut cmd = bin(home);
+    cmd.env(ordner_cleanup::platform::toast::TEST_LOG_ENV, notify_file)
+        .args(["run", "--profile", "t"]);
+    if notify {
+        cmd.arg("--notify");
+    }
+    cmd.assert()
+}
+
+#[test]
+fn notify_zeigt_bei_neuen_plaenen_und_klick_oeffnet_den_bericht() {
+    let home = tempfile::tempdir().unwrap();
+    let tree = tempfile::tempdir().unwrap();
+    sample_tree(tree.path());
+    write_config(
+        home.path(),
+        &profile_config(tree.path(), "plans = [\"junk\"]"),
+    );
+    let file = home.path().join("toasts.jsonl");
+    run_notify(home.path(), &file, true).success();
+    let toasts = notify_lines(&file);
+    assert_eq!(toasts.len(), 1, "{toasts:?}");
+    assert_eq!(toasts[0]["title"], "t");
+    assert!(toasts[0]["body"]
+        .as_str()
+        .unwrap()
+        .contains("1 Plan bereit"));
+    assert!(toasts[0]["open"].as_str().unwrap().ends_with("latest.html"));
+    assert_eq!(log_of(home.path())[0]["notified"], true);
+}
+
+#[test]
+fn ohne_notify_bleibt_der_lauf_still() {
+    let home = tempfile::tempdir().unwrap();
+    let tree = tempfile::tempdir().unwrap();
+    sample_tree(tree.path());
+    write_config(
+        home.path(),
+        &profile_config(tree.path(), "plans = [\"junk\"]"),
+    );
+    let file = home.path().join("toasts.jsonl");
+    run_notify(home.path(), &file, false).success();
+    assert!(!file.exists());
+    assert_eq!(log_of(home.path())[0]["notified"], false);
+}
+
+#[test]
+fn ruhiger_lauf_zeigt_auch_mit_notify_nichts() {
+    let home = tempfile::tempdir().unwrap();
+    let tree = tempfile::tempdir().unwrap();
+    sample_tree(tree.path());
+    std::fs::remove_file(tree.path().join("a").join("m.tmp")).unwrap();
+    write_config(home.path(), &profile_config(tree.path(), ""));
+    let file = home.path().join("toasts.jsonl");
+    run_notify(home.path(), &file, true).success();
+    assert!(!file.exists());
+}
+
+#[test]
+fn fehlende_wurzel_meldet_nicht_erreichbar_und_oeffnet_das_protokoll() {
+    let home = tempfile::tempdir().unwrap();
+    write_config(
+        home.path(),
+        "[profiles.t]\nroot = 'C:\\gibt\\es\\garantiert\\nicht'\n",
+    );
+    let file = home.path().join("toasts.jsonl");
+    run_notify(home.path(), &file, true).code(1);
+    let toasts = notify_lines(&file);
+    assert_eq!(toasts.len(), 1);
+    assert!(toasts[0]["title"]
+        .as_str()
+        .unwrap()
+        .contains("nicht erreichbar"));
+    assert!(toasts[0]["open"].as_str().unwrap().ends_with("t.jsonl"));
+}
+
+#[test]
+fn uebersprungen_meldet_erst_bei_wiederholung() {
+    let home = tempfile::tempdir().unwrap();
+    let tree = tempfile::tempdir().unwrap();
+    sample_tree(tree.path());
+    write_config(home.path(), &profile_config(tree.path(), ""));
+    let file = home.path().join("toasts.jsonl");
+    let _lock = ordner_cleanup::scan::lock::ScanLock::acquire(&data(home.path()).join("scan.lock"))
+        .unwrap();
+    run_notify(home.path(), &file, true).code(3);
+    assert!(!file.exists(), "ein einzelner Ausfall bleibt still");
+    run_notify(home.path(), &file, true).code(3);
+    let toasts = notify_lines(&file);
+    assert_eq!(toasts.len(), 1);
+    assert!(toasts[0]["title"].as_str().unwrap().contains("wiederholt"));
+}
