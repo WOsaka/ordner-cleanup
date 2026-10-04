@@ -845,6 +845,31 @@ fn select_files<'a>(
         .collect())
 }
 
+/// `classify` innerhalb von `run`: Sperre und Abbruch-Flag liegen beim Aufrufer. Liefert die
+/// Zahl der Dateien „zum Prüfen“.
+pub(super) fn classify_for_run(index: &mut Index, root: &Path, config: &Config) -> Result<usize> {
+    let classifier = Classifier::new(load_defs(config)?);
+    let root_key = paths::dir_key(root);
+    let all = index.files_under(&root_key)?;
+    let files: Vec<&FileRow> = all.iter().collect();
+    let cancel = super::global_cancel_flag()?;
+    let job = ClassifyJob {
+        root,
+        config,
+        classifier: &classifier,
+        force: false,
+        no_llm: false,
+    };
+    let run = classify_files(index, &job, &files, &cancel)?;
+    for w in &run.warnings {
+        eprintln!("Warnung: {w}");
+    }
+    anyhow::ensure!(!run.aborted, "classify abgebrochen");
+    let summary =
+        Summary::from_records(run.records.values(), config.classify.min_confidence as f32);
+    Ok(summary.review)
+}
+
 pub(super) fn classify_command(args: &ClassifyArgs) -> Result<i32> {
     let target = profile::target(args.path.as_deref(), args.profile.as_deref())?;
     let root = super::resolve_root(&target.root, target.force())?;

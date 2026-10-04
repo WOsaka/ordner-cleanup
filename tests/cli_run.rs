@@ -377,3 +377,49 @@ fn uebersprungen_meldet_erst_bei_wiederholung() {
     assert_eq!(toasts.len(), 1);
     assert!(toasts[0]["title"].as_str().unwrap().contains("wiederholt"));
 }
+
+#[test]
+fn run_mit_classify_klassifiziert_zwischen_scan_und_bericht_und_meldet_zum_pruefen() {
+    use ordner_cleanup::content::extract::pdf::testing::pdf_with_pages;
+    let home = tempfile::tempdir().unwrap();
+    let tree = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tree.path().join("unsicher.pdf"),
+        pdf_with_pages(&["Brief wegen der Rechnung von letzter Woche"], None, None),
+    )
+    .unwrap();
+    std::fs::write(
+        tree.path().join("sicher.pdf"),
+        pdf_with_pages(
+            &["Rechnung Rechnungsnummer: R-1 Rechnungsdatum: 30.09.2026 Zahlungsziel 14 Tage Gesamtbetrag: 5,00 EUR"],
+            None,
+            None,
+        ),
+    )
+    .unwrap();
+    write_config(
+        home.path(),
+        &format!(
+            "[classify]\nocr = false\n\n{}",
+            profile_config(tree.path(), "classify = true")
+        ),
+    );
+    bin(home.path())
+        .args(["run", "--profile", "t"])
+        .assert()
+        .success();
+    let log = log_of(home.path());
+    assert_eq!(log[0]["status"], "ok", "{log:?}");
+    assert_eq!(log[0]["review"], 1);
+    let html = latest_html(home.path());
+    assert!(
+        html.contains("review_total"),
+        "Abschnitt Inhalte im Bericht"
+    );
+    // zweiter Lauf: gleiche Zahl, keine neue Meldung nötig, aber classify liest aus dem Cache
+    bin(home.path())
+        .args(["run", "--profile", "t"])
+        .assert()
+        .success();
+    assert_eq!(log_of(home.path())[1]["review"], 1);
+}

@@ -58,6 +58,9 @@ pub struct RunRecord {
     pub plans: Vec<PlanRecord>,
     pub errors: Vec<String>,
     pub notified: bool,
+    /// Dateien „zum Prüfen“ nach `classify` (nur Profile mit `classify = true`)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<usize>,
 }
 
 impl RunRecord {
@@ -145,6 +148,7 @@ mod tests {
             }],
             errors: vec![],
             notified: false,
+            review: None,
         }
     }
 
