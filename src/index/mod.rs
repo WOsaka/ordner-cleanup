@@ -223,7 +223,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("index.db");
         v1_database(&path);
-        let mut idx = Index::open(&path).unwrap();
+        let idx = Index::open(&path).unwrap();
         let v: String = idx
             .conn()
             .query_row(
