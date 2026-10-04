@@ -91,3 +91,17 @@ fn der_worker_exit_code_ist_null_trotz_pdf_rendering() {
     assert_eq!(out.status.code(), Some(0), "{:?}", out);
     assert!(String::from_utf8_lossy(&out.stdout).contains("\"result\":\"ok\""));
 }
+
+#[test]
+fn cloud_platzhalter_und_fehlende_datei_werden_nicht_gelesen() {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::SetFileAttributesW;
+    let Some(ocr) = german() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("scan.pdf");
+    std::fs::write(&file, scanned_pdf(FIXTURE, 1600, 700)).unwrap();
+    let wide: Vec<u16> = file.as_os_str().encode_wide().chain(Some(0)).collect();
+    // FILE_ATTRIBUTE_OFFLINE: wie ein Cloud-Platzhalter
+    assert_ne!(unsafe { SetFileAttributesW(wide.as_ptr(), 0x1000) }, 0);
+    assert!(matches!(ocr.pdf(&file, 3), Err(OcrError::Unavailable(_))));
+}

@@ -481,65 +481,6 @@ mod tests {
         assert!(!tag_matches("de-DE", "d"));
     }
 
-    #[test]
-    fn fehlendes_sprachpaket_ist_ein_klarer_fehler() {
-        let ocr = WinOcr::new(vec!["xx-zz".into()]);
-        assert!(ocr.languages().is_empty());
-        let dir = tempfile::tempdir().unwrap();
-        let f = dir.path().join("a.png");
-        std::fs::write(&f, b"x").unwrap();
-        assert_eq!(ocr.image(&f), Err(OcrError::NoLanguage));
-    }
-
-    const FIXTURE: &[u8] = include_bytes!("../../tests/fixtures/content/rechnung-scan.jpg");
-
-    /// `None` (mit Hinweis), wenn das deutsche Sprachpaket fehlt.
-    fn german() -> Option<WinOcr> {
-        let ocr = WinOcr::new(vec!["de".into()]);
-        if ocr.languages().is_empty() {
-            eprintln!(
-                "OCR-Test übersprungen: kein deutsches OCR-Sprachpaket ({}). Installiert: {:?}",
-                crate::content::ocr::NO_LANGUAGE_HINT,
-                WinOcr::available_languages()
-            );
-            return None;
-        }
-        Some(ocr)
-    }
-
-    #[test]
-    fn liest_ein_bild_scan() {
-        let Some(ocr) = german() else { return };
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("scan.jpg");
-        std::fs::write(&file, FIXTURE).unwrap();
-        let out = ocr.image(&file).unwrap();
-        let text = out.text.to_lowercase();
-        assert!(text.contains("rechnung"), "{text:?}");
-        assert!(text.contains("4711"), "{text:?}");
-        assert!(text.contains("119,00"), "{text:?}");
-        assert_eq!(out.pages, 1);
-    }
-
-    #[test]
-    fn kaputte_dateien_sind_corrupt_kein_absturz() {
-        let Some(ocr) = german() else { return };
-        let dir = tempfile::tempdir().unwrap();
-        let bad = dir.path().join("bad.jpg");
-        std::fs::write(&bad, b"das ist kein bild").unwrap();
-        assert_eq!(ocr.image(&bad), Err(OcrError::Corrupt));
-    }
-
-    #[test]
-    fn cloud_platzhalter_wird_nicht_gelesen() {
-        use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::Storage::FileSystem::SetFileAttributesW;
-        let Some(ocr) = german() else { return };
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("a.jpg");
-        std::fs::write(&file, FIXTURE).unwrap();
-        let wide: Vec<u16> = file.as_os_str().encode_wide().chain(Some(0)).collect();
-        assert_ne!(unsafe { SetFileAttributesW(wide.as_ptr(), 0x1000) }, 0);
-        assert!(matches!(ocr.image(&file), Err(OcrError::Unavailable(_))));
-    }
+    // OCR-Tests mit echter WinRT-Engine laufen nur in Hilfsprozessen (tests/ocr_worker.rs und
+    // tests/cli_classify.rs): WinRT im Testprozess stürzt auf manchen Systemen beim Beenden ab.
 }
