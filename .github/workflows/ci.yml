@@ -19,7 +19,8 @@ jobs:
       - name: Keine Netzwerk-Crates
         shell: pwsh
         run: |
-          $hits = cargo tree -e normal --prefix none | Select-String -Pattern '^(reqwest|hyper|ureq|curl)\b'
+          # ureq ist erlaubt: nur für das lokale LLM (Loopback, ohne TLS, siehe content/llm.rs)
+          $hits = cargo tree -e normal --prefix none | Select-String -Pattern '^(reqwest|hyper|curl|isahc|attohttpc|rustls|native-tls|openssl)\b'
           if ($hits) { $hits; exit 1 }
       - run: cargo build --release
       - uses: actions/upload-artifact@v4
