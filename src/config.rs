@@ -5,6 +5,7 @@ use serde::Deserialize;
 
 use crate::analysis::age::parse_old_after;
 use crate::cli::{ReportArgs, ScanArgs};
+use crate::health::Weights;
 
 /// Eingebaute Kategorien von `plan junk`; eigene Regeln dürfen diese Namen nicht verwenden.
 pub const BUILTIN_JUNK_CATEGORIES: [&str; 4] = ["system", "temp", "downloads", "installer"];
@@ -22,6 +23,13 @@ pub struct JunkRule {
     /// Nur Dateien direkt in diesen Ordnern; leer = überall.
     #[serde(default)]
     pub dirs: Vec<String>,
+}
+
+/// `[health]` in der Config.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HealthConfig {
+    pub weights: Weights,
 }
 
 /// Inhalt der `config.toml`; alle Felder sind optional.
@@ -50,6 +58,7 @@ pub struct Config {
     pub onedrive_max_move_bytes: String,
     /// Regeldatei für `plan rules`; ohne Angabe `rules.toml` neben der Config.
     pub rules_file: Option<String>,
+    pub health: HealthConfig,
 }
 
 const DEFAULT_INSTALLER_MIN_AGE_DAYS: i64 = 90;
@@ -80,6 +89,7 @@ impl Default for Config {
             onedrive_max_move_files: 1000,
             onedrive_max_move_bytes: "5GB".to_string(),
             rules_file: None,
+            health: HealthConfig::default(),
         }
     }
 }
@@ -388,6 +398,28 @@ patterns = ["*.dmp"]
                 "{text}: Fehlertext nennt {needle} nicht: {err:#}"
             );
         }
+    }
+
+    #[test]
+    fn health_gewichte_defaults_und_einzelwerte() {
+        assert_eq!(Config::default().health.weights.duplicates, 25);
+        let c = Config::parse(
+            "[health.weights]
+junk = 0
+template = 5",
+        )
+        .unwrap();
+        assert_eq!(c.health.weights.junk, 0);
+        assert_eq!(c.health.weights.template, 5);
+        assert_eq!(
+            c.health.weights.duplicates, 25,
+            "nicht genannte bleiben Default"
+        );
+        assert!(Config::parse(
+            "[health.weights]
+muell = 1"
+        )
+        .is_err());
     }
 
     #[test]

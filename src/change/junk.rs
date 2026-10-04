@@ -138,10 +138,7 @@ impl JunkClassifier {
     /// Kategorie einer Datei nach Name und Ordner, ohne Mindestalter.
     fn matching(&self, name: &str, dir_key: &str) -> Option<&Category> {
         self.categories.iter().find(|c| {
-            c.names.is_match(name)
-                && c.only_in
-                    .as_ref()
-                    .is_none_or(|dirs| dirs.contains(dir_key))
+            c.names.is_match(name) && c.only_in.as_ref().is_none_or(|dirs| dirs.contains(dir_key))
         })
     }
 

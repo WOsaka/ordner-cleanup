@@ -11,34 +11,34 @@ use crate::index::Index;
 use crate::paths;
 use crate::platform::FileAttrs;
 
-pub(crate) struct FRow {
-    pub(crate) path: String,
-    pub(crate) dir_key: String,
-    pub(crate) name: String,
-    pub(crate) ext: Option<String>,
-    pub(crate) size: u64,
-    pub(crate) mtime: i64,
-    pub(crate) attrs: FileAttrs,
-    pub(crate) cloud: bool,
-    pub(crate) is_link: bool,
-    pub(crate) full_hash: Option<Vec<u8>>,
+pub struct FRow {
+    pub path: String,
+    pub dir_key: String,
+    pub name: String,
+    pub ext: Option<String>,
+    pub size: u64,
+    pub mtime: i64,
+    pub attrs: FileAttrs,
+    pub cloud: bool,
+    pub is_link: bool,
+    pub full_hash: Option<Vec<u8>>,
     /// Größe zählt in Summen (Hardlink-Geschwister zählen nur einmal)
-    pub(crate) counted: bool,
+    pub counted: bool,
 }
 
-pub(crate) struct DRow {
-    pub(crate) path: String,
-    pub(crate) key: String,
-    pub(crate) parent: Option<String>,
-    pub(crate) depth: i64,
-    pub(crate) summary: bool,
-    pub(crate) is_link: bool,
-    pub(crate) direct_entries: u64,
-    pub(crate) summary_size: u64,
-    pub(crate) summary_files: u64,
+pub struct DRow {
+    pub path: String,
+    pub key: String,
+    pub parent: Option<String>,
+    pub depth: i64,
+    pub summary: bool,
+    pub is_link: bool,
+    pub direct_entries: u64,
+    pub summary_size: u64,
+    pub summary_files: u64,
 }
 
-pub(crate) fn load_files(index: &Index, dir_key: &str) -> Result<Vec<FRow>> {
+pub fn load_files(index: &Index, dir_key: &str) -> Result<Vec<FRow>> {
     let (lo, hi) = paths::prefix_range(dir_key);
     let mut stmt = index.conn().prepare(
         "SELECT path, dir_key, name, ext, size, mtime, attrs, cloud_only, is_link,
@@ -78,7 +78,7 @@ pub(crate) fn load_files(index: &Index, dir_key: &str) -> Result<Vec<FRow>> {
     Ok(out)
 }
 
-pub(crate) fn load_dirs(index: &Index, dir_key: &str) -> Result<Vec<DRow>> {
+pub fn load_dirs(index: &Index, dir_key: &str) -> Result<Vec<DRow>> {
     let (lo, hi) = paths::prefix_range(dir_key);
     let mut stmt = index.conn().prepare(
         "SELECT path, path_key, parent_key, depth, mode, is_link, direct_entries,
@@ -101,7 +101,7 @@ pub(crate) fn load_dirs(index: &Index, dir_key: &str) -> Result<Vec<DRow>> {
     Ok(rows.collect::<std::result::Result<_, _>>()?)
 }
 
-pub(crate) fn load_errors(index: &Index, dir_key: &str) -> Result<Vec<ErrorItem>> {
+pub fn load_errors(index: &Index, dir_key: &str) -> Result<Vec<ErrorItem>> {
     let (lo, hi) = paths::prefix_range(dir_key);
     let mut stmt = index
         .conn()

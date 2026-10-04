@@ -3,6 +3,7 @@ pub mod app;
 pub mod change;
 pub mod cli;
 pub mod config;
+pub mod health;
 pub mod index;
 pub mod paths;
 pub mod platform;
