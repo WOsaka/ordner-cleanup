@@ -1,6 +1,6 @@
 ---
 title: "Laufender Betrieb: Verlauf, Health-Score, geplante Läufe, Profile, Vorlagen (Phase 5)"
-status: approved       # draft | approved | implemented
+status: implemented    # draft | approved | implemented
 created: 2026-10-04
 updated: 2026-10-04
 ---
@@ -154,3 +154,19 @@ Größe, Dateien, Ordner, Cloud-only-Anteil (Dateien/Bytes), Müll (Anzahl/Bytes
 - **Berichtsdatei:** `run` schreibt nur die HTML-Datei (`<Zeitstempel>.html`, dazu `latest.html`); JSON und CSV gibt es weiter über `report`.
 - **Lauf-Protokoll:** `runs\<profil>.jsonl` kennt zusätzlich den Status `partial` (Scan mit Warnungen oder gescheiterter Plan, Exit-Code 2).
 - **Formeln:** siehe README, Abschnitt „Verlauf und Health-Score“.
+
+## Manueller Test (2026-10-04)
+
+Profil `downloads` (Wurzel Downloads, `template = "para"`), Aufgabe per `schedule add --profile downloads --daily 16:35`, Release-Build.
+
+| Prüfung | Ergebnis |
+|---|---|
+| Aufgabe startet zur Zeit und führt `run` aus | bestanden (`schedule list`: „ok, Score 47“) |
+| Toast erscheint | bestanden |
+| Klick auf den Toast öffnet den Bericht | bestanden |
+| `schedule list`, `schedule remove` | bestanden, Aufgabe entfernt |
+
+Nicht geprüft:
+- **Kein Konsolenfenster beim Start durch die Aufgabenplanung:** nicht ausdrücklich beobachtet; belegt nur durch den PE-Subsystem-Test.
+- **Akku-Verhalten** und **Nachholen nach Ausschalten.**
+- **Zweiter Lauf** (Verlauf mit Veränderung zum Vortag).
