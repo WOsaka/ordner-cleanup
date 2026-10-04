@@ -11,7 +11,7 @@ use crate::analysis::structure::Thresholds;
 use crate::change::junk::{JunkClassifier, JunkOptions};
 use crate::config::Config;
 use crate::index::Index;
-use crate::report::rows::{load_dirs, load_errors, load_files};
+use crate::report::rows::{load_dirs, load_errors, load_files_with};
 use crate::report::ReportRoot;
 use crate::template::check::{check, CheckResult};
 use crate::template::Template;
@@ -33,7 +33,7 @@ pub struct Collected {
 
 pub fn collect(index: &Index, root: &ReportRoot, env: &CollectEnv) -> Result<Collected> {
     let config = env.config;
-    let files = load_files(index, &root.dir_key)?;
+    let files = load_files_with(index, &root.dir_key, false)?;
     let dirs = load_dirs(index, &root.dir_key)?;
     let errors = load_errors(index, &root.dir_key)?;
     let dups = index.exact_duplicate_groups(&root.dir_key)?;

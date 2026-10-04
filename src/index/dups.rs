@@ -126,6 +126,11 @@ impl Index {
             "SELECT path, size, mtime, full_hash, volume_serial, file_index, nlinks FROM files
              WHERE path_key >= ?1 AND path_key < ?2 AND full_hash IS NOT NULL
                AND hash_status = 'ok' AND cloud_only = 0 AND is_link = 0
+               AND (size, full_hash) IN (
+                   SELECT size, full_hash FROM files
+                   WHERE path_key >= ?1 AND path_key < ?2 AND full_hash IS NOT NULL
+                     AND hash_status = 'ok' AND cloud_only = 0 AND is_link = 0
+                   GROUP BY size, full_hash HAVING COUNT(*) > 1)
              ORDER BY path_key",
         )?;
         let mut groups: HashMap<(i64, Vec<u8>), Vec<DupFile>> = HashMap::new();

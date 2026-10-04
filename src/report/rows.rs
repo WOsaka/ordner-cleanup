@@ -39,12 +39,18 @@ pub struct DRow {
 }
 
 pub fn load_files(index: &Index, dir_key: &str) -> Result<Vec<FRow>> {
+    load_files_with(index, dir_key, true)
+}
+
+/// Wie [`load_files`]; ohne `with_hash` bleibt `full_hash` leer (die Kennzahlen brauchen ihn nicht).
+pub fn load_files_with(index: &Index, dir_key: &str, with_hash: bool) -> Result<Vec<FRow>> {
     let (lo, hi) = paths::prefix_range(dir_key);
-    let mut stmt = index.conn().prepare(
+    let hash_column = if with_hash { "full_hash" } else { "NULL" };
+    let mut stmt = index.conn().prepare(&format!(
         "SELECT path, dir_key, name, ext, size, mtime, attrs, cloud_only, is_link,
-                volume_serial, file_index, full_hash
-         FROM files WHERE path_key >= ?1 AND path_key < ?2 ORDER BY path_key",
-    )?;
+                volume_serial, file_index, {hash_column}
+         FROM files WHERE path_key >= ?1 AND path_key < ?2 ORDER BY path_key"
+    ))?;
     let mut seen: HashSet<(i64, i64)> = HashSet::new();
     let rows = stmt.query_map(params![lo, hi], |r| {
         let volume: Option<i64> = r.get(9)?;

@@ -10,6 +10,7 @@ pub mod score;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::age;
@@ -158,44 +159,56 @@ pub fn compute(rows: &Rows, dups: &[DupGroup], root: &ReportRoot, ctx: &MetricsC
 
     let real_files: Vec<&FRow> = rows.files.iter().filter(|f| !f.is_link).collect();
 
-    // --- Dateien ---
-    for f in &real_files {
-        let m = acc.entry(bucket_of(root_key, &f.dir_key)).or_default();
-        m.files += 1;
-        if f.counted {
-            m.size += f.size;
-            if !f.cloud {
-                m.local_bytes += f.size;
-            }
-        }
-        if f.cloud {
-            m.cloud_files += 1;
+    // --- Dateien (parallel: je Thread eine Teilsumme, danach zusammenführen) ---
+    let file_acc: BTreeMap<String, Metrics> = real_files
+        .par_iter()
+        .fold(BTreeMap::new, |mut acc: BTreeMap<String, Metrics>, f| {
+            let m = acc.entry(bucket_of(root_key, &f.dir_key)).or_default();
+            m.files += 1;
             if f.counted {
-                m.cloud_bytes += f.size;
+                m.size += f.size;
+                if !f.cloud {
+                    m.local_bytes += f.size;
+                }
             }
-        } else if ctx
-            .junk
-            .classify(&f.name, &f.dir_key, f.mtime, ctx.now_ticks)
-            .is_some()
-        {
-            m.junk_files += 1;
-            if f.counted {
-                m.junk_bytes += f.size;
+            if f.cloud {
+                m.cloud_files += 1;
+                if f.counted {
+                    m.cloud_bytes += f.size;
+                }
+            } else if ctx
+                .junk
+                .classify(&f.name, &f.dir_key, f.mtime, ctx.now_ticks)
+                .is_some()
+            {
+                m.junk_files += 1;
+                if f.counted {
+                    m.junk_bytes += f.size;
+                }
             }
-        }
-        let found = problems::check_file(&f.name, &f.path, f.size, ctx.problem_ctx);
-        if !found.is_empty() {
-            m.problem_files += 1;
-            for p in &found {
-                *m.problems_by_kind.entry(p.key().to_string()).or_default() += 1;
+            let found = problems::check_file(&f.name, &f.path, f.size, ctx.problem_ctx);
+            if !found.is_empty() {
+                m.problem_files += 1;
+                for p in &found {
+                    *m.problems_by_kind.entry(p.key().to_string()).or_default() += 1;
+                }
             }
-        }
-        if f.counted
-            && !paths::is_under(&f.dir_key, &archive)
-            && age::is_old(f.mtime, ctx.now_ticks, ctx.old_after_days)
-        {
-            m.old_bytes += f.size;
-        }
+            if f.counted
+                && !paths::is_under(&f.dir_key, &archive)
+                && age::is_old(f.mtime, ctx.now_ticks, ctx.old_after_days)
+            {
+                m.old_bytes += f.size;
+            }
+            acc
+        })
+        .reduce(BTreeMap::new, |mut a, b| {
+            for (bucket, m) in b {
+                a.entry(bucket).or_default().add(&m);
+            }
+            a
+        });
+    for (bucket, m) in file_acc {
+        acc.entry(bucket).or_default().add(&m);
     }
 
     // --- Ordner ---
@@ -241,17 +254,19 @@ pub fn compute(rows: &Rows, dups: &[DupGroup], root: &ReportRoot, ctx: &MetricsC
             per_dir.entry(f.dir_key.as_str()).or_default().push(f);
         }
     }
-    for (dir_key, members) in &per_dir {
-        let names: Vec<&str> = members.iter().map(|f| f.name.as_str()).collect();
-        let excess: u64 = similar::group_similar(&names)
-            .iter()
-            .map(|g| g.len().saturating_sub(1) as u64)
-            .sum();
-        if excess > 0 {
-            acc.entry(bucket_of(root_key, dir_key))
-                .or_default()
-                .version_excess += excess;
-        }
+    let excess: Vec<(String, u64)> = per_dir
+        .par_iter()
+        .filter_map(|(dir_key, members)| {
+            let names: Vec<&str> = members.iter().map(|f| f.name.as_str()).collect();
+            let excess: u64 = similar::group_similar(&names)
+                .iter()
+                .map(|g| g.len().saturating_sub(1) as u64)
+                .sum();
+            (excess > 0).then(|| (bucket_of(root_key, dir_key), excess))
+        })
+        .collect();
+    for (bucket, excess) in excess {
+        acc.entry(bucket).or_default().version_excess += excess;
     }
 
     // --- Duplikate: jede weitere Instanz zählt in ihrem Ordner als verschwendet ---
