@@ -41,6 +41,7 @@ mod history;
 mod plan;
 mod profile;
 mod run;
+mod schedule;
 mod snapshot;
 
 /// Führt den Befehl aus und liefert den Exit-Code (0 OK, 2 OK mit Teilfehlern).
@@ -51,6 +52,7 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::History(args) => history_command(&args),
         Command::Profiles => profile::profiles_command(),
         Command::Run(args) => run::run_command(&args),
+        Command::Schedule(cmd) => schedule::schedule_command(&cmd),
         Command::Index(cmd) => index_command(&cmd),
         Command::Plan(PlanCommand::Dedupe(args)) => plan::plan_dedupe_command(&args),
         Command::Plan(PlanCommand::Junk(args)) => plan::plan_junk_command(&args),

@@ -210,3 +210,87 @@ fn profiles_ohne_profile_erklaert_die_config() {
 }
 
 use predicates::prelude::PredicateBooleanExt;
+
+// ------------------------------------------------------------- schedule
+
+fn schedule_bin(home: &Path) -> Command {
+    bin(home)
+}
+
+#[test]
+fn schedule_add_prueft_die_argumente_vor_jedem_eingriff() {
+    let home = tempfile::tempdir().unwrap();
+    let tree = tempfile::tempdir().unwrap();
+    write_config(home.path(), &profile_config(tree.path(), ""));
+    // weder --weekly noch --daily
+    schedule_bin(home.path())
+        .args(["schedule", "add", "--profile", "t"])
+        .assert()
+        .failure()
+        .stderr(contains("--weekly").or(contains("--daily")));
+    // --weekly braucht Wochentag und Uhrzeit
+    schedule_bin(home.path())
+        .args(["schedule", "add", "--profile", "t", "--weekly", "MO"])
+        .assert()
+        .failure();
+    // beides zusammen
+    schedule_bin(home.path())
+        .args([
+            "schedule",
+            "add",
+            "--profile",
+            "t",
+            "--weekly",
+            "MO",
+            "09:00",
+            "--daily",
+            "09:00",
+        ])
+        .assert()
+        .failure();
+    // ungültige Uhrzeit bzw. Wochentag
+    schedule_bin(home.path())
+        .args(["schedule", "add", "--profile", "t", "--daily", "25:00"])
+        .assert()
+        .code(1)
+        .stderr(contains("ungültige Uhrzeit"));
+    schedule_bin(home.path())
+        .args([
+            "schedule",
+            "add",
+            "--profile",
+            "t",
+            "--weekly",
+            "XX",
+            "09:00",
+        ])
+        .assert()
+        .code(1)
+        .stderr(contains("ungültiger Wochentag"));
+    // unbekanntes Profil nennt die vorhandenen
+    schedule_bin(home.path())
+        .args(["schedule", "add", "--profile", "nope", "--daily", "09:00"])
+        .assert()
+        .code(1)
+        .stderr(contains("Unbekanntes Profil 'nope'").and(contains("Vorhandene Profile: t")));
+}
+
+#[test]
+fn schedule_list_ohne_aufgaben_erklaert_das_anlegen() {
+    let home = tempfile::tempdir().unwrap();
+    schedule_bin(home.path())
+        .args(["schedule", "list"])
+        .assert()
+        .success()
+        .stdout(contains("Keine geplanten Läufe"));
+}
+
+#[test]
+fn schedule_remove_ohne_aufgabe_meldet_das() {
+    let home = tempfile::tempdir().unwrap();
+    schedule_bin(home.path())
+        .args(["schedule", "remove", "--profile", "gibt-es-nicht-oc-test"])
+        .assert()
+        .code(1)
+        .stdout(contains("keine Aufgabe"));
+}

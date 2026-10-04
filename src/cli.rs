@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgGroup, Args, Parser, Subcommand};
 
 use crate::change::dedupe::KeepStrategy;
 use crate::change::RunId;
@@ -26,6 +26,9 @@ pub enum Command {
     History(HistoryArgs),
     /// Geplanter Lauf: Scan, Momentaufnahme, Bericht und Pläne eines Profils (nie `apply`)
     Run(RunArgs),
+    /// Geplante Läufe in der Windows-Aufgabenplanung verwalten
+    #[command(subcommand)]
+    Schedule(ScheduleCommand),
     /// Profile aus der Config mit Wurzel, letztem Stand und Score auflisten
     Profiles,
     /// Gescannte Wurzeln im Index verwalten
@@ -42,6 +45,37 @@ pub enum Command {
     Runs(RunsArgs),
     /// Abgelaufene Quarantäne-Läufe endgültig löschen
     Purge(PurgeArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ScheduleCommand {
+    /// Aufgabe für ein Profil anlegen oder ersetzen
+    Add(ScheduleAddArgs),
+    /// Aufgaben mit nächstem und letztem Lauf anzeigen
+    List,
+    /// Aufgabe eines Profils entfernen
+    Remove(ScheduleRemoveArgs),
+}
+
+#[derive(Debug, Args)]
+#[command(group(ArgGroup::new("when").required(true).args(["weekly", "daily"])))]
+pub struct ScheduleAddArgs {
+    /// Profil aus der Config
+    #[arg(long)]
+    pub profile: String,
+    /// Wöchentlich, z. B. `--weekly MO 09:00` (MO DI MI DO FR SA SO)
+    #[arg(long, num_args = 2, value_names = ["WOCHENTAG", "UHRZEIT"])]
+    pub weekly: Option<Vec<String>>,
+    /// Täglich, z. B. `--daily 09:00`
+    #[arg(long, value_name = "UHRZEIT")]
+    pub daily: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ScheduleRemoveArgs {
+    /// Profil aus der Config
+    #[arg(long)]
+    pub profile: String,
 }
 
 #[derive(Debug, Args)]

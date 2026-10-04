@@ -13,3 +13,4 @@ pub mod report;
 pub mod rules;
 pub mod runlog;
 pub mod scan;
+pub mod schedule;
