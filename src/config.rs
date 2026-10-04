@@ -71,6 +71,12 @@ pub struct Profile {
     pub max_depth_warning: Option<usize>,
     pub huge_dir_entries: Option<usize>,
     pub threads: Option<usize>,
+    /// `run` führt nach dem Scan `classify` aus (Phase 6a)
+    pub classify: Option<bool>,
+    /// Überschreibt `[llm] enabled` für dieses Profil
+    pub llm: Option<bool>,
+    /// Kategorie-Datei dieses Profils, relativ zum Config-Ordner
+    pub categories_file: Option<String>,
 }
 
 /// `[notify]`: wann `run --notify` eine Benachrichtigung zeigt.
@@ -89,6 +95,172 @@ impl Default for NotifyConfig {
             score_drop: 5,
             score_below: 60,
         }
+    }
+}
+
+/// `[classify]`: inhaltsbasierte Klassifikation (Phase 6a).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ClassifyConfig {
+    /// Kategorie-Datei, relativ zum Config-Ordner; ohne Angabe `categories.toml` daneben
+    /// (fehlt die Datei, gelten nur die eingebauten Kategorien).
+    pub categories_file: Option<String>,
+    pub min_confidence: f64,
+    pub max_file_size: String,
+    pub ocr: bool,
+    pub ocr_languages: Vec<String>,
+    pub ocr_max_pages: usize,
+    /// Bilder, die per OCR gelesen werden, auch wenn sie Kamera-EXIF haben (Globs auf den Pfad
+    /// relativ zur Wurzel)
+    pub ocr_image_globs: Vec<String>,
+    pub cache_ocr_text: bool,
+    pub max_text_chars: usize,
+    /// 0 = halbe Kernanzahl
+    pub threads: usize,
+}
+
+impl Default for ClassifyConfig {
+    fn default() -> Self {
+        Self {
+            categories_file: None,
+            min_confidence: 0.8,
+            max_file_size: "100MB".into(),
+            ocr: true,
+            ocr_languages: vec!["de".into(), "en".into()],
+            ocr_max_pages: 5,
+            ocr_image_globs: ["**/Scans/**", "**/*scan*", "**/*dokument*"]
+                .map(String::from)
+                .to_vec(),
+            cache_ocr_text: true,
+            max_text_chars: 200_000,
+            threads: 0,
+        }
+    }
+}
+
+impl ClassifyConfig {
+    pub fn max_file_size_bytes(&self) -> u64 {
+        parse_bytes(&self.max_file_size).unwrap_or(100_000_000)
+    }
+
+    /// Anzahl Threads für `classify`: `threads`, sonst die halbe Kernanzahl (mindestens 1).
+    pub fn worker_threads(&self) -> usize {
+        if self.threads > 0 {
+            self.threads
+        } else {
+            std::thread::available_parallelism().map_or(1, |n| (n.get() / 2).max(1))
+        }
+    }
+
+    fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            (0.0..=1.0).contains(&self.min_confidence),
+            "classify.min_confidence muss zwischen 0 und 1 liegen"
+        );
+        anyhow::ensure!(
+            parse_bytes(&self.max_file_size).is_some(),
+            "classify.max_file_size: ungültige Größe '{}' (erwartet z. B. 100MB)",
+            self.max_file_size
+        );
+        anyhow::ensure!(
+            self.ocr_max_pages >= 1,
+            "classify.ocr_max_pages muss mindestens 1 sein"
+        );
+        anyhow::ensure!(
+            self.max_text_chars >= 1000,
+            "classify.max_text_chars muss mindestens 1000 sein"
+        );
+        for glob in &self.ocr_image_globs {
+            globset::Glob::new(glob).map_err(|e| {
+                anyhow::anyhow!("classify.ocr_image_globs: ungültiger Glob '{glob}' ({e})")
+            })?;
+        }
+        Ok(())
+    }
+}
+
+/// Aufgaben, die das lokale LLM übernehmen darf.
+pub const LLM_TASKS: [&str; 3] = ["category", "fields", "title"];
+
+/// `[llm]`: optionales lokales LLM (Ollama auf Loopback).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LlmConfig {
+    pub enabled: bool,
+    pub endpoint: String,
+    pub model: String,
+    pub timeout: String,
+    pub max_input_chars: usize,
+    pub tasks: Vec<String>,
+    pub max_confidence: f64,
+}
+
+impl Default for LlmConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: "http://127.0.0.1:11434".into(),
+            model: "qwen2.5:7b".into(),
+            timeout: "60s".into(),
+            max_input_chars: 6000,
+            tasks: LLM_TASKS.map(String::from).to_vec(),
+            max_confidence: 0.85,
+        }
+    }
+}
+
+/// `60s`, `2m`, `1h` → Sekunden.
+pub fn parse_duration_secs(text: &str) -> Option<u64> {
+    let text = text.trim();
+    let split = text.find(|c: char| !c.is_ascii_digit())?;
+    let (digits, unit) = text.split_at(split);
+    let n: u64 = digits.parse().ok().filter(|n| *n > 0)?;
+    let factor = match unit {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3600,
+        _ => return None,
+    };
+    n.checked_mul(factor)
+}
+
+impl LlmConfig {
+    pub fn timeout_secs(&self) -> u64 {
+        parse_duration_secs(&self.timeout).unwrap_or(60)
+    }
+
+    pub fn has_task(&self, task: &str) -> bool {
+        self.tasks.iter().any(|t| t == task)
+    }
+
+    fn validate(&self) -> Result<()> {
+        crate::content::llm::check_endpoint(&self.endpoint)
+            .map_err(|e| anyhow::anyhow!("llm.endpoint: {e}"))?;
+        anyhow::ensure!(
+            !self.model.trim().is_empty(),
+            "llm.model darf nicht leer sein"
+        );
+        anyhow::ensure!(
+            parse_duration_secs(&self.timeout).is_some(),
+            "llm.timeout: ungültige Dauer '{}' (erwartet z. B. 60s, 2m)",
+            self.timeout
+        );
+        anyhow::ensure!(
+            self.max_input_chars >= 200,
+            "llm.max_input_chars muss mindestens 200 sein"
+        );
+        anyhow::ensure!(
+            (0.0..=1.0).contains(&self.max_confidence),
+            "llm.max_confidence muss zwischen 0 und 1 liegen"
+        );
+        for task in &self.tasks {
+            anyhow::ensure!(
+                LLM_TASKS.contains(&task.as_str()),
+                "llm.tasks: unbekannte Aufgabe '{task}' (erlaubt: {})",
+                LLM_TASKS.join(", ")
+            );
+        }
+        Ok(())
     }
 }
 
@@ -127,6 +299,8 @@ pub struct Config {
     pub rules_file: Option<String>,
     pub health: HealthConfig,
     pub notify: NotifyConfig,
+    pub classify: ClassifyConfig,
+    pub llm: LlmConfig,
     /// Wie viele Berichte und Pläne je Profil `run` aufbewahrt
     pub reports_keep: usize,
     pub profiles: BTreeMap<String, Profile>,
@@ -162,6 +336,8 @@ impl Default for Config {
             rules_file: None,
             health: HealthConfig::default(),
             notify: NotifyConfig::default(),
+            classify: ClassifyConfig::default(),
+            llm: LlmConfig::default(),
             reports_keep: 12,
             profiles: BTreeMap::new(),
         }
@@ -206,6 +382,8 @@ impl Config {
             "reports_keep muss mindestens 1 sein"
         );
         config.validate_cleanup()?;
+        config.classify.validate()?;
+        config.llm.validate()?;
         config.validate_profiles()?;
         Ok(config)
     }
@@ -303,6 +481,12 @@ impl Config {
         );
         if let Some(file) = &p.rules_file {
             c.rules_file = Some(resolve_in(file, config_dir));
+        }
+        if let Some(file) = &p.categories_file {
+            c.classify.categories_file = Some(resolve_in(file, config_dir));
+        }
+        if let Some(enabled) = p.llm {
+            c.llm.enabled = enabled;
         }
         c
     }
@@ -747,5 +931,170 @@ muell = 1",
         });
         assert_eq!(c.old_after, "18m");
         assert_eq!(c.top, 10);
+    }
+
+    #[test]
+    fn classify_und_llm_defaults() {
+        let c = Config::default();
+        assert_eq!(c.classify.min_confidence, 0.8);
+        assert_eq!(c.classify.max_file_size_bytes(), 100_000_000);
+        assert!(c.classify.ocr && c.classify.cache_ocr_text);
+        assert_eq!(c.classify.ocr_languages, vec!["de", "en"]);
+        assert!(!c.llm.enabled);
+        assert_eq!(c.llm.endpoint, "http://127.0.0.1:11434");
+        assert_eq!(c.llm.timeout_secs(), 60);
+        assert!(c.classify.worker_threads() >= 1);
+        Config::parse("").unwrap();
+    }
+
+    #[test]
+    fn classify_und_llm_aus_toml() {
+        let c = Config::parse(
+            "[classify]
+min_confidence = 0.9
+ocr = false
+threads = 3
+
+[llm]
+enabled = true
+model = \"llama3.2:3b\"
+timeout = \"2m\"
+tasks = [\"title\"]
+",
+        )
+        .unwrap();
+        assert_eq!(c.classify.min_confidence, 0.9);
+        assert!(!c.classify.ocr);
+        assert_eq!(c.classify.worker_threads(), 3);
+        assert!(c.llm.enabled && c.llm.has_task("title") && !c.llm.has_task("fields"));
+        assert_eq!(c.llm.timeout_secs(), 120);
+    }
+
+    #[test]
+    fn endpoint_ausserhalb_von_loopback_ist_ein_config_fehler() {
+        let err = Config::parse(
+            "[llm]
+endpoint = \"http://192.168.1.5:11434\"
+",
+        )
+        .unwrap_err();
+        let text = format!("{err:#}");
+        assert!(
+            text.contains("llm.endpoint") && text.contains("Loopback"),
+            "{text}"
+        );
+        assert!(Config::parse(
+            "[llm]
+endpoint = \"http://localhost:11434\"
+"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn ungueltige_classify_und_llm_werte() {
+        for (toml, needle) in [
+            (
+                "[classify]
+min_confidence = 1.5
+",
+                "min_confidence",
+            ),
+            (
+                "[classify]
+max_file_size = \"viel\"
+",
+                "max_file_size",
+            ),
+            (
+                "[classify]
+ocr_max_pages = 0
+",
+                "ocr_max_pages",
+            ),
+            (
+                "[classify]
+max_text_chars = 10
+",
+                "max_text_chars",
+            ),
+            (
+                "[classify]
+ocr_image_globs = [\"[\"]
+",
+                "ocr_image_globs",
+            ),
+            (
+                "[classify]
+bogus = 1
+",
+                "bogus",
+            ),
+            (
+                "[llm]
+timeout = \"schnell\"
+",
+                "llm.timeout",
+            ),
+            (
+                "[llm]
+tasks = [\"raten\"]
+",
+                "llm.tasks",
+            ),
+            (
+                "[llm]
+max_confidence = 2
+",
+                "max_confidence",
+            ),
+            (
+                "[llm]
+max_input_chars = 5
+",
+                "max_input_chars",
+            ),
+            (
+                "[llm]
+model = \" \"
+",
+                "llm.model",
+            ),
+        ] {
+            let err = Config::parse(toml).unwrap_err();
+            assert!(format!("{err:#}").contains(needle), "{toml}: {err:#}");
+        }
+    }
+
+    #[test]
+    fn dauern() {
+        assert_eq!(parse_duration_secs("60s"), Some(60));
+        assert_eq!(parse_duration_secs("2m"), Some(120));
+        assert_eq!(parse_duration_secs("1h"), Some(3600));
+        for bad in ["", "s", "0s", "5", "5x", "-5s", "1.5m"] {
+            assert_eq!(parse_duration_secs(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn profil_uebernimmt_classify_llm_und_kategorien() {
+        let c = Config::parse(
+            "[profiles.scans]
+root = 'C:/Scans'
+classify = true
+llm = true
+categories_file = \"scans-categories.toml\"
+",
+        )
+        .unwrap();
+        let p = c.profile("scans").unwrap();
+        assert_eq!(p.classify, Some(true));
+        let merged = c.with_profile(p, Some(Path::new(r"C:\cfg")));
+        assert!(merged.llm.enabled);
+        assert_eq!(
+            merged.classify.categories_file.as_deref(),
+            Some(r"C:\cfg\scans-categories.toml")
+        );
+        assert!(!c.llm.enabled, "die globale Config bleibt unverändert");
     }
 }
