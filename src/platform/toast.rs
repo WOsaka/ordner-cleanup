@@ -170,12 +170,7 @@ mod tests {
         assert!(xml.contains("&amp;y=2"), "{xml}");
         assert!(!xml.contains("<B>"));
         let mut reader = quick_xml::Reader::from_str(&xml);
-        loop {
-            match reader.read_event().unwrap() {
-                quick_xml::events::Event::Eof => break,
-                _ => {}
-            }
-        }
+        while reader.read_event().unwrap() != quick_xml::events::Event::Eof {}
     }
 
     #[test]
