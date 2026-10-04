@@ -1,7 +1,7 @@
 ---
 title: "Implementation Plan: Regel-Engine & Umbenennen (Phase 4)"
 feature_spec: docs/features/regel-engine-umbenennen.md
-status: pending-approval   # pending-approval | approved | implemented
+status: approved   # pending-approval | approved | implemented
 created: 2026-10-04
 updated: 2026-10-04
 ---
@@ -334,4 +334,7 @@ fn same_file(&self, a: &Path, b: &Path) -> io::Result<bool>;
 - **EXIF und Zeitzone:** EXIF-Zeiten haben keine Zeitzone, die mtime wird lokal umgerechnet. Damit können Datei- und Aufnahmedatum um einen Tag abweichen. Das ist dokumentiertes Verhalten; `OffsetTimeOriginal` bleibt in Phase 4 unberücksichtigt.
 - **EXIF-Parser:** Fremde Bilddaten sind nicht vertrauenswürdig. `kamadak-exif` ist reines Rust, gelesen wird mit Obergrenze, und Fehler gelten als „kein EXIF“. Zusätzlich wird `catch_unwind` um den Parser gelegt, damit ein Panic nie den Lauf beendet.
 - **Zeilennummern bei semantischen Fehlern:** Hängt von `Spanned` in `toml` 0.9 ab (Spike 0c). Rückfall: Angegeben werden Regelname und Position der Regel (n-te `[[rules]]`), ohne Zeile.
-- [ ] Ergebnis der Spikes 0a bis 0c hier eintragen, bevor Schritt 5 beginnt.
+- [x] Ergebnis der Spikes (2026-10-04):
+  - **0a:** `MoveFileExW` ohne `REPLACE_EXISTING` benennt `a.JPG` → `a.jpg` auf NTFS in **einem** Schritt um. `file_identity` ist für beide Schreibweisen gleich. Es gibt also kein `via`/Zwischenschritt; die Spec-Zeile wird angepasst.
+  - **0b:** `kamadak-exif` 0.6.1 liest per `Reader::read_from_container(&mut (BufRead+Seek))` JPEG, PNG, WebP und HEIF. Abgeschnittene Daten liefern `Err(InvalidFormat)`, das wird als „kein EXIF“ behandelt.
+  - **0c:** `toml::Spanned` liefert Byte-Offsets für jedes Element von `[[rules]]`. Fehler wegen unbekannter Schlüssel tragen einen Span innerhalb der Regel; Syntaxfehler haben ebenfalls einen Span. Zeilen werden aus dem Offset berechnet.

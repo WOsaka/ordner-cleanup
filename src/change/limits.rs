@@ -71,6 +71,7 @@ mod tests {
             target: None,
             is_dir: false,
             files: None,
+            rule: None,
         }
     }
 

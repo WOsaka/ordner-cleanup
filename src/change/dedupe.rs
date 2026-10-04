@@ -178,6 +178,7 @@ pub fn plan_dedupe(
                     target: None,
                     is_dir: false,
                     files: None,
+                    rule: None,
                 },
             ));
         }

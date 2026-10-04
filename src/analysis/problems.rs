@@ -98,6 +98,14 @@ fn is_reserved(name: &str) -> bool {
     })
 }
 
+/// Erstes Namensproblem, das einen Namen unter Windows/OneDrive unbrauchbar macht (ungültige
+/// Zeichen, reservierter Name, Leerzeichen oder Punkt am Rand); `None`, wenn der Name taugt.
+pub fn name_issue(name: &str) -> Option<Problem> {
+    let mut found = Vec::new();
+    name_problems(name, "", &mut found);
+    found.into_iter().next()
+}
+
 fn name_problems(name: &str, path: &str, out: &mut Vec<Problem>) {
     if path.chars().count() > MAX_PATH_CHARS {
         out.push(Problem::PathTooLong);
@@ -181,6 +189,19 @@ pub fn check_dir(name: &str, path: &str) -> Vec<Problem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn name_issue_meldet_das_erste_problem_oder_nichts() {
+        assert_eq!(name_issue("Rechnung 2026.pdf"), None);
+        assert_eq!(name_issue("a<b.txt"), Some(Problem::InvalidChars));
+        assert_eq!(name_issue("tab	name"), Some(Problem::InvalidChars));
+        assert_eq!(name_issue("CON.txt"), Some(Problem::ReservedName));
+        assert_eq!(name_issue("name."), Some(Problem::TrailingDot));
+        assert_eq!(name_issue(" name"), Some(Problem::LeadingTrailingSpace));
+        assert_eq!(name_issue(""), None, "leere Namen prüft der Aufrufer");
+        let long = "x".repeat(300);
+        assert_eq!(name_issue(&long), None, "Pfadlänge ist kein Namensproblem");
+    }
     use rstest::rstest;
 
     fn ctx() -> ProblemCtx {

@@ -81,7 +81,7 @@ impl Default for Config {
     }
 }
 
-fn parse_bytes(text: &str) -> Option<u64> {
+pub(crate) fn parse_bytes(text: &str) -> Option<u64> {
     text.parse::<bytesize::ByteSize>()
         .ok()
         .map(|b| b.as_u64())

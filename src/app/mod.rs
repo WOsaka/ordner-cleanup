@@ -798,6 +798,7 @@ mod confirm_tests {
             target: None,
             is_dir: false,
             files: None,
+            rule: None,
         };
         let plan = Plan {
             version: PLAN_VERSION,

@@ -66,6 +66,7 @@ impl Fx {
                     target: None,
                     is_dir: false,
                     files: None,
+                    rule: None,
                 }
             })
             .collect();
@@ -104,6 +105,7 @@ impl Fx {
                     target: None,
                     is_dir: false,
                     files: None,
+                    rule: None,
                 }
             })
             .collect();
@@ -147,6 +149,7 @@ impl Fx {
                     target: None,
                     is_dir: true,
                     files: None,
+                    rule: None,
                 }
             })
             .collect();
@@ -188,6 +191,7 @@ impl Fx {
                     target: Some(paths::display(&target)),
                     is_dir: true,
                     files: Some(files),
+                    rule: None,
                 }
             })
             .collect();
@@ -225,6 +229,7 @@ impl Fx {
                     target: Some(paths::display(&self.root.join("_Archiv").join(target))),
                     is_dir: false,
                     files: None,
+                    rule: None,
                 }
             })
             .collect();

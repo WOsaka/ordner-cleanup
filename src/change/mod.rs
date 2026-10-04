@@ -12,6 +12,9 @@ pub mod plan;
 pub mod protect;
 pub mod quarantine;
 pub mod registry;
+pub mod rules;
+#[cfg(test)]
+mod rules_tests;
 #[cfg(test)]
 mod test_support;
 pub mod tree;
@@ -95,6 +98,8 @@ pub struct ActionCounts {
     pub archived: usize,
     /// Entfernte leere Ordner (`remove-dir`).
     pub dirs_removed: usize,
+    /// Einsortierte bzw. umbenannte Dateien (`move` in Plänen der Art `rules`).
+    pub sorted: usize,
 }
 
 impl ActionCounts {
@@ -106,16 +111,25 @@ impl ActionCounts {
         }
     }
 
+    /// Ein Move einer Regel (Einsortieren oder Umbenennen).
+    pub fn count_sorted(&mut self) {
+        self.sorted += 1;
+    }
+
     pub fn from_plan(plan: &plan::Plan) -> Self {
         let mut counts = Self::default();
         for a in &plan.actions {
-            counts.count(a.action);
+            if plan.kind == plan::PlanKind::Rules && a.action == plan::ActionType::Move {
+                counts.count_sorted();
+            } else {
+                counts.count(a.action);
+            }
         }
         counts
     }
 
     pub fn total(&self) -> usize {
-        self.quarantined + self.archived + self.dirs_removed
+        self.quarantined + self.archived + self.dirs_removed + self.sorted
     }
 
     fn join(parts: Vec<String>, empty: &str) -> String {
@@ -144,6 +158,9 @@ impl ActionCounts {
         if self.dirs_removed > 0 {
             parts.push(format!("{} leere Ordner entfernen", self.dirs_removed));
         }
+        if self.sorted > 0 {
+            parts.push(format!("{} Dateien einsortieren/umbenennen", self.sorted));
+        }
         Self::join(parts, "nichts tun")
     }
 
@@ -158,6 +175,9 @@ impl ActionCounts {
         }
         if self.dirs_removed > 0 {
             parts.push(format!("{} leere Ordner entfernt", self.dirs_removed));
+        }
+        if self.sorted > 0 {
+            parts.push(format!("{} Dateien einsortiert/umbenannt", self.sorted));
         }
         Self::join(parts, "nichts ausgeführt")
     }
@@ -177,6 +197,9 @@ impl ActionCounts {
         }
         if self.dirs_removed > 0 {
             parts.push(format!("{} Ordner", self.dirs_removed));
+        }
+        if self.sorted > 0 {
+            parts.push(format!("{} einsortiert", self.sorted));
         }
         Self::join(parts, "keine Aktionen")
     }
@@ -211,6 +234,14 @@ pub enum SkipReason {
     NotEmpty,
     /// Liegt bereits unter `_Archiv`.
     InArchive,
+    /// `rules`: kein (lesbares) EXIF-Datum und `exif_fallback = "skip"`.
+    NoExifDate,
+    /// `rules`: Am Ziel liegt schon eine Datei mit identischem Inhalt.
+    DuplicateAtTarget,
+    /// `rules`: Das Ziel enthält ungültige Zeichen oder leere Namen.
+    InvalidTarget,
+    /// `rules`: Das Ziel wäre länger als 260 Zeichen.
+    PathTooLong,
 }
 
 impl fmt::Display for SkipReason {
@@ -232,6 +263,10 @@ impl fmt::Display for SkipReason {
             Self::TargetExists => "Ziel existiert bereits",
             Self::NotEmpty => "Ordner nicht leer",
             Self::InArchive => "bereits im Archiv",
+            Self::NoExifDate => "kein EXIF-Aufnahmedatum",
+            Self::DuplicateAtTarget => "am Ziel liegt bereits eine Datei mit identischem Inhalt",
+            Self::InvalidTarget => "Ziel ungültig (Zeichen, reservierter Name oder leer)",
+            Self::PathTooLong => "Ziel länger als 260 Zeichen",
         })
     }
 }
@@ -286,7 +321,72 @@ mod tests {
             quarantined,
             archived,
             dirs_removed,
+            sorted: 0,
         }
+    }
+
+    #[rstest]
+    #[case(SkipReason::NoExifDate, "no-exif-date", "EXIF")]
+    #[case(SkipReason::DuplicateAtTarget, "duplicate-at-target", "identischem Inhalt")]
+    #[case(SkipReason::InvalidTarget, "invalid-target", "ungültig")]
+    #[case(SkipReason::PathTooLong, "path-too-long", "260")]
+    fn neue_skip_reasons_phase_4(
+        #[case] reason: SkipReason,
+        #[case] json: &str,
+        #[case] text: &str,
+    ) {
+        assert_eq!(
+            serde_json::to_string(&reason).unwrap(),
+            format!("\"{json}\"")
+        );
+        assert!(reason.to_string().contains(text), "{reason}");
+    }
+
+    #[test]
+    fn einsortierte_dateien_haben_eigene_texte() {
+        let c = ActionCounts {
+            sorted: 3,
+            ..ActionCounts::default()
+        };
+        assert_eq!(c.total(), 3);
+        assert_eq!(c.plan_text(), "3 Dateien einsortieren/umbenennen");
+        assert_eq!(c.done_text(), "3 Dateien einsortiert/umbenannt");
+        assert_eq!(c.short_text(0), "3 einsortiert");
+        let mut counted = ActionCounts::default();
+        counted.count_sorted();
+        assert_eq!(counted.sorted, 1);
+    }
+
+    #[test]
+    fn moves_eines_regel_plans_zaehlen_als_einsortiert() {
+        use crate::change::plan::{ActionType, Plan, PlanKind, PlannedAction, PLAN_VERSION};
+        let plan = Plan {
+            version: PLAN_VERSION,
+            created: String::new(),
+            kind: PlanKind::Rules,
+            root: r"D:\Daten".into(),
+            keep_strategy: None,
+            params: Default::default(),
+            actions: vec![PlannedAction {
+                id: 1,
+                action: ActionType::Move,
+                path: r"D:\Daten\a".into(),
+                size: 0,
+                mtime_ticks: 0,
+                mtime: String::new(),
+                hash: None,
+                keep: None,
+                keep_hash: None,
+                reason: String::new(),
+                target: Some(r"D:\Daten\F\a".into()),
+                is_dir: false,
+                files: None,
+                rule: Some("r".into()),
+            }],
+            skipped: vec![],
+        };
+        let c = ActionCounts::from_plan(&plan);
+        assert_eq!((c.sorted, c.archived), (1, 0));
     }
 
     #[test]
@@ -360,6 +460,7 @@ mod tests {
             target: None,
             is_dir: false,
             files: None,
+            rule: None,
         };
         let plan = Plan {
             version: PLAN_VERSION,
