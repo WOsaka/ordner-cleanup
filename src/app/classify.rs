@@ -483,7 +483,7 @@ impl ContentLookup for CachedLookup<'_> {
         if missing.is_empty() || !self.classify {
             if !missing.is_empty() {
                 self.notes.lock().unwrap_or_else(|e| e.into_inner()).push(format!(
-                    "Hinweis: {} Dateien sind nicht (aktuell) klassifiziert und bleiben ohne Inhaltsregeln (--no-classify).",
+                    "{} Dateien sind nicht (aktuell) klassifiziert und bleiben ohne Inhaltsregeln (--no-classify).",
                     missing.len()
                 ));
             }
