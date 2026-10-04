@@ -8,8 +8,8 @@ use anyhow::{bail, Context, Result};
 use bytesize::ByteSize;
 
 use super::{
-    index_age_note, index_path, load_config, normalize, now_rfc3339, onedrive_roots_from_env,
-    onedrive_warning, resolve_root,
+    index_age_note, index_path, load_config, normalize, now_rfc3339, now_ticks,
+    onedrive_roots_from_env, onedrive_warning, resolve_root,
 };
 use crate::analysis::age::parse_old_after;
 use crate::change::archive::{plan_archive, ArchiveOptions};
@@ -31,7 +31,6 @@ use crate::paths;
 use crate::platform::windows::downloads_dir;
 use crate::report;
 use crate::rules::RuleSet;
-use crate::scan::source::TICKS_PER_SEC;
 
 /// Alles, was jeder Planer braucht.
 struct Prepared {
@@ -68,13 +67,6 @@ fn open_prepared(root: PathBuf, config: Config) -> Result<Prepared> {
         index,
         protector,
     })
-}
-
-fn now_ticks() -> i64 {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64);
-    secs * TICKS_PER_SEC
 }
 
 /// Speichert den Plan und gibt Zusammenfassung, Hinweise und Pfad aus.
@@ -160,7 +152,7 @@ fn resolve_categories(requested: &[String], config: &Config) -> Result<Vec<Strin
 }
 
 /// Ordner, in denen `installer` greift: die Config ersetzt den Known Folder.
-fn downloads_dirs(config: &Config) -> Vec<PathBuf> {
+pub(super) fn downloads_dirs(config: &Config) -> Vec<PathBuf> {
     if config.downloads_dirs.is_empty() {
         downloads_dir().into_iter().collect()
     } else {

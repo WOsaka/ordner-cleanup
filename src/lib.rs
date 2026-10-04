@@ -4,6 +4,7 @@ pub mod change;
 pub mod cli;
 pub mod config;
 pub mod health;
+pub mod history;
 pub mod index;
 pub mod paths;
 pub mod platform;

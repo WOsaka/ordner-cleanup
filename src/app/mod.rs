@@ -32,11 +32,13 @@ use crate::paths::{self, index_path, registry_path};
 use crate::platform::windows::{drive_kind, DriveKind};
 use crate::report::{self, Format, ReportParams};
 use crate::scan::classify::{Classifier, DefaultPaths};
+use crate::scan::lock::ScanLock;
 use crate::scan::source::{StdDirSource, TICKS_PER_SEC};
 use crate::scan::walker::Progress;
 use crate::scan::{scan, ScanEnv};
 
 mod plan;
+mod snapshot;
 
 /// Führt den Befehl aus und liefert den Exit-Code (0 OK, 2 OK mit Teilfehlern).
 pub fn run(cli: Cli) -> Result<i32> {
@@ -493,6 +495,13 @@ fn load_config() -> Result<Config> {
     }
 }
 
+fn now_ticks() -> i64 {
+    let secs = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    secs * TICKS_PER_SEC
+}
+
 fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
@@ -538,6 +547,7 @@ fn scan_command(args: &ScanArgs) -> Result<i32> {
         }
     }
 
+    let _lock = ScanLock::acquire(&paths::scan_lock_path()?)?;
     let index_file = index_path()?;
     if args.reset_index {
         Index::reset(&index_file)?;
@@ -581,6 +591,13 @@ fn scan_command(args: &ScanArgs) -> Result<i32> {
         return Ok(1);
     }
     println!("Index: {}", paths::display(&index_file));
+    match snapshot::record(&index, &root, &config, None, outcome.errors) {
+        Ok(recorded) => println!(
+            "{}",
+            snapshot::score_line(recorded.score(), recorded.previous.as_ref())
+        ),
+        Err(e) => eprintln!("Warnung: Verlauf nicht aktualisiert: {e:#}"),
+    }
     Ok(if outcome.errors > 0 { 2 } else { 0 })
 }
 

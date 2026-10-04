@@ -3,6 +3,8 @@
 //! Alles ist rein und deterministisch: dieselben Zeilen und dieselbe Config ergeben dieselben
 //! Zahlen. Die Zeilen sind dieselben wie im Bericht (`report::rows`).
 
+pub mod collect;
+pub mod fingerprint;
 pub mod score;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -19,6 +21,8 @@ use crate::index::DupGroup;
 use crate::paths;
 use crate::report::rows::{DRow, FRow};
 use crate::report::{ErrorItem, ReportRoot};
+pub use collect::{collect, CollectEnv};
+pub use fingerprint::fingerprint;
 pub use score::{score, Deduction, Part, Score, Weights, METRICS_VERSION};
 
 /// Ab so vielen Ordnern der ersten Ebene gibt es nur Zeilen für die größten und eine für „Sonstige“.
