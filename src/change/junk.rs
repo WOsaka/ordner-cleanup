@@ -17,7 +17,7 @@ use super::quarantine;
 use super::SkipReason;
 use crate::analysis::age::is_old;
 use crate::config::JunkRule;
-use crate::index::{FileRow, Index, IndexError};
+use crate::index::{Index, IndexError};
 use crate::paths;
 
 pub struct JunkOptions<'a> {
@@ -108,6 +108,52 @@ fn category(name: &str, options: &JunkOptions, downloads: &HashSet<String>) -> O
     }
 }
 
+/// Ordnet Dateien den aktiven Müll-Kategorien zu; gemeinsam genutzt von `plan junk` und den
+/// Kennzahlen des Health-Scores.
+pub struct JunkClassifier {
+    categories: Vec<Category>,
+    downloads_empty: bool,
+    installer_active: bool,
+}
+
+impl JunkClassifier {
+    pub fn new(options: &JunkOptions, root: &Path) -> Self {
+        let root_key = paths::dir_key(root);
+        let downloads: HashSet<String> = dir_keys(options.downloads_dirs)
+            .into_iter()
+            .filter(|k| paths::is_under(k, &root_key))
+            .collect();
+        let categories = options
+            .categories
+            .iter()
+            .filter_map(|name| category(name, options, &downloads))
+            .collect();
+        Self {
+            categories,
+            downloads_empty: downloads.is_empty(),
+            installer_active: options.categories.iter().any(|c| c == "installer"),
+        }
+    }
+
+    /// Kategorie einer Datei nach Name und Ordner, ohne Mindestalter.
+    fn matching(&self, name: &str, dir_key: &str) -> Option<&Category> {
+        self.categories.iter().find(|c| {
+            c.names.is_match(name)
+                && c.only_in
+                    .as_ref()
+                    .is_none_or(|dirs| dirs.contains(dir_key))
+        })
+    }
+
+    /// Kategorie, in die `plan junk` die Datei einordnen würde (mit Mindestalter).
+    pub fn classify(&self, name: &str, dir_key: &str, mtime: i64, now_ticks: i64) -> Option<&str> {
+        let cat = self.matching(name, dir_key)?;
+        cat.min_age_days
+            .is_none_or(|days| is_old(mtime, now_ticks, days))
+            .then_some(cat.name.as_str())
+    }
+}
+
 pub fn plan_junk(
     index: &Index,
     root: &Path,
@@ -116,22 +162,13 @@ pub fn plan_junk(
     options: &JunkOptions,
 ) -> Result<CleanupPlan, IndexError> {
     let root_key = paths::dir_key(root);
-    let downloads: HashSet<String> = dir_keys(options.downloads_dirs)
-        .into_iter()
-        .filter(|k| paths::is_under(k, &root_key))
-        .collect();
-    let categories: Vec<Category> = options
-        .categories
-        .iter()
-        .filter_map(|name| category(name, options, &downloads))
-        .collect();
+    let classifier = JunkClassifier::new(options, root);
 
     let mut notes = Vec::new();
-    let installer_active = options.categories.iter().any(|c| c == "installer");
-    if installer_active && downloads.is_empty() {
+    let installer_active = classifier.installer_active;
+    if installer_active && classifier.downloads_empty {
         notes.push(format!(
-            "Kategorie installer: kein Downloads-Ordner unter {} gefunden \
-             (Known Folder oder downloads_dirs); es werden keine Installer geplant.",
+            "Kategorie installer: kein Downloads-Ordner unter {} gefunden              (Known Folder oder downloads_dirs); es werden keine Installer geplant.",
             paths::display(root)
         ));
     }
@@ -139,7 +176,7 @@ pub fn plan_junk(
     let mut actions: Vec<(String, PlannedAction)> = Vec::new();
     let mut skipped: Vec<(String, Skipped)> = Vec::new();
     for file in index.files_under(&root_key)? {
-        let Some(cat) = match_category(&categories, &file) else {
+        let Some(cat) = classifier.matching(&file.name, &file.dir_key) else {
             continue;
         };
         let path = Path::new(&file.path);
@@ -221,16 +258,6 @@ pub fn plan_junk(
         },
         bytes,
         notes,
-    })
-}
-
-/// Erste aktive Kategorie, deren Muster und Ordner auf die Datei passen.
-fn match_category<'a>(categories: &'a [Category], file: &FileRow) -> Option<&'a Category> {
-    categories.iter().find(|c| {
-        c.names.is_match(&file.name)
-            && c.only_in
-                .as_ref()
-                .is_none_or(|dirs| dirs.contains(&file.dir_key))
     })
 }
 

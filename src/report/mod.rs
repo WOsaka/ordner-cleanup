@@ -4,6 +4,7 @@ mod build;
 pub mod csv;
 pub mod html;
 pub mod json;
+pub(crate) mod rows;
 pub mod terminal;
 
 #[cfg(test)]

@@ -28,7 +28,7 @@ use crate::cli::{
 };
 use crate::config::Config;
 use crate::index::{Index, RootStatus};
-use crate::paths;
+use crate::paths::{self, index_path, registry_path};
 use crate::platform::windows::{drive_kind, DriveKind};
 use crate::report::{self, Format, ReportParams};
 use crate::scan::classify::{Classifier, DefaultPaths};
@@ -92,11 +92,6 @@ fn index_age_note(root: &report::ReportRoot, now: chrono::DateTime<chrono::Utc>)
     (age >= STALE_SCAN_DAYS).then(|| {
         format!("Hinweis: Der letzte Scan ist {age} Tage alt. Bitte neu scannen, falls sich viel geändert hat.")
     })
-}
-
-fn registry_path() -> Result<PathBuf> {
-    let dir = paths::data_dir().context("Datenordner (%LOCALAPPDATA%) nicht ermittelbar")?;
-    Ok(dir.join("runs.jsonl"))
 }
 
 /// Fragt einmal j/N. Ohne `--yes` bricht eine nicht interaktive Sitzung hart ab, damit ein
@@ -489,11 +484,6 @@ fn purge_command(args: &PurgeArgs) -> Result<i32> {
         }
     }
     Ok(if failures > 0 { 2 } else { 0 })
-}
-
-fn index_path() -> Result<PathBuf> {
-    let dir = paths::data_dir().context("Datenordner (%LOCALAPPDATA%) nicht ermittelbar")?;
-    Ok(dir.join("index.db"))
 }
 
 fn load_config() -> Result<Config> {
