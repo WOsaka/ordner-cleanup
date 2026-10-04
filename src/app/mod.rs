@@ -64,6 +64,15 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Undo(args) => undo_command(&args),
         Command::Runs(args) => runs_command(&args),
         Command::Purge(args) => purge_command(&args),
+        Command::OcrWorker(args) => crate::platform::ocr::worker_main(
+            &args.path,
+            args.max_pages,
+            args.langs
+                .split(',')
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect(),
+        ),
     }
 }
 

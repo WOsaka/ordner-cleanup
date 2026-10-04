@@ -4,6 +4,7 @@
 pub mod classify;
 pub mod extract;
 pub mod geo;
+pub mod ocr;
 
 use std::collections::BTreeMap;
 

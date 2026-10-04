@@ -45,6 +45,21 @@ pub enum Command {
     Runs(RunsArgs),
     /// Abgelaufene Quarantäne-Läufe endgültig löschen
     Purge(PurgeArgs),
+    /// Interner Hilfsprozess: liest ein PDF per OCR (nicht zum Aufruf von Hand gedacht)
+    #[command(name = "ocr-worker", hide = true)]
+    OcrWorker(OcrWorkerArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct OcrWorkerArgs {
+    /// PDF-Datei
+    pub path: PathBuf,
+    /// Höchstens so viele Seiten lesen
+    #[arg(long, default_value_t = 5)]
+    pub max_pages: usize,
+    /// OCR-Sprachen, kommagetrennt (`de,en`)
+    #[arg(long, default_value = "de,en")]
+    pub langs: String,
 }
 
 #[derive(Debug, Subcommand)]

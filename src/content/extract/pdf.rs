@@ -203,6 +203,55 @@ pub mod testing {
         out
     }
 
+    /// Bildbasiertes PDF („Scan“): eine Seite mit einem JPEG, ohne Textlayer.
+    pub fn scanned_pdf(jpeg: &[u8], width: i64, height: i64) -> Vec<u8> {
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+        let mut image = Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Image",
+                "Width" => width,
+                "Height" => height,
+                "ColorSpace" => "DeviceRGB",
+                "BitsPerComponent" => 8,
+                "Filter" => "DCTDecode",
+            },
+            jpeg.to_vec(),
+        );
+        image.allows_compression = false;
+        let image_id = doc.add_object(image);
+        let resources_id = doc.add_object(dictionary! {
+            "XObject" => dictionary! { "Im0" => image_id },
+        });
+        let page_height = (595 * height / width.max(1)).max(1);
+        let content = format!(
+            "q 595 0 0 {page_height} 0 {} cm /Im0 Do Q",
+            842 - page_height
+        );
+        let content_id = doc.add_object(Stream::new(dictionary! {}, content.into_bytes()));
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Contents" => content_id,
+            "Resources" => resources_id,
+            "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+        });
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![Object::Reference(page_id)],
+                "Count" => 1,
+            }),
+        );
+        let catalog_id = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        doc.trailer.set("Root", catalog_id);
+        let mut out = Vec::new();
+        doc.save_to(&mut out).unwrap();
+        out
+    }
+
     fn escape(line: &str) -> String {
         line.replace('\\', "\\\\")
             .replace('(', "\\(")
