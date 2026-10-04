@@ -112,10 +112,8 @@ pub fn to_utf16_le(xml: &str) -> Vec<u8> {
 /// Dekodiert die Ausgabe von `schtasks /Query /XML` (UTF-16 mit BOM, sonst UTF-8/Lossy).
 pub fn decode_output(bytes: &[u8]) -> String {
     if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
-        let units: Vec<u16> = rest
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-            .collect();
+        let (pairs, _) = rest.as_chunks::<2>();
+        let units: Vec<u16> = pairs.iter().map(|c| u16::from_le_bytes(*c)).collect();
         return String::from_utf16_lossy(&units);
     }
     String::from_utf8_lossy(bytes).into_owned()
