@@ -32,7 +32,7 @@ Betroffen ist zunächst der Entwickler selbst, später Kollegen. Phase 4 liefert
 - YAML als Regelformat (Entscheidung siehe Open Questions)
 
 ## User Journey
-1. Der Nutzer schreibt eine Regeldatei. Default: `<ORDNER_CLEANUP_HOME>\rules.toml`; alternativ `--rules <datei>`.
+1. Der Nutzer schreibt eine Regeldatei. Default: `rules.toml` neben der `config.toml` (`%APPDATA%\ordner-cleanup\`, mit `ORDNER_CLEANUP_HOME` unter `<HOME>\config\`); alternativ `--rules <datei>`.
 2. Er indiziert den Ordner mit `scan <pfad>`.
 3. Er erzeugt einen Plan (Dry-Run, nichts wird verändert):
    `ordner-cleanup plan rules <pfad> [--rules <datei>] [--rule <name>…] [--out <plan.json>]`
@@ -103,7 +103,7 @@ Plan-Format bleibt `version: 2`. Die Aktion ist das bestehende `move` aus Phase 
 EXIF-Datum wird im Index zwischengespeichert (je Datei: Aufnahmedatum oder „kein EXIF“), gültig solange Größe und mtime unverändert sind. Ein erneuter `plan rules` liest dann keine Bilder erneut.
 
 ### Config (Erweiterung)
-- `rules_file`: Pfad der Default-Regeldatei (Default `<ORDNER_CLEANUP_HOME>\rules.toml`)
+- `rules_file`: Pfad der Default-Regeldatei (Default `rules.toml` neben der `config.toml`)
 - Obergrenze `onedrive_max_move_files` / `onedrive_max_move_bytes` aus Phase 3 gilt auch für `plan rules`
 
 ## Acceptance Criteria
@@ -139,11 +139,11 @@ EXIF-Datum wird im Index zwischengespeichert (je Datei: Aufnahmedatum oder „ke
 | Regex-Gruppe `{3}` bei nur zwei Gruppen | Fehler beim Prüfen |
 | `{exif.date}` mit ungültigem Format | Fehler beim Prüfen |
 | Datei liegt bereits am Ziel (gleicher Pfad, gleiche Schreibweise) | Keine Aktion (Idempotenz) |
-| Ziel = Quelle bis auf Groß-/Kleinschreibung | Echtes Umbenennen in zwei Schritten über einen temporären Namen; Journal vermerkt beide Schritte, Undo/Absturz-Recovery decken den Zwischenstand ab |
+| Ziel = Quelle bis auf Groß-/Kleinschreibung | Echtes Umbenennen in **einem** Schritt (Spike: `MoveFileExW` ohne Ersetzen genügt auf NTFS); Journal vermerkt den Move wie jeden anderen, Undo erkennt den Fall am gleichen Pfadschlüssel |
 | Ziel existiert, gleicher Inhalt | `skipped: duplicate-at-target` (Aufräumen später per `plan dedupe`) |
 | Ziel existiert, anderer Inhalt | Durchnummerieren ` (2)`, ` (3)` …, erstes freies Ziel |
 | Mehrere Quellen ergeben dasselbe Ziel | Durchnummerieren in stabiler Reihenfolge (Quellpfad, case-insensitiv sortiert) |
-| Ziel ist zwischen `plan` und `apply` entstanden | `apply` verschiebt nicht, Aktion `stale` (kein Überschreiben) |
+| Ziel ist zwischen `plan` und `apply` entstanden | `apply` verschiebt nicht, Aktion übersprungen mit `target-exists` (kein Überschreiben) |
 | Quelle seit dem Scan verändert oder verschwunden | `stale`, Lauf geht weiter |
 | Ziel enthält ungültige Zeichen (`<>:"|?*`, Steuerzeichen), reservierte Namen (`CON`, `NUL` …) oder endet auf Punkt/Leerzeichen | `skipped: invalid-target` mit Grund |
 | Ziel länger als 260 Zeichen | `skipped: path-too-long` (Moves auf lange Pfade erzeugen Sync- und Explorer-Probleme) |

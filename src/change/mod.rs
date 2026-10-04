@@ -327,7 +327,11 @@ mod tests {
 
     #[rstest]
     #[case(SkipReason::NoExifDate, "no-exif-date", "EXIF")]
-    #[case(SkipReason::DuplicateAtTarget, "duplicate-at-target", "identischem Inhalt")]
+    #[case(
+        SkipReason::DuplicateAtTarget,
+        "duplicate-at-target",
+        "identischem Inhalt"
+    )]
     #[case(SkipReason::InvalidTarget, "invalid-target", "ungültig")]
     #[case(SkipReason::PathTooLong, "path-too-long", "260")]
     fn neue_skip_reasons_phase_4(

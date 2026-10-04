@@ -780,7 +780,15 @@ pub fn apply_plan(plan: &Plan, env: &ApplyEnv) -> Result<ApplyOutcome, ApplyErro
             outcome.aborted = true;
             break;
         }
-        let status = process(action, root, env, &mut journal, &mut keeps, &before, plan.kind)?;
+        let status = process(
+            action,
+            root,
+            env,
+            &mut journal,
+            &mut keeps,
+            &before,
+            plan.kind,
+        )?;
         if status == ActionStatus::Done {
             outcome.moved_bytes += action.size;
         }
@@ -2153,10 +2161,7 @@ mod tests {
             mtime
         );
         let entries = fx.journal(RUN);
-        let dirs: Vec<_> = created_dirs(&entries)
-            .iter()
-            .map(|p| rel(&fx, p))
-            .collect();
+        let dirs: Vec<_> = created_dirs(&entries).iter().map(|p| rel(&fx, p)).collect();
         assert_eq!(dirs, ["Neu", r"Neu\Sub"], "von oben nach unten");
         let first_created = entries
             .iter()

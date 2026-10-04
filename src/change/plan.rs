@@ -232,7 +232,15 @@ impl Plan {
                     a.id, a.path
                 ));
             }
-            self.validate_fields(a, &key, &Keys { root: &root_key, archive: &archive_key, tool: &tool_key })?;
+            self.validate_fields(
+                a,
+                &key,
+                &Keys {
+                    root: &root_key,
+                    archive: &archive_key,
+                    tool: &tool_key,
+                },
+            )?;
             if let Some(target) = &a.target {
                 if !targets.insert(paths::path_key(Path::new(target))) {
                     return invalid(format!("Aktion {}: Ziel {target} kommt doppelt vor", a.id));
@@ -276,12 +284,7 @@ impl Plan {
     }
 
     /// Pflicht- und Verbotsfelder je Aktionstyp.
-    fn validate_fields(
-        &self,
-        a: &PlannedAction,
-        key: &str,
-        keys: &Keys,
-    ) -> Result<(), PlanError> {
+    fn validate_fields(&self, a: &PlannedAction, key: &str, keys: &Keys) -> Result<(), PlanError> {
         let invalid = |msg: String| Err(PlanError::Invalid(format!("Aktion {}: {msg}", a.id)));
         let is_rules = self.kind == PlanKind::Rules;
         if is_rules && a.action != ActionType::Move {

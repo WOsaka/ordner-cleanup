@@ -7,8 +7,8 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
-pub use exif_cache::ExifEntry;
 pub use dups::{DupFile, DupGroup, HashCandidate, HashUpdate};
+pub use exif_cache::ExifEntry;
 pub use listing::{DirRow, FileRow};
 pub use store::{DirRecord, FileRecord, PrevFile, RootInfo, RootRun, RootStatus, ScanErrorRecord};
 

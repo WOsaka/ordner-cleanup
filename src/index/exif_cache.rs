@@ -105,7 +105,11 @@ mod tests {
             ])
             .unwrap();
         assert_eq!(found.get(r"Z:\a.jpg"), Some(&Some(5)));
-        assert_eq!(found.get(r"Z:\b.jpg"), Some(&None), "kein EXIF ist ein Treffer");
+        assert_eq!(
+            found.get(r"Z:\b.jpg"),
+            Some(&None),
+            "kein EXIF ist ein Treffer"
+        );
         assert!(!found.contains_key(r"Z:\c.jpg"));
 
         let stale = index
@@ -117,7 +121,9 @@ mod tests {
     #[test]
     fn speichern_ersetzt_vorhandene_eintraege() {
         let mut index = Index::open_in_memory().unwrap();
-        index.exif_store(&[entry(r"Z:\a.jpg", 10, 100, None)]).unwrap();
+        index
+            .exif_store(&[entry(r"Z:\a.jpg", 10, 100, None)])
+            .unwrap();
         index
             .exif_store(&[entry(r"Z:\a.jpg", 20, 200, Some(7))])
             .unwrap();
@@ -161,7 +167,10 @@ mod tests {
             .unwrap();
         assert!(found.contains_key(r"Z:\root\da.jpg"));
         assert!(!found.contains_key(r"Z:\root\weg.jpg"));
-        assert!(found.contains_key(r"Z:\anders\weg.jpg"), "andere Wurzel bleibt");
+        assert!(
+            found.contains_key(r"Z:\anders\weg.jpg"),
+            "andere Wurzel bleibt"
+        );
     }
 
     #[test]
@@ -198,12 +207,17 @@ mod tests {
         let files = index.files_under(&paths::dir_key(root)).unwrap();
         assert_eq!(files.len(), 1, "Dateien bleiben erhalten");
         assert_eq!(index.roots().unwrap().len(), 1, "Wurzeln bleiben erhalten");
-        assert!(index.exif_lookup(&[(r"Z:\root\a.txt", 0, 0)]).unwrap().is_empty());
+        assert!(index
+            .exif_lookup(&[(r"Z:\root\a.txt", 0, 0)])
+            .unwrap()
+            .is_empty());
         let version: String = index
             .conn()
-            .query_row("SELECT value FROM meta WHERE key='schema_version'", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT value FROM meta WHERE key='schema_version'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(version, "2");
     }

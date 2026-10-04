@@ -187,7 +187,7 @@ pub fn plan_rules(
             unmatched += 1;
             continue;
         };
-        if env.protector.check(path).is_some() {
+        if env.protector.check_cached(path).is_some() {
             skip(&mut skipped, row, SkipReason::Protected);
         } else if row.is_link {
             skip(&mut skipped, row, SkipReason::Link);
@@ -229,6 +229,7 @@ pub fn plan_rules(
         .collect();
     // Aktionen, die beim nächsten Lauf ein anderes Ziel hätten (ohne Durchnummerierte).
     let mut probes: Vec<(usize, PathBuf)> = Vec::new();
+    let mut hints: HashMap<String, usize> = HashMap::new();
 
     for (p_idx, p) in pending.iter().enumerate() {
         let row = &files[p.file];
@@ -302,7 +303,14 @@ pub fn plan_rules(
             Skip(SkipReason),
         }
         let mut outcome = Outcome::Skip(SkipReason::InvalidTarget);
-        for n in 1..=MAX_NUMBERING {
+        // Viele Dateien mit demselben Zielnamen würden sonst jedes Mal alle vergebenen
+        // Nummern erneut durchprobieren. Der Merker gilt nur über rein vergebene Nummern.
+        let base_key = paths::path_key(&dir.join(&rel_target.file));
+        let start = hints.get(&base_key).copied().unwrap_or(1);
+        let mut prefix_assigned = true;
+        let mut chosen = start;
+        for n in start..=MAX_NUMBERING {
+            chosen = n;
             let name = if n == 1 {
                 rel_target.file.clone()
             } else {
@@ -332,6 +340,7 @@ pub fn plan_rules(
                     break;
                 }
                 Some(Occupant::File(j)) => {
+                    prefix_assigned = false;
                     let other = &files[*j];
                     if other.size == row.size
                         && !other.cloud_only
@@ -345,6 +354,9 @@ pub fn plan_rules(
                 Some(Occupant::Assigned) => {}
             }
         }
+        if prefix_assigned && matches!(outcome, Outcome::Move(..)) {
+            hints.insert(base_key, chosen + 1);
+        }
         let (target, was_numbered) = match outcome {
             Outcome::AlreadyThere => continue,
             Outcome::Skip(reason) => {
@@ -356,7 +368,7 @@ pub fn plan_rules(
         let target_key = paths::path_key(&target);
         if paths::is_under(&target_key, archive_key.trim_end_matches('\\'))
             || paths::is_under(&target_key, tool_key.trim_end_matches('\\'))
-            || env.protector.check(&target).is_some()
+            || env.protector.check_cached(&target).is_some()
         {
             skip(&mut skipped, row, SkipReason::Protected);
             continue;
@@ -395,7 +407,15 @@ pub fn plan_rules(
         ));
     }
 
-    let notes = stability_notes(&probes, &pending, &files, &taken, rules, &root_spelling, env);
+    let notes = stability_notes(
+        &probes,
+        &pending,
+        &files,
+        &taken,
+        rules,
+        &root_spelling,
+        env,
+    );
 
     actions.sort_by(|a, b| a.0.cmp(&b.0));
     skipped.sort_by(|a, b| a.0.cmp(&b.0));
@@ -540,7 +560,10 @@ impl ExifSource for CachedExif {
         for (i, result) in read {
             let f = files[i];
             let (value, store) = match result {
-                Ok(Some(date)) => (ExifResult::Date(date), Some(Some(date.and_utc().timestamp()))),
+                Ok(Some(date)) => (
+                    ExifResult::Date(date),
+                    Some(Some(date.and_utc().timestamp())),
+                ),
                 Ok(None) => (ExifResult::NoDate, Some(None)),
                 Err(ExifError::NotLocal) => (ExifResult::Cloud, None),
                 // Gesperrt oder nicht lesbar: ohne Datum, aber nicht merken.
@@ -579,7 +602,10 @@ impl LiveContent {
         let hash = hasher::open_read(Path::new(&row.path))
             .and_then(|mut f| hasher::full_hash(&mut f, row.size.max(0) as u64))
             .ok();
-        self.hashes.lock().ok()?.insert(row.key.clone(), hash.clone());
+        self.hashes
+            .lock()
+            .ok()?
+            .insert(row.key.clone(), hash.clone());
         hash
     }
 }

@@ -162,7 +162,10 @@ impl ExifSource for FakeExif {
             .iter()
             .map(|f| {
                 asked.push(f.key.clone());
-                self.dates.get(&f.key).copied().unwrap_or(ExifResult::NoDate)
+                self.dates
+                    .get(&f.key)
+                    .copied()
+                    .unwrap_or(ExifResult::NoDate)
             })
             .collect()
     }
@@ -446,7 +449,13 @@ ext = ["txt"]
 target = "T/"
 "#,
     );
-    let p = run_full(&mut index, &rules, &exif, &FakeContent::default(), &Config::default());
+    let p = run_full(
+        &mut index,
+        &rules,
+        &exif,
+        &FakeContent::default(),
+        &Config::default(),
+    );
     assert_eq!(exif.asked(), [paths::path_key(Path::new(r"Z:\Root\a.jpg"))]);
     assert_eq!(
         skipped(&p),
@@ -465,7 +474,10 @@ fn cloud_antwort_der_exif_quelle_ueberspringt_die_datei() {
         &FakeContent::default(),
         &Config::default(),
     );
-    assert_eq!(skipped(&p), [("a.jpg".into(), SkipReason::CloudPlaceholder)]);
+    assert_eq!(
+        skipped(&p),
+        [("a.jpg".into(), SkipReason::CloudPlaceholder)]
+    );
 }
 
 #[test]
@@ -521,16 +533,16 @@ target = "dokumente/"
         ],
         &[],
     );
-    assert!(run(&mut after, &rules).plan.actions.is_empty(), "idempotent");
+    assert!(
+        run(&mut after, &rules).plan.actions.is_empty(),
+        "idempotent"
+    );
 }
 
 #[test]
 fn identischer_inhalt_am_ziel_ist_ein_duplikat() {
     let mut index = seed(
-        &[
-            file(r"Z:\Root\x\a.pdf"),
-            file(r"Z:\Root\Dokumente\a.pdf"),
-        ],
+        &[file(r"Z:\Root\x\a.pdf"), file(r"Z:\Root\Dokumente\a.pdf")],
         &[],
     );
     let content = FakeContent::default().same(&[r"Z:\Root\x\a.pdf", r"Z:\Root\Dokumente\a.pdf"]);
@@ -626,12 +638,12 @@ fn ordner_am_ziel_und_datei_im_zielpfad_sind_ungueltige_ziele() {
     );
     assert_eq!(moves(&p), [mv(r"y\b.pdf", r"Dokumente\b.pdf")]);
 
-    let mut index = seed(
-        &[file(r"Z:\Root\x\a.pdf"), file(r"Z:\Root\Dokumente")],
-        &[],
-    );
+    let mut index = seed(&[file(r"Z:\Root\x\a.pdf"), file(r"Z:\Root\Dokumente")], &[]);
     let p = run(&mut index, &parse(PDF_RULE));
-    assert_eq!(skipped(&p), [(r"x\a.pdf".into(), SkipReason::InvalidTarget)]);
+    assert_eq!(
+        skipped(&p),
+        [(r"x\a.pdf".into(), SkipReason::InvalidTarget)]
+    );
 }
 
 #[test]
@@ -657,7 +669,10 @@ target = "{1}/"
     let p = run(&mut index, &rules);
     assert_eq!(moves(&p), [mv("ok.txt", r"ok\ok.txt")]);
     let reasons: Vec<_> = skipped(&p).into_iter().map(|s| s.1).collect();
-    assert!(reasons.iter().all(|r| *r == SkipReason::InvalidTarget), "{reasons:?}");
+    assert!(
+        reasons.iter().all(|r| *r == SkipReason::InvalidTarget),
+        "{reasons:?}"
+    );
     assert_eq!(reasons.len(), 4);
 }
 
@@ -814,7 +829,10 @@ target = "Dokumente/{name}.{ext}"
 "#,
     );
     let mut index = seed(
-        &[file(r"Z:\Root\a.pdf"), file(r"Z:\Root\Dokumente\a.pdf").size(5)],
+        &[
+            file(r"Z:\Root\a.pdf"),
+            file(r"Z:\Root\Dokumente\a.pdf").size(5),
+        ],
         &[],
     );
     let p = run(&mut index, &rules);
@@ -853,7 +871,10 @@ target = "Final/"
 "#,
     );
     let mut index = seed(
-        &[file(r"Z:\Root\Eingang\x.txt"), file(r"Z:\Root\Eingang\y.txt")],
+        &[
+            file(r"Z:\Root\Eingang\x.txt"),
+            file(r"Z:\Root\Eingang\y.txt"),
+        ],
         &[],
     );
     let p = run(&mut index, &rules);
@@ -917,7 +938,10 @@ mod cached_exif {
         let mut index = Index::open_in_memory().unwrap();
 
         let first = CachedExif.taken(&mut index, &[&a, &b]);
-        assert_eq!(first, [ExifResult::Date(dt(2019, 8, 15)), ExifResult::NoDate]);
+        assert_eq!(
+            first,
+            [ExifResult::Date(dt(2019, 8, 15)), ExifResult::NoDate]
+        );
 
         // Dateien weg: Ein Treffer im Cache liest nichts mehr.
         std::fs::remove_file(&photo).unwrap();

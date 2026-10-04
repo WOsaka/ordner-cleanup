@@ -94,6 +94,48 @@ dirs = ["D:\\Logs"]            # optional: nur direkt in diesen Ordnern
 Eine eigene Kategorie wird mit `--category logs` oder über `junk_categories` aktiv. Dauern gelten als `d` (Tage), `m` (30 Tage) und `y` (365 Tage).
 
 
+## Regeln: Einsortieren und Umbenennen (Phase 4)
+
+```
+ordner-cleanup scan <pfad>
+ordner-cleanup plan rules <pfad> [--rules <datei>] [--rule <name>]… [--out <plan.json>]
+ordner-cleanup apply <plan.json>
+```
+
+`plan rules` wendet die Regeln einer Regeldatei auf alle gescannten Dateien an und schreibt einen Plan aus `move`-Aktionen (Einsortieren und Umbenennen). Es verändert nichts. `apply` und `undo` arbeiten wie in Phase 3; `undo` entfernt zusätzlich die vom Lauf neu angelegten Zielordner, aber nur, wenn sie leer sind, und nie einen Ordner, der vorher schon da war. Die Regeldatei wird vor der Planung vollständig geprüft; Fehler nennen Datei, Zeile und Regelname.
+
+Die Regeldatei liegt standardmäßig neben der Config (`%APPDATA%\ordner-cleanup\rules.toml`). Alternativ gelten `rules_file` in der Config oder `--rules`.
+
+```toml
+[[rules]]
+name   = "fotos"
+ext    = ["jpg", "jpeg", "heic"]
+target = "Fotos/{exif.date:%Y}/{exif.date:%Y-%m-%d}_{name}.{ext}"
+exif_fallback = "mtime"     # mtime (Default) | skip
+spaces = "_"
+
+[[rules]]
+name       = "rechnungen"
+glob       = "Downloads/**"
+name_regex = '(?i)rechnung[ _-]*(\d+)'
+min_age    = "7d"
+target     = "Finanzen/Rechnungen/{year}/"
+iso_date_prefix   = true
+strip_copy_suffix = true
+```
+
+- **Reihenfolge = Priorität:** Pro Datei gewinnt die erste Regel, deren Bedingungen alle zutreffen.
+- **Bedingungen** (UND-verknüpft, mindestens eine): `glob` (auf den Pfad relativ zur Wurzel, `/` und `\` gleichwertig, Groß-/Kleinschreibung egal; `*` bleibt in einem Ordner, `**` geht über Ebenen), `ext`, `name_regex`, `min_age`/`max_age` (inklusive Grenzen), `min_size`/`max_size`.
+- **Ziel** (`target`, relativ zur Wurzel): Endet es auf `/`, bleibt der Dateiname; sonst ist das letzte Segment der neue Name; mit `./` am Anfang wird im selben Ordner umbenannt.
+- **Platzhalter:** `{name}`, `{ext}`, `{parent}`, `{year}`, `{month}`, `{day}` (aus der mtime, lokale Zeit), `{exif.date}` bzw. `{exif.date:<chrono-Format>}`, `{1}`, `{2}` … (Regex-Gruppen); `{{` und `}}` sind Escapes. Das EXIF-Datum (`DateTimeOriginal`, sonst `DateTimeDigitized`) hat keine Zeitzone und wird unverändert übernommen, daher kann es um einen Tag von der mtime abweichen. Videos haben kein EXIF-Datum, dort greift `exif_fallback`.
+- **Normalisierung** (nur auf den Dateinamen): `iso_date_prefix`, `spaces = "_" | "-"`, `umlauts`, `strip_copy_suffix`, `lowercase_ext`. Sie ist idempotent.
+- **Kollisionen:** Gleicher Inhalt am Ziel → übersprungen (`duplicate-at-target`); anderer Inhalt oder mehrere Quellen mit demselben Ziel → Durchnummerieren ` (2)`, ` (3)` … in stabiler Reihenfolge.
+- **Umbenennen nur in der Schreibweise** (`foto.JPG` → `foto.jpg`) geschieht in einem Schritt; `undo` stellt die alte Schreibweise wieder her.
+- **Stabilität:** Ein zweiter `plan rules` nach `apply` und `scan` ergibt keine Aktionen. Würde eine Regel ihre eigenen Ziele beim nächsten Lauf erneut verschieben (z. B. `./{parent}_{name}.{ext}` oder eine Kette von Regel A zu Regel B), weist die Zusammenfassung darauf hin.
+- **Schutz:** Geschützte Pfade, Cloud-only-Dateien (auch kein EXIF-Lesen) und Links werden übersprungen; Ziele unter `_Archiv` und `.ordner-cleanup` sind tabu; die OneDrive-Obergrenze gilt unverändert.
+
+Das EXIF-Datum wird im Index zwischengespeichert (gültig bei gleicher Größe und mtime). Dafür hat der Index jetzt das Schema v2; ein älterer Index wird beim Öffnen automatisch migriert. Eine ältere Programmversion verlangt danach `--reset-index`.
+
 ## Entwicklung
 
 Voraussetzungen: Rust (stable, MSVC-Toolchain, wird per `rust-toolchain.toml` gewählt) und die Visual Studio Build Tools.
@@ -125,6 +167,8 @@ Planer der Aufräumaktionen (Phase 3), gemessen am 2026-10-03 (Release-Build) mi
 | `plan empty-dirs` | 0,11 s | < 10 s |
 | `plan archive` | 2,2 s | < 10 s |
 | `plan versions` (19.000 Aktionen) | 3,9 s | < 10 s |
+| `plan rules` (100.000 Dateien, 10 Regeln, ohne EXIF) | 1,9 s | < 10 s |
+| `plan rules` (10.000 JPEGs, erster Lauf / aus dem EXIF-Cache) | 0,4 s / 0,3 s | Cache < 2 s |
 
 Die Messung ist als ignorierter Test abgelegt: `cargo test --release --test perf_plans -- --ignored --nocapture`. Den Testbaum erzeugt `cargo run --release --example gen-tree -- <zielordner> [anzahl]`. Der Baum besteht aus kleinen Dateien; bei großen Dateien dominiert das Hashen, das über Teil-Hash und Größengruppen begrenzt wird. Manuell geprüft am 2026-10-03: Scan von `OneDrive\Dokumente` (30 Dateien, davon 1 Cloud-only) ließ Größen, Zeitstempel und Attribute unverändert, die Cloud-only-Datei blieb Cloud-only.
 

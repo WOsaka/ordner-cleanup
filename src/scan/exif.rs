@@ -71,7 +71,10 @@ fn read_taken_limited(path: &Path, limit: u64) -> Result<Option<NaiveDateTime>, 
     {
         use std::os::windows::fs::MetadataExt;
         let attrs = FileAttrs(meta.file_attributes());
-        if attrs.is_cloud_only() || meta.file_type().is_symlink() || attrs.0 & FileAttrs::REPARSE_POINT != 0 {
+        if attrs.is_cloud_only()
+            || meta.file_type().is_symlink()
+            || attrs.0 & FileAttrs::REPARSE_POINT != 0
+        {
             return Err(ExifError::NotLocal);
         }
     }
@@ -104,7 +107,11 @@ fn read_taken_limited(path: &Path, limit: u64) -> Result<Option<NaiveDateTime>, 
 fn parse_exif_datetime(ascii: &[u8]) -> Option<NaiveDateTime> {
     let dt = exif::DateTime::from_ascii(ascii).ok()?;
     NaiveDate::from_ymd_opt(i32::from(dt.year), u32::from(dt.month), u32::from(dt.day))?
-        .and_hms_opt(u32::from(dt.hour), u32::from(dt.minute), u32::from(dt.second))
+        .and_hms_opt(
+            u32::from(dt.hour),
+            u32::from(dt.minute),
+            u32::from(dt.second),
+        )
 }
 
 /// Minimale EXIF-Bilder für Tests (auch Integrationstests), ohne Binär-Fixtures.
@@ -162,25 +169,39 @@ mod tests {
     #[test]
     fn liest_date_time_original() {
         let dir = tempfile::tempdir().unwrap();
-        let file = write(&dir, "a.jpg", &jpeg_with_date(DATE_TIME_ORIGINAL, dt(2024, 8, 15, 10)));
+        let file = write(
+            &dir,
+            "a.jpg",
+            &jpeg_with_date(DATE_TIME_ORIGINAL, dt(2024, 8, 15, 10)),
+        );
         assert_eq!(read_taken(&file).unwrap(), Some(dt(2024, 8, 15, 10)));
     }
 
     #[test]
     fn date_time_digitized_ist_der_zweite_wunsch() {
         let dir = tempfile::tempdir().unwrap();
-        let file = write(&dir, "a.jpg", &jpeg_with_date(DATE_TIME_DIGITIZED, dt(2023, 1, 2, 3)));
+        let file = write(
+            &dir,
+            "a.jpg",
+            &jpeg_with_date(DATE_TIME_DIGITIZED, dt(2023, 1, 2, 3)),
+        );
         assert_eq!(read_taken(&file).unwrap(), Some(dt(2023, 1, 2, 3)));
     }
 
     #[test]
     fn ohne_exif_abgeschnitten_und_nicht_bild_ergibt_none() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(read_taken(&write(&dir, "n.jpg", &jpeg_without_exif())).unwrap(), None);
+        assert_eq!(
+            read_taken(&write(&dir, "n.jpg", &jpeg_without_exif())).unwrap(),
+            None
+        );
         let full = jpeg_with_date(DATE_TIME_ORIGINAL, dt(2024, 8, 15, 10));
         let cut = write(&dir, "cut.jpg", &full[..40]);
         assert_eq!(read_taken(&cut).unwrap(), None);
-        assert_eq!(read_taken(&write(&dir, "x.txt", b"Hallo Welt")).unwrap(), None);
+        assert_eq!(
+            read_taken(&write(&dir, "x.txt", b"Hallo Welt")).unwrap(),
+            None
+        );
         assert_eq!(read_taken(&write(&dir, "leer.jpg", b"")).unwrap(), None);
     }
 
@@ -196,7 +217,11 @@ mod tests {
     #[test]
     fn obergrenze_verhindert_das_lesen_weiter_hinten() {
         let dir = tempfile::tempdir().unwrap();
-        let file = write(&dir, "a.jpg", &jpeg_with_date(DATE_TIME_ORIGINAL, dt(2024, 8, 15, 10)));
+        let file = write(
+            &dir,
+            "a.jpg",
+            &jpeg_with_date(DATE_TIME_ORIGINAL, dt(2024, 8, 15, 10)),
+        );
         assert_eq!(read_taken_limited(&file, 30).unwrap(), None);
         assert!(read_taken_limited(&file, 4096).unwrap().is_some());
     }
@@ -219,7 +244,11 @@ mod tests {
         use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::Storage::FileSystem::SetFileAttributesW;
         let dir = tempfile::tempdir().unwrap();
-        let file = write(&dir, "a.jpg", &jpeg_with_date(DATE_TIME_ORIGINAL, dt(2024, 8, 15, 10)));
+        let file = write(
+            &dir,
+            "a.jpg",
+            &jpeg_with_date(DATE_TIME_ORIGINAL, dt(2024, 8, 15, 10)),
+        );
         let wide: Vec<u16> = file.as_os_str().encode_wide().chain(Some(0)).collect();
         // FILE_ATTRIBUTE_OFFLINE: wie ein Cloud-Platzhalter, aber mit lesbarem Inhalt.
         assert_ne!(unsafe { SetFileAttributesW(wide.as_ptr(), 0x1000) }, 0);

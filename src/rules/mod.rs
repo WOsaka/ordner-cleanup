@@ -245,13 +245,38 @@ strip_copy_suffix = true
 
     #[rstest]
     #[case("[[rules]\nname =", Some(1), None, "")]
-    #[case("[[rules]]\nname = \"a\"\next = [\"x\"]\ntarget = \"t/\"\nfoo = 1\n", Some(5), Some("a"), "foo")]
+    #[case(
+        "[[rules]]\nname = \"a\"\next = [\"x\"]\ntarget = \"t/\"\nfoo = 1\n",
+        Some(5),
+        Some("a"),
+        "foo"
+    )]
     #[case("", None, None, "keine Regeln")]
-    #[case("[[rules]]\nname = \"a\"\ntarget = \"t/\"\n", Some(1), Some("a"), "keine Bedingung")]
-    #[case("[[rules]]\nname = \"a\"\next = []\ntarget = \"t/\"\n", Some(1), Some("a"), "keine Bedingung")]
+    #[case(
+        "[[rules]]\nname = \"a\"\ntarget = \"t/\"\n",
+        Some(1),
+        Some("a"),
+        "keine Bedingung"
+    )]
+    #[case(
+        "[[rules]]\nname = \"a\"\next = []\ntarget = \"t/\"\n",
+        Some(1),
+        Some("a"),
+        "keine Bedingung"
+    )]
     #[case("[[rules]]\next = [\"x\"]\ntarget = \"t/\"\n", Some(1), None, "name")]
-    #[case("[[rules]]\nname = \"a\"\next = [\"x\"]\n", Some(1), Some("a"), "target")]
-    #[case("[[rules]]\nname = \"\"\next = [\"x\"]\ntarget = \"t/\"\n", Some(1), Some(""), "leer")]
+    #[case(
+        "[[rules]]\nname = \"a\"\next = [\"x\"]\n",
+        Some(1),
+        Some("a"),
+        "target"
+    )]
+    #[case(
+        "[[rules]]\nname = \"\"\next = [\"x\"]\ntarget = \"t/\"\n",
+        Some(1),
+        Some(""),
+        "leer"
+    )]
     fn grundlegende_fehler(
         #[case] text: &str,
         #[case] line: Option<usize>,
@@ -284,9 +309,18 @@ strip_copy_suffix = true
     #[case("max_age = \"abc\"\ntarget = \"x/\"", "max_age")]
     #[case("min_size = \"viel\"\ntarget = \"x/\"", "min_size")]
     #[case("max_size = \"0\"\ntarget = \"x/\"", "max_size")]
-    #[case("min_age = \"30d\"\nmax_age = \"7d\"\ntarget = \"x/\"", "min_age ist größer")]
-    #[case("min_size = \"2MB\"\nmax_size = \"1MB\"\ntarget = \"x/\"", "min_size ist größer")]
-    #[case("ext = [\"a\"]\ntarget = \"x/\"\nexif_fallback = \"nie\"", "exif_fallback")]
+    #[case(
+        "min_age = \"30d\"\nmax_age = \"7d\"\ntarget = \"x/\"",
+        "min_age ist größer"
+    )]
+    #[case(
+        "min_size = \"2MB\"\nmax_size = \"1MB\"\ntarget = \"x/\"",
+        "min_size ist größer"
+    )]
+    #[case(
+        "ext = [\"a\"]\ntarget = \"x/\"\nexif_fallback = \"nie\"",
+        "exif_fallback"
+    )]
     #[case("ext = [\"a\"]\ntarget = \"x/\"\nspaces = \"+\"", "spaces")]
     #[case("ext = [\"\"]\ntarget = \"x/\"", "Endung")]
     fn semantische_fehler_haben_zeile_und_regelname(#[case] body: &str, #[case] hint: &str) {
@@ -370,6 +404,9 @@ lowercase_ext = true
         let text = "[[rules]]\nname = \"r\"\next = [\"jpg\"]\ntarget = \"{exif.date}/\"\nexif_fallback = \"skip\"\n";
         let set = parse(text).unwrap();
         let c = cand("a/x.jpg", 1, ticks_of(2026, 3, 7));
-        assert_eq!(set.rules[0].target(&c, &[], None), Err(TargetError::NoExifDate));
+        assert_eq!(
+            set.rules[0].target(&c, &[], None),
+            Err(TargetError::NoExifDate)
+        );
     }
 }

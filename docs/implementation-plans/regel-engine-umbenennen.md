@@ -1,7 +1,7 @@
 ---
 title: "Implementation Plan: Regel-Engine & Umbenennen (Phase 4)"
 feature_spec: docs/features/regel-engine-umbenennen.md
-status: approved   # pending-approval | approved | implemented
+status: implemented   # pending-approval | approved | implemented (Schritt 10, manueller Test, steht noch aus)
 created: 2026-10-04
 updated: 2026-10-04
 ---

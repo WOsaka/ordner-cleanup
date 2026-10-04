@@ -42,9 +42,8 @@ struct RawRule {
     lowercase_ext: Option<bool>,
 }
 
-static NAME_KEY: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?m)^\s*name\s*=\s*(?:"([^"]*)"|'([^']*)')"#).unwrap()
-});
+static NAME_KEY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?m)^\s*name\s*=\s*(?:"([^"]*)"|'([^']*)')"#).unwrap());
 
 /// 1-basierte Zeile eines Byte-Offsets.
 fn line_of(text: &str, offset: usize) -> usize {
@@ -67,7 +66,9 @@ fn rule_name_near(text: &str, offset: usize) -> Option<String> {
         .find("[[rules]]")
         .map_or(text.len(), |i| start + 9 + i);
     let caps = NAME_KEY.captures(&text[start..block_end])?;
-    caps.get(1).or_else(|| caps.get(2)).map(|m| m.as_str().to_string())
+    caps.get(1)
+        .or_else(|| caps.get(2))
+        .map(|m| m.as_str().to_string())
 }
 
 pub(super) fn parse(text: &str, source: &Path) -> Result<RuleSet, RulesError> {
@@ -187,7 +188,9 @@ fn convert(raw: &RawRule, line: usize) -> Result<Rule, String> {
         Some("_") => Some('_'),
         Some("-") => Some('-'),
         Some(other) => {
-            return Err(format!("spaces: „{other}“ ist ungültig (erlaubt: \"_\", \"-\")"))
+            return Err(format!(
+                "spaces: „{other}“ ist ungültig (erlaubt: \"_\", \"-\")"
+            ))
         }
     };
     Ok(Rule {

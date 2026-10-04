@@ -267,7 +267,6 @@ pub(super) fn plan_versions_command(args: &PlanVersionsArgs) -> Result<i32> {
     finish(plan, &p.config, args.out.as_ref(), &headline, &result.notes)
 }
 
-
 /// Pfad der Regeldatei: `--rules` vor `rules_file` der Config vor `rules.toml` im Config-Ordner.
 fn resolve_rules_path(
     arg: Option<&Path>,
@@ -445,7 +444,10 @@ mod tests {
     fn fehlende_regeldatei_nennt_den_pfad_und_ein_beispiel() {
         let text = missing_rules_message(Path::new(r"C:\Cfg\rules.toml"));
         assert!(text.contains(r"C:\Cfg\rules.toml"), "{text}");
-        assert!(text.contains("[[rules]]") && text.contains("--rules"), "{text}");
+        assert!(
+            text.contains("[[rules]]") && text.contains("--rules"),
+            "{text}"
+        );
         assert!(text.contains("{exif.date:%Y}"), "{text}");
         // Das Beispiel muss selbst eine gültige Regeldatei sein.
         let example = text.split("\n\n").skip(1).collect::<Vec<_>>().join("\n\n");
@@ -486,7 +488,10 @@ mod tests {
             notes: vec![],
         };
         let text = rules_headline(&result);
-        assert!(text.contains("Regel „fotos“: 2 Dateien (2.0 KiB)"), "{text}");
+        assert!(
+            text.contains("Regel „fotos“: 2 Dateien (2.0 KiB)"),
+            "{text}"
+        );
         assert!(text.contains("a.jpg → Fotos/a.jpg"), "{text}");
         assert!(text.contains("Regel „leer“: 0 Dateien"), "{text}");
         assert!(text.contains("ohne passende Regel: 5 Dateien"), "{text}");
