@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use anyhow::{Context, Result};
+
 /// Umgebungsvariable, die Index- und Config-Verzeichnis überschreibt (Tests).
 pub const HOME_OVERRIDE_ENV: &str = "ORDNER_CLEANUP_HOME";
 
@@ -107,6 +109,51 @@ pub fn data_dir() -> Option<PathBuf> {
 /// Verzeichnis für die Config (`%APPDATA%\ordner-cleanup`).
 pub fn config_dir() -> Option<PathBuf> {
     app_dir("APPDATA", "config")
+}
+
+fn data_file(name: &str) -> Result<PathBuf> {
+    let dir = data_dir().context("Datenordner (%LOCALAPPDATA%) nicht ermittelbar")?;
+    Ok(dir.join(name))
+}
+
+/// Index der gescannten Wurzeln (`index.db`).
+pub fn index_path() -> Result<PathBuf> {
+    data_file("index.db")
+}
+
+/// Register der `apply`-Läufe (`runs.jsonl`).
+pub fn registry_path() -> Result<PathBuf> {
+    data_file("runs.jsonl")
+}
+
+/// Verlauf der Kennzahlen (`history.db`), unabhängig vom Index.
+pub fn history_path() -> Result<PathBuf> {
+    data_file("history.db")
+}
+
+/// Sperrdatei, die `scan` und `run` exklusiv halten.
+pub fn scan_lock_path() -> Result<PathBuf> {
+    data_file("scan.lock")
+}
+
+/// Register der angelegten Aufgaben (`schedules.json`).
+pub fn schedules_path() -> Result<PathBuf> {
+    data_file("schedules.json")
+}
+
+/// Berichte eines Profils (`reports\<profil>`).
+pub fn reports_dir(profile: &str) -> Result<PathBuf> {
+    Ok(data_file("reports")?.join(profile))
+}
+
+/// Pläne eines Profils (`plans\<profil>`).
+pub fn plans_dir(profile: &str) -> Result<PathBuf> {
+    Ok(data_file("plans")?.join(profile))
+}
+
+/// Lauf-Protokoll eines Profils (`runs\<profil>.jsonl`).
+pub fn runs_log(profile: &str) -> Result<PathBuf> {
+    Ok(data_file("runs")?.join(format!("{profile}.jsonl")))
 }
 
 #[cfg(test)]

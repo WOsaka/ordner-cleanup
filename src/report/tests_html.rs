@@ -16,7 +16,8 @@ fn data_block(html: &str) -> &str {
 
 #[test]
 fn keine_externen_referenzen() {
-    let html = page();
+    // Der SVG-Namensraum der Trendgrafiken ist ein Bezeichner, keine Ressource.
+    let html = page().replace("http://www.w3.org/2000/svg", "");
     for forbidden in [
         "http://",
         "https://",
@@ -52,7 +53,7 @@ fn keine_externen_referenzen() {
 #[test]
 fn alle_abschnitte_sind_vorhanden() {
     let html = page();
-    assert_eq!(SECTIONS.len(), 11);
+    assert_eq!(SECTIONS.len(), 13);
     for s in SECTIONS {
         assert!(
             html.contains(&format!(r#"<section id="{}""#, s.id)),

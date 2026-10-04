@@ -1,0 +1,9 @@
+# PARA: Projekte, Bereiche, Ressourcen, Archiv.
+# Auf der obersten Ebene sind nur diese vier Ordner erlaubt (zusätzlich `_Archiv` und
+# `.ordner-cleanup`), und es liegen dort keine Dateien. Darunter ist alles frei.
+name = "PARA"
+
+[[levels]]
+required = ["1 Projekte", "2 Bereiche", "3 Ressourcen", "4 Archiv"]
+allow_other = false
+files = false

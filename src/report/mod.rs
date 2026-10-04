@@ -2,8 +2,11 @@
 
 mod build;
 pub mod csv;
+pub mod history;
 pub mod html;
 pub mod json;
+pub(crate) mod rows;
+pub mod template;
 pub mod terminal;
 
 #[cfg(test)]
@@ -40,6 +43,10 @@ pub struct Report {
     pub structure: Vec<StructureItem>,
     pub problems: Vec<ProblemItem>,
     pub errors: Vec<ErrorItem>,
+    /// Verlauf und Health-Score; der Aufrufer setzt ihn nach `build`
+    pub history: Option<history::HistorySection>,
+    /// Soll/Ist-Abgleich mit einer Vorlage; der Aufrufer setzt ihn nach `build`
+    pub template: Option<template::TemplateSection>,
 }
 
 #[derive(Debug, Clone, Serialize)]

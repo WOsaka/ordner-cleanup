@@ -1,6 +1,6 @@
 ---
 title: "Laufender Betrieb: Verlauf, Health-Score, geplante Läufe, Profile, Vorlagen (Phase 5)"
-status: approved       # draft | approved | implemented
+status: implemented    # draft | approved | implemented
 created: 2026-10-04
 updated: 2026-10-04
 ---
@@ -146,4 +146,27 @@ Größe, Dateien, Ordner, Cloud-only-Anteil (Dateien/Bytes), Müll (Anzahl/Bytes
 - [x] Akku: nur am Netzteil
 - [x] Aufbewahrung: Verlauf ewig, Berichte die letzten 12 je Profil
 - [x] Reihenfolge der Umsetzung: Verlauf + Score → `run`/`schedule`/Benachrichtigung → Profile → Vorlagen (Vorlagen bei Bedarf als Phase 5b abtrennbar)
-- [ ] Formeln und Schwellen der Teilwerte (Implementierungsplan, nach Phase 4)
+- [x] Formeln und Schwellen der Teilwerte: festgelegt im Implementierungsplan, dokumentiert im README (`METRICS_VERSION = 1`)
+
+## Präzisierungen bei der Umsetzung
+- **Reihenfolge:** Profile kamen vor `run`/`schedule`, weil `run --profile` sie voraussetzt (Verlauf und Score → Profile → `run` → Benachrichtigung → `schedule` → Vorlagen).
+- **Aufbewahrung:** Wie die Berichte werden auch die Pläne eines Profils nur für die letzten `reports_keep` Läufe aufbewahrt (`plans\<profil>\<Zeitstempel>-<art>.json`).
+- **Berichtsdatei:** `run` schreibt nur die HTML-Datei (`<Zeitstempel>.html`, dazu `latest.html`); JSON und CSV gibt es weiter über `report`.
+- **Lauf-Protokoll:** `runs\<profil>.jsonl` kennt zusätzlich den Status `partial` (Scan mit Warnungen oder gescheiterter Plan, Exit-Code 2).
+- **Formeln:** siehe README, Abschnitt „Verlauf und Health-Score“.
+
+## Manueller Test (2026-10-04)
+
+Profil `downloads` (Wurzel Downloads, `template = "para"`), Aufgabe per `schedule add --profile downloads --daily 16:35`, Release-Build.
+
+| Prüfung | Ergebnis |
+|---|---|
+| Aufgabe startet zur Zeit und führt `run` aus | bestanden (`schedule list`: „ok, Score 47“) |
+| Toast erscheint | bestanden |
+| Klick auf den Toast öffnet den Bericht | bestanden |
+| `schedule list`, `schedule remove` | bestanden, Aufgabe entfernt |
+
+Nicht geprüft:
+- **Kein Konsolenfenster beim Start durch die Aufgabenplanung:** nicht ausdrücklich beobachtet; belegt nur durch den PE-Subsystem-Test.
+- **Akku-Verhalten** und **Nachholen nach Ausschalten.**
+- **Zweiter Lauf** (Verlauf mit Veränderung zum Vortag).

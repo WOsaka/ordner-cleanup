@@ -1,7 +1,7 @@
 ---
 title: "Implementation Plan: Laufender Betrieb (Phase 5)"
 feature_spec: docs/features/laufender-betrieb.md
-status: pending-approval   # pending-approval | approved | implemented
+status: implemented # pending-approval | approved | implemented
 created: 2026-10-04
 updated: 2026-10-04
 ---
@@ -9,7 +9,9 @@ updated: 2026-10-04
 # Implementation Plan: Laufender Betrieb (Phase 5)
 
 ## Summary
+
 Phase 5 bringt fünf Bausteine, die aufeinander aufbauen:
+
 1. **Kennzahlen und Health-Score** (`src/health/`): rein und deterministisch, berechnet aus denselben Index-Zeilen wie `report::build`.
 2. **Verlauf** in einer eigenen `history.db` (`src/history/`): Ein vollständiger `scan` schreibt am Ende eine Momentaufnahme hinein. `report` und der neue Befehl `history` lesen daraus.
 3. **Profile** in der `config.toml`, mit `--profile` für alle Befehle.
@@ -19,78 +21,84 @@ Phase 5 bringt fünf Bausteine, die aufeinander aufbauen:
 Gegenüber der Spec ändert sich die Reihenfolge der Umsetzung: Profile kommen **vor** `run`/`schedule`, weil `run --profile` sie voraussetzt.
 
 ## Entscheidungen aus Spec und Codeanalyse
-| Thema | Entscheidung |
-|---|---|
-| Quelle der Kennzahlen | `report/build.rs` lädt Dateien und Ordner in privaten Structs (`FRow`, `DRow`). Diese ziehen samt Ladefunktionen nach `report/rows.rs` (`pub(crate)`), damit Bericht und Kennzahlen dieselben Zeilen und dieselben Analysefunktionen nutzen (`problems::check_file`, `structure::check_dir`, `similar::group_similar`, `exact_duplicate_groups`). |
-| Müll-Erkennung | `plan_junk` enthält die Kategorielogik privat. Sie wird als `JunkClassifier::new(options, root).classify(&FileRow) -> Option<&str>` herausgelöst; `plan_junk` nutzt ihn unverändert. |
-| Ordner der ersten Ebene | Gemessen werden je Wurzel und je direktem Unterordner. Dateien direkt in der Wurzel zählen nur zur Wurzel. Bei mehr als 200 Ordnern gibt es Zeilen für die 200 größten und eine für „Sonstige“. Duplikate gehen in den Ordner jeder **weiteren** Instanz (Gruppe nach Pfad sortiert, die erste zählt nicht als verschwendet). |
-| Health-Score | Teilwerte linear: 100 bei 0, 0 ab einer Schwelle für „schlecht“, dazwischen begrenzt (Tabelle unten). Gesamtwert = gerundeter gewichteter Durchschnitt. Abzug je Teilwert = `gewicht/Σgewichte · (100 − teilwert)`. Die Schwellen sind Konstanten mit Versionsnummer (`METRICS_VERSION`) und stehen im README. Einstellbar sind nur die Gewichte, wie in der Spec. |
-| Vergleichbarkeit | Eine Momentaufnahme speichert einen Config-Fingerabdruck (xxh3 über eine kanonische JSON-Form der relevanten Einstellungen: Excludes, Summary, Müll-Kategorien und -Regeln, `old_after`, Struktur-Schwellen, Gewichte, Vorlage samt Inhalts-Hash) sowie `METRICS_VERSION`. „Vergleichbar“ heißt: gleiche Wurzel, vollständig, gleicher Fingerabdruck, gleiche Version. Gibt es keinen solchen Lauf, wird mit dem letzten vollständigen Lauf verglichen und die Ausgabe als „eingeschränkt“ markiert. |
-| Zeitpunkt der Momentaufnahme | In `scan_command` nach einem Scan mit Status `complete` (Fehler bzw. Warnungen erlaubt, ihre Anzahl wird gespeichert). Scheitert das Schreiben, gibt es eine Warnung; der Exit-Code des Scans bleibt. |
-| Exklusiver Scan | Neue Sperrdatei `<data>\scan.lock`, exklusiv geöffnet (`share_mode(0)`) für die Dauer von `scan`/`run`. Ist sie belegt, endet ein manueller `scan` mit einer klaren Meldung, `run` überspringt und protokolliert. |
-| Profile | `[profiles.<name>]` in `config.toml`. Listen werden **ergänzt**, Einzelwerte **ersetzt**, wie bei den CLI-Flags heute. Vorrang: CLI vor Profil vor globaler Config. |
-| Konsolenfenster | Eine Konsolen-exe in der Aufgabenplanung öffnet sichtbar ein Fenster. Deshalb kommt ein zweites Programm `src/bin/ordner-cleanup-bg.rs` mit `#![windows_subsystem = "windows"]` dazu. Es ruft dieselbe `app::run` auf und schreibt die Ausgaben in das Lauf-Protokoll. `schedule add` verweist auf dieses Programm neben der Haupt-exe. |
-| Aufgabenplanung | Über `schtasks.exe /Create /TN \ordner-cleanup\<profil> /XML <datei> /F` bzw. `/Delete`/`/Query /XML`. Das XML erzeugen wir selbst. Einstellungen: `InteractiveToken`, `LeastPrivilege`, `DisallowStartIfOnBatteries`, `StopIfGoingOnBatteries`, `StartWhenAvailable`, Priorität 7, `MultipleInstancesPolicy=IgnoreNew`, `ExecutionTimeLimit=PT4H`. Die Wahrheit für die Anzeige ist ein eigenes Register `<data>\schedules.json`. `schtasks /Query /XML` prüft nur Existenz und exe-Pfad (`quick-xml`). |
-| Benachrichtigung | WinRT-Toast über die `windows`-Crate (`UI_Notifications`, `Data_Xml_Dom`). Die eigene AUMID wird ohne Adminrechte unter `HKCU\Software\Classes\AppUserModelId\WOsaka.OrdnerCleanup` registriert, beim ersten `schedule add`. Ein Klick öffnet den Bericht über `activationType="protocol"` mit `launch="file:///…/latest.html"`, ohne dass unser Programm läuft. Spike 0a bestätigt das. Rückfall: die Crate `tauri-winrt-notification` mit PowerShell-AUMID. |
-| Ablage | `<data>\history.db`, `<data>\reports\<profil>\`, `<data>\plans\<profil>\`, `<data>\runs\<profil>.jsonl` (Lauf-Protokoll), `<data>\schedules.json`, `<data>\scan.lock`. Pläne werden wie Berichte aufbewahrt (die letzten `reports_keep` Läufe); das präzisiert die Spec, die nur Berichte nennt. |
-| Vorlagen-Format | Eine TOML-Datei mit Ebenen (`[[levels]]`). Die eingebauten Vorlagen sind ebenfalls TOML (`include_str!`); das hält das Format ehrlich. |
+
+| Thema                        | Entscheidung                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Quelle der Kennzahlen        | `report/build.rs` lädt Dateien und Ordner in privaten Structs (`FRow`, `DRow`). Diese ziehen samt Ladefunktionen nach `report/rows.rs` (`pub(crate)`), damit Bericht und Kennzahlen dieselben Zeilen und dieselben Analysefunktionen nutzen (`problems::check_file`, `structure::check_dir`, `similar::group_similar`, `exact_duplicate_groups`).                                                                                                                                                        |
+| Müll-Erkennung               | `plan_junk` enthält die Kategorielogik privat. Sie wird als `JunkClassifier::new(options, root).classify(&FileRow) -> Option<&str>` herausgelöst; `plan_junk` nutzt ihn unverändert.                                                                                                                                                                                                                                                                                                                     |
+| Ordner der ersten Ebene      | Gemessen werden je Wurzel und je direktem Unterordner. Dateien direkt in der Wurzel zählen nur zur Wurzel. Bei mehr als 200 Ordnern gibt es Zeilen für die 200 größten und eine für „Sonstige“. Duplikate gehen in den Ordner jeder **weiteren** Instanz (Gruppe nach Pfad sortiert, die erste zählt nicht als verschwendet).                                                                                                                                                                            |
+| Health-Score                 | Teilwerte linear: 100 bei 0, 0 ab einer Schwelle für „schlecht“, dazwischen begrenzt (Tabelle unten). Gesamtwert = gerundeter gewichteter Durchschnitt. Abzug je Teilwert = `gewicht/Σgewichte · (100 − teilwert)`. Die Schwellen sind Konstanten mit Versionsnummer (`METRICS_VERSION`) und stehen im README. Einstellbar sind nur die Gewichte, wie in der Spec.                                                                                                                                       |
+| Vergleichbarkeit             | Eine Momentaufnahme speichert einen Config-Fingerabdruck (xxh3 über eine kanonische JSON-Form der relevanten Einstellungen: Excludes, Summary, Müll-Kategorien und -Regeln, `old_after`, Struktur-Schwellen, Gewichte, Vorlage samt Inhalts-Hash) sowie `METRICS_VERSION`. „Vergleichbar“ heißt: gleiche Wurzel, vollständig, gleicher Fingerabdruck, gleiche Version. Gibt es keinen solchen Lauf, wird mit dem letzten vollständigen Lauf verglichen und die Ausgabe als „eingeschränkt“ markiert.     |
+| Zeitpunkt der Momentaufnahme | In `scan_command` nach einem Scan mit Status `complete` (Fehler bzw. Warnungen erlaubt, ihre Anzahl wird gespeichert). Scheitert das Schreiben, gibt es eine Warnung; der Exit-Code des Scans bleibt.                                                                                                                                                                                                                                                                                                    |
+| Exklusiver Scan              | Neue Sperrdatei `<data>\scan.lock`, exklusiv geöffnet (`share_mode(0)`) für die Dauer von `scan`/`run`. Ist sie belegt, endet ein manueller `scan` mit einer klaren Meldung, `run` überspringt und protokolliert.                                                                                                                                                                                                                                                                                        |
+| Profile                      | `[profiles.<name>]` in `config.toml`. Listen werden **ergänzt**, Einzelwerte **ersetzt**, wie bei den CLI-Flags heute. Vorrang: CLI vor Profil vor globaler Config.                                                                                                                                                                                                                                                                                                                                      |
+| Konsolenfenster              | Eine Konsolen-exe in der Aufgabenplanung öffnet sichtbar ein Fenster. Deshalb kommt ein zweites Programm `src/bin/ordner-cleanup-bg.rs` mit `#![windows_subsystem = "windows"]` dazu. Es ruft dieselbe `app::run` auf und schreibt die Ausgaben in das Lauf-Protokoll. `schedule add` verweist auf dieses Programm neben der Haupt-exe.                                                                                                                                                                  |
+| Aufgabenplanung              | Über `schtasks.exe /Create /TN \ordner-cleanup\<profil> /XML <datei> /F` bzw. `/Delete`/`/Query /XML`. Das XML erzeugen wir selbst. Einstellungen: `InteractiveToken`, `LeastPrivilege`, `DisallowStartIfOnBatteries`, `StopIfGoingOnBatteries`, `StartWhenAvailable`, Priorität 7, `MultipleInstancesPolicy=IgnoreNew`, `ExecutionTimeLimit=PT4H`. Die Wahrheit für die Anzeige ist ein eigenes Register `<data>\schedules.json`. `schtasks /Query /XML` prüft nur Existenz und exe-Pfad (`quick-xml`). |
+| Benachrichtigung             | WinRT-Toast über die `windows`-Crate (`UI_Notifications`, `Data_Xml_Dom`). Die eigene AUMID wird ohne Adminrechte unter `HKCU\Software\Classes\AppUserModelId\WOsaka.OrdnerCleanup` registriert, beim ersten `schedule add`. Ein Klick öffnet den Bericht über `activationType="protocol"` mit `launch="file:///…/latest.html"`, ohne dass unser Programm läuft. Spike 0a bestätigt das. Rückfall: die Crate `tauri-winrt-notification` mit PowerShell-AUMID.                                            |
+| Ablage                       | `<data>\history.db`, `<data>\reports\<profil>\`, `<data>\plans\<profil>\`, `<data>\runs\<profil>.jsonl` (Lauf-Protokoll), `<data>\schedules.json`, `<data>\scan.lock`. Pläne werden wie Berichte aufbewahrt (die letzten `reports_keep` Läufe); das präzisiert die Spec, die nur Berichte nennt.                                                                                                                                                                                                         |
+| Vorlagen-Format              | Eine TOML-Datei mit Ebenen (`[[levels]]`). Die eingebauten Vorlagen sind ebenfalls TOML (`include_str!`); das hält das Format ehrlich.                                                                                                                                                                                                                                                                                                                                                                   |
 
 ### Teilwerte des Health-Scores (`METRICS_VERSION = 1`)
-| Teilwert | Gemessen | 0 Punkte ab |
-|---|---|---|
-| Müll | max(Müll-Dateien je 1.000 Dateien, Müll-Bytes-Anteil) | 50 je 1.000 bzw. 10 % |
-| Duplikate | verschwendete Bytes / lokale Bytes | 25 % |
-| Problemdateien | Dateien mit Problemen je 1.000 Dateien | 50 je 1.000 |
-| Struktur | Struktur-Befunde je 100 Ordner | 30 je 100 |
-| Versionen | überzählige Versionen (Gruppengröße − 1) je 1.000 Dateien | 50 je 1.000 |
-| Strukturtreue | abweichende Einträge / geprüfte Einträge | 30 % |
+
+| Teilwert       | Gemessen                                                  | 0 Punkte ab           |
+| -------------- | --------------------------------------------------------- | --------------------- |
+| Müll           | max(Müll-Dateien je 1.000 Dateien, Müll-Bytes-Anteil)     | 50 je 1.000 bzw. 10 % |
+| Duplikate      | verschwendete Bytes / lokale Bytes                        | 25 %                  |
+| Problemdateien | Dateien mit Problemen je 1.000 Dateien                    | 50 je 1.000           |
+| Struktur       | Struktur-Befunde je 100 Ordner                            | 30 je 100             |
+| Versionen      | überzählige Versionen (Gruppengröße − 1) je 1.000 Dateien | 50 je 1.000           |
+| Strukturtreue  | abweichende Einträge / geprüfte Einträge                  | 30 %                  |
+
 Ohne Dateien ist jeder Teilwert 100. Teilwerte ohne Anwendung, etwa „Strukturtreue“ ohne Vorlage, fallen aus der Gewichtung. Weil jede Kurve monoton fällt und der Durchschnitt monoton ist, ist der Gesamtwert monoton.
 
 ## Files to Create
-| File | Purpose |
-|------|---------|
-| `src/report/rows.rs` | `FRow`, `DRow`, `load_files`, `load_dirs`, `load_errors` aus `build.rs` (`pub(crate)`) |
-| `src/health/mod.rs` | `Metrics` (Kennzahlen eines Bereichs), `Snapshot { root, folders: Vec<(name, Metrics)>, … }`, `compute(rows, ctx) -> Snapshot` |
-| `src/health/score.rs` | Teilwerte, Gewichte, `Score { total, parts, deductions }`, `top_deductions(n)` mit Texten |
-| `src/history/mod.rs` | `History::open(path)` mit eigener Schema-Version und Migration, `write(snapshot)`, `latest_comparable(root, fp)`, `series(root, folder, limit)` |
-| `src/history/schema.sql` | Tabellen `meta`, `snapshots`, `folder_metrics` |
-| `src/scan/lock.rs` | `ScanLock::acquire(path) -> Result<ScanLock, Busy>` (exklusiv geöffnete Datei, Freigabe per `Drop`) |
-| `src/template/mod.rs` | Vorlagen-Modell, Laden mit `Spanned`-Zeilen, eingebaute Vorlagen (`para`, `johnny-decimal`), Auflösung „Name oder Pfad“ |
-| `src/template/check.rs` | `check(rows, root, &Template) -> Vec<Deviation>` und der Anteil für „Strukturtreue“ |
-| `src/template/para.toml`, `src/template/johnny-decimal.toml` | Eingebaute Vorlagen |
-| `src/schedule/mod.rs` | Trait `TaskService` (`create`, `delete`, `query_command`), Register `schedules.json`, Trigger-Modell (`Weekly{day,time}`, `Daily{time}`), Berechnung des nächsten Laufs |
-| `src/schedule/xml.rs` | Task-XML erzeugen (escaped), exe-Pfad aus Query-XML lesen |
-| `src/schedule/schtasks.rs` | Echte `TaskService` über `schtasks.exe` |
-| `src/platform/toast.rs` | `Notifier`-Trait, `register_aumid()`, echter WinRT-Toast |
-| `src/app/history.rs` | Befehl `history` |
-| `src/app/profile.rs` | Profil auflösen und zusammenführen, Befehl `profiles` |
-| `src/app/run.rs` | Befehl `run`: Sperre, Scan, Momentaufnahme, Bericht, Pläne, Aufbewahrung, Lauf-Protokoll, Benachrichtigung |
-| `src/app/schedule.rs` | Befehle `schedule add|list|remove` |
-| `src/bin/ordner-cleanup-bg.rs` | Programm ohne Konsolenfenster, ruft `app::run` auf |
-| `tests/cli_history.rs` | Scan → Momentaufnahme → Bericht mit Verlauf; `--reset-index` erhält den Verlauf; `history` |
-| `tests/cli_profiles_run.rs` | Profile, `run` (ohne echte Aufgabenplanung), Aufbewahrung, Lauf-Protokoll, Sperre |
-| `tests/cli_templates.rs` | Soll/Ist im Bericht für `para`, `johnny-decimal` und eine eigene Vorlage |
+
+| File                                                         | Purpose                                                                                                                                                                 |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- | ------- |
+| `src/report/rows.rs`                                         | `FRow`, `DRow`, `load_files`, `load_dirs`, `load_errors` aus `build.rs` (`pub(crate)`)                                                                                  |
+| `src/health/mod.rs`                                          | `Metrics` (Kennzahlen eines Bereichs), `Snapshot { root, folders: Vec<(name, Metrics)>, … }`, `compute(rows, ctx) -> Snapshot`                                          |
+| `src/health/score.rs`                                        | Teilwerte, Gewichte, `Score { total, parts, deductions }`, `top_deductions(n)` mit Texten                                                                               |
+| `src/history/mod.rs`                                         | `History::open(path)` mit eigener Schema-Version und Migration, `write(snapshot)`, `latest_comparable(root, fp)`, `series(root, folder, limit)`                         |
+| `src/history/schema.sql`                                     | Tabellen `meta`, `snapshots`, `folder_metrics`                                                                                                                          |
+| `src/scan/lock.rs`                                           | `ScanLock::acquire(path) -> Result<ScanLock, Busy>` (exklusiv geöffnete Datei, Freigabe per `Drop`)                                                                     |
+| `src/template/mod.rs`                                        | Vorlagen-Modell, Laden mit `Spanned`-Zeilen, eingebaute Vorlagen (`para`, `johnny-decimal`), Auflösung „Name oder Pfad“                                                 |
+| `src/template/check.rs`                                      | `check(rows, root, &Template) -> Vec<Deviation>` und der Anteil für „Strukturtreue“                                                                                     |
+| `src/template/para.toml`, `src/template/johnny-decimal.toml` | Eingebaute Vorlagen                                                                                                                                                     |
+| `src/schedule/mod.rs`                                        | Trait `TaskService` (`create`, `delete`, `query_command`), Register `schedules.json`, Trigger-Modell (`Weekly{day,time}`, `Daily{time}`), Berechnung des nächsten Laufs |
+| `src/schedule/xml.rs`                                        | Task-XML erzeugen (escaped), exe-Pfad aus Query-XML lesen                                                                                                               |
+| `src/schedule/schtasks.rs`                                   | Echte `TaskService` über `schtasks.exe`                                                                                                                                 |
+| `src/platform/toast.rs`                                      | `Notifier`-Trait, `register_aumid()`, echter WinRT-Toast                                                                                                                |
+| `src/app/history.rs`                                         | Befehl `history`                                                                                                                                                        |
+| `src/app/profile.rs`                                         | Profil auflösen und zusammenführen, Befehl `profiles`                                                                                                                   |
+| `src/app/run.rs`                                             | Befehl `run`: Sperre, Scan, Momentaufnahme, Bericht, Pläne, Aufbewahrung, Lauf-Protokoll, Benachrichtigung                                                              |
+| `src/app/schedule.rs`                                        | Befehle `schedule add                                                                                                                                                   | list | remove` |
+| `src/bin/ordner-cleanup-bg.rs`                               | Programm ohne Konsolenfenster, ruft `app::run` auf                                                                                                                      |
+| `tests/cli_history.rs`                                       | Scan → Momentaufnahme → Bericht mit Verlauf; `--reset-index` erhält den Verlauf; `history`                                                                              |
+| `tests/cli_profiles_run.rs`                                  | Profile, `run` (ohne echte Aufgabenplanung), Aufbewahrung, Lauf-Protokoll, Sperre                                                                                       |
+| `tests/cli_templates.rs`                                     | Soll/Ist im Bericht für `para`, `johnny-decimal` und eine eigene Vorlage                                                                                                |
 
 ## Files to Modify
-| File | Change Description |
-|------|--------------------|
-| `src/report/build.rs` | Zeilen kommen aus `rows.rs`, ohne Verhaltensänderung. Optional ein `history: Option<HistorySection>` und `template: Option<TemplateSection>` im `Report`. |
-| `src/report/mod.rs`, `src/report/html.rs`, `src/report/report.html` | Abschnitte „Verlauf“ (Tabelle jetzt/letzter/Δ, Trend als inline-SVG, drei größte Abzüge, Hinweis „eingeschränkt“) und „Soll/Ist“. JSON enthält beide. |
-| `src/report/terminal.rs` | Zeile mit dem Score und seiner Veränderung |
-| `src/change/junk.rs` | `JunkClassifier` herauslösen, `plan_junk` darauf umstellen |
-| `src/config.rs` | `profiles: BTreeMap<String, Profile>`, `health: HealthConfig { weights }`, `notify: NotifyConfig { score_drop, score_below }`, `reports_keep`. Profile werden beim Laden geprüft: Name `[a-z0-9-]+`, gültige Pläne, Wurzel nicht leer. `Config::with_profile(&Profile)` führt zusammen. |
-| `src/cli.rs` | `--profile` bei `scan`, `report`, `plan …` und `history` (`path` wird optional: `required_unless_present = "profile"`, `conflicts_with`). `--template` bei `scan` und `report`. Neu: `history`, `profiles`, `run`, `schedule {add,list,remove}`. |
-| `src/app/mod.rs` | Sperre und Momentaufnahme in `scan_command`; Verlauf in `report_command`; Profil-Auflösung; Dispatch der neuen Befehle; `index_path` und die anderen Pfadhelfer wandern nach `paths.rs` |
-| `src/app/plan.rs` | `prepare` nimmt optional ein Profil (Wurzel, Config, Regeldatei). `--out` bekommt einen Default unter `plans\<profil>\`, wenn `run` aufruft. |
-| `src/paths.rs` | `history_path`, `reports_dir(profil)`, `plans_dir(profil)`, `runs_log(profil)`, `schedules_path`, `scan_lock_path` |
-| `Cargo.toml` | `windows` (Features `UI_Notifications`, `Data_Xml_Dom`, `Foundation`), `quick-xml` |
-| `README.md` | Verlauf, Health-Score (Formeln, Gewichte), Profile, `run`/`schedule`, Benachrichtigung, Vorlagen-Format |
-| `docs/roadmap.md` | Status Phase 5 |
-| `docs/features/laufender-betrieb.md` | Präzisierungen (Reihenfolge, Aufbewahrung der Pläne, Formeln). Am Ende `status: implemented` und „Manueller Test“. |
+
+| File                                                                | Change Description                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/report/build.rs`                                               | Zeilen kommen aus `rows.rs`, ohne Verhaltensänderung. Optional ein `history: Option<HistorySection>` und `template: Option<TemplateSection>` im `Report`.                                                                                                                               |
+| `src/report/mod.rs`, `src/report/html.rs`, `src/report/report.html` | Abschnitte „Verlauf“ (Tabelle jetzt/letzter/Δ, Trend als inline-SVG, drei größte Abzüge, Hinweis „eingeschränkt“) und „Soll/Ist“. JSON enthält beide.                                                                                                                                   |
+| `src/report/terminal.rs`                                            | Zeile mit dem Score und seiner Veränderung                                                                                                                                                                                                                                              |
+| `src/change/junk.rs`                                                | `JunkClassifier` herauslösen, `plan_junk` darauf umstellen                                                                                                                                                                                                                              |
+| `src/config.rs`                                                     | `profiles: BTreeMap<String, Profile>`, `health: HealthConfig { weights }`, `notify: NotifyConfig { score_drop, score_below }`, `reports_keep`. Profile werden beim Laden geprüft: Name `[a-z0-9-]+`, gültige Pläne, Wurzel nicht leer. `Config::with_profile(&Profile)` führt zusammen. |
+| `src/cli.rs`                                                        | `--profile` bei `scan`, `report`, `plan …` und `history` (`path` wird optional: `required_unless_present = "profile"`, `conflicts_with`). `--template` bei `scan` und `report`. Neu: `history`, `profiles`, `run`, `schedule {add,list,remove}`.                                        |
+| `src/app/mod.rs`                                                    | Sperre und Momentaufnahme in `scan_command`; Verlauf in `report_command`; Profil-Auflösung; Dispatch der neuen Befehle; `index_path` und die anderen Pfadhelfer wandern nach `paths.rs`                                                                                                 |
+| `src/app/plan.rs`                                                   | `prepare` nimmt optional ein Profil (Wurzel, Config, Regeldatei). `--out` bekommt einen Default unter `plans\<profil>\`, wenn `run` aufruft.                                                                                                                                            |
+| `src/paths.rs`                                                      | `history_path`, `reports_dir(profil)`, `plans_dir(profil)`, `runs_log(profil)`, `schedules_path`, `scan_lock_path`                                                                                                                                                                      |
+| `Cargo.toml`                                                        | `windows` (Features `UI_Notifications`, `Data_Xml_Dom`, `Foundation`), `quick-xml`                                                                                                                                                                                                      |
+| `README.md`                                                         | Verlauf, Health-Score (Formeln, Gewichte), Profile, `run`/`schedule`, Benachrichtigung, Vorlagen-Format                                                                                                                                                                                 |
+| `docs/roadmap.md`                                                   | Status Phase 5                                                                                                                                                                                                                                                                          |
+| `docs/features/laufender-betrieb.md`                                | Präzisierungen (Reihenfolge, Aufbewahrung der Pläne, Formeln). Am Ende `status: implemented` und „Manueller Test“.                                                                                                                                                                      |
 
 ## Data Model Changes
 
 ### `history.db` (SQLite, eigenes Schema v1)
+
 ```sql
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);   -- schema_version
 CREATE TABLE snapshots (
@@ -111,10 +119,12 @@ CREATE TABLE folder_metrics (
     PRIMARY KEY (snapshot_id, folder)
 );
 ```
+
 - Kennzahlen als JSON bleiben erweiterbar ohne Schema-Änderung. Nur `score` ist eine eigene Spalte, für schnelle Reihen.
 - Ist die Datei beschädigt oder hat sie ein neueres Schema, gibt es einen Fehler mit Warnung; die Datei wird nie überschrieben oder neu angelegt.
 
 ### Kennzahlen (`health::Metrics`, serialisiert in `metrics`)
+
 ```text
 size, files, dirs, cloud_files, cloud_bytes, junk_files, junk_bytes, dup_groups, dup_wasted,
 problem_files, problems_by_kind{…}, empty_dirs, structure_issues, version_excess,
@@ -123,6 +133,7 @@ versions,template?}, deductions[{part, points, text}]
 ```
 
 ### Config
+
 ```toml
 reports_keep = 12
 
@@ -149,6 +160,7 @@ old_after = "2y"                   # ersetzt; ebenso andere Einzelwerte
 ```
 
 ### Vorlage (TOML)
+
 ```toml
 name = "PARA"
 max_depth = 8
@@ -160,9 +172,11 @@ files = false                     # Dateien auf dieser Ebene sind Abweichungen
 patterns = ['.+']
 files = true
 ```
+
 Ebenen ohne Eintrag sind frei, bis `max_depth`. `_Archiv` und `.ordner-cleanup` sind immer erlaubt. Johnny.Decimal nutzt `patterns` (`^\d0-\d9 `, `^\d\d `, `^\d\d\.\d\d `) und `files = false` auf den Ebenen 1 und 2.
 
 ### Lauf-Protokoll (`runs\<profil>.jsonl`)
+
 ```text
 {"started":…, "ended":…, "status":"ok|skipped-locked|root-missing|failed",
  "score":72, "score_delta":-5, "report":"…", "plans":[{"kind":"rules","actions":3,"path":…}],
@@ -172,6 +186,7 @@ Ebenen ohne Eintrag sind frei, bis `max_depth`. `_Archiv` und `.ordner-cleanup` 
 ## API / Interface Changes
 
 ### CLI
+
 ```text
 ordner-cleanup scan   [<pfad> | --profile X] [--template para|<datei>] …
 ordner-cleanup report [<pfad> | --profile X] [--template …] …
@@ -183,10 +198,12 @@ ordner-cleanup schedule add --profile X (--weekly MO 09:00 | --daily 09:00)
 ordner-cleanup schedule list
 ordner-cleanup schedule remove --profile X
 ```
+
 - **Exit-Codes von `run`:** 0 ok, 2 Teilerfolg (ein Plan gescheitert, Scan mit Warnungen), 1 Lauf gescheitert bzw. Wurzel fehlt, 3 übersprungen wegen Sperre.
 - **`--notify`:** Ohne den Schalter erscheint nie ein Toast. Manuelle Läufe bleiben damit still, wie in der Spec gefordert.
 
 ### Bibliothek (Auszug)
+
 ```rust
 // health
 pub struct MetricsCtx<'a> { junk: &'a JunkClassifier, problem_ctx: &'a ProblemCtx,
@@ -212,6 +229,7 @@ pub trait Notifier { fn notify(&self, title: &str, body: &str, open: &Path) -> i
 ```
 
 ## Implementation Sequence
+
 0. **Spikes** (Wegwerf-Code im Scratchpad, nichts committen; Ergebnis kommt als Absatz unter „Risks“):
    - (a) Toast aus einem unpaketierten Programm mit AUMID aus der Registry, Quelle „Ordner-Cleanup“, Klick öffnet eine `file:///`-HTML, auf Windows 11 und, falls verfügbar, Windows 10.
    - (b) `schtasks /Create /XML` ohne Adminrechte, mit Akku-Einstellungen und `StartWhenAvailable`. Startet `ordner-cleanup-bg.exe` ohne sichtbares Fenster? `/Query /XML` und `/Delete`.
@@ -298,6 +316,7 @@ pub trait Notifier { fn notify(&self, title: &str, body: &str, open: &Path) -> i
     - Depends on: 10
 
 ## Test Strategy
+
 - **Unit:**
   - Kennzahlen, Teilwerte, Score, Determinismus und Monotonie (Tabellentests)
   - `History` (Schema, Vergleichbarkeit, Beschädigung)
@@ -315,6 +334,7 @@ pub trait Notifier { fn notify(&self, title: &str, body: &str, open: &Path) -> i
 - Vorgehen nach `test-driven-development`, vor `status: implemented` `verification-before-completion`.
 
 ## Risks & Open Questions
+
 - **Toast aus einem unpaketierten Programm:** Ob die AUMID aus der Registry ohne Startmenü-Verknüpfung auf allen Windows-11-Builds reicht, ist nicht sicher (Spike 0a). Rückfall: eine Verknüpfung im Startmenü mit AUMID beim `schedule add` (ohne Adminrechte), oder die PowerShell-AUMID (dann steht „Windows PowerShell“ als Absender da). Die Benachrichtigung ist ein Komfort-Feature; der Bericht entsteht immer.
 - **Konsolenfenster:** Gelöst durch das zweite Programm mit `windows_subsystem`. Kosten: ein zweites Binary im Release; im README dokumentiert.
 - **`schtasks` und Sprache:** Die Ausgabe von `/Query` ist lokalisiert. Deshalb nutzen wir nur `/XML` (nicht lokalisiert) und den Exit-Code. Die Anzeige von `schedule list` kommt aus dem eigenen Register; die Aufgabenplanung wird nur auf Existenz und exe-Pfad geprüft.
@@ -322,4 +342,17 @@ pub trait Notifier { fn notify(&self, title: &str, body: &str, open: &Path) -> i
 - **Grenzen der Schwellen:** Die Kurven sind Erfahrungswerte. Abhilfe: `METRICS_VERSION` macht spätere Anpassungen sichtbar (Vergleich „eingeschränkt“ statt falscher Trends), und im manuellen Test wird geprüft, ob echte Ordner plausible Werte bekommen.
 - **Zwei Profile mit derselben Wurzel:** Der Verlauf gehört zur Wurzel. Verschiedene Vorlagen ergeben verschiedene Fingerabdrücke, und der Vergleich nutzt den letzten Lauf mit demselben Abdruck. So stören sich die Profile nicht.
 - **Sperre und manueller Scan:** Die Sperre gilt für `scan` und `run`, nicht für `report`, `plan` und `apply`. SQLite im WAL-Modus erlaubt dort gleichzeitiges Lesen, wie bisher.
-- [ ] Ergebnis der Spikes 0a bis 0c hier eintragen, bevor Schritt 7 bzw. 8 beginnt.
+- [x] Ergebnis der Spikes 0a bis 0c (beim Umsetzen der Schritte 7, 8 und 10 gewonnen statt als Wegwerf-Code):
+  - **0a Toast:** `register_aumid()` legt den Schlüssel unter `HKCU` an (per `reg query` bestätigt), `ToastNotificationManager::…Show` kehrt ohne Fehler zurück (ignorierter Test `toast_wird_angezeigt`). Ob der Toast sichtbar erscheint und ein Klick die `file:///`-HTML öffnet, ließ sich ohne Bildschirm nicht prüfen und gehört in den manuellen Test. Der Rückfall (Startmenü-Verknüpfung bzw. PowerShell-AUMID) ist nicht umgesetzt.
+  - **0b schtasks:** `/Create /XML` mit UTF-16-LE-Datei und `InteractiveToken` funktioniert ohne Adminrechte; `/Query /XML` liefert den Programmpfad, `/Create … /F` ersetzt, `/Delete` entfernt (ignorierter Test `echte_aufgabe_anlegen_abfragen_loeschen`, dazu ein Rauchtest von `schedule add|list|remove` mit echter Aufgabe). Dass `ordner-cleanup-bg.exe` kein Fenster öffnet, belegt der Test auf den PE-Subsystem-Wert (GUI statt Konsole); das tatsächliche Starten durch die Aufgabenplanung, Akku-Verhalten und Nachholen sind manuell zu prüfen.
+  - **0c Kosten:** Kennzahlen + Score für 100.000 Dateien 0,14 s (Ziel < 2 s). Im Verhältnis zum Scan ca. 10 % im Messaufbau (Scan ~17 µs je Datei aus dem Dateicache, Kennzahlen ~2 µs je Datei); das 5-%-Ziel hält erst bei Scans ab etwa 40 µs je Datei. Maßnahmen: parallele Auswertung (rayon), kein Laden der Hashes, Duplikatgruppen per SQL statt in Rust.
+
+## Umsetzungsnotizen (Abweichungen vom Plan)
+
+- Die Integrationstests für `run` und die Benachrichtigung stehen in `tests/cli_run.rs` (nicht in `cli_profiles_run.rs`). Weil `--notify` im Testprozess keinen echten Toast zeigen darf, schreibt die Umgebungsvariable `ORDNER_CLEANUP_NOTIFY_LOG` die Benachrichtigung stattdessen als JSON-Zeile in eine Datei (`platform::toast::system_notifier`).
+- `health::collect` liefert `Collected { snapshot, template }`, damit Verlauf und Soll/Ist dieselben Zeilen nutzen; `Report.history` und `Report.template` werden nach `report::build` gesetzt (`app::snapshot::attach_history`).
+- Zum Programmpfad der Aufgabe prüft `schedule list` sowohl den per `/Query /XML` gelesenen als auch den registrierten Pfad, weil die Konsolenausgabe von `schtasks` Sonderzeichen verfälschen kann.
+- Eine unbrauchbare Vorlage kippt `run` nicht: Scan und Bericht entstehen ohne Vorlage, der Fehler steht im Protokoll (Status `partial`, Exit 2).
+- Johnny.Decimal: Dateien sind auf den Ebenen 1 bis 3 nicht vorgesehen (nicht nur 1 und 2), weil Ebene 3 die Kategorie-Ordner enthält und die Dateien in den ID-Ordnern (Ebene 4) liegen. Die eingebauten Vorlagen setzen kein `max_depth`, um tiefe Ordner nicht doppelt gegen die Struktur-Befunde zu zählen.
+- Der Absender der Benachrichtigung wird zusätzlich bei jedem Toast registriert (idempotent), nicht nur bei `schedule add`.
+

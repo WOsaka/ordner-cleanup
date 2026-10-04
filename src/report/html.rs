@@ -18,10 +18,18 @@ pub struct Section {
     pub title: &'static str,
 }
 
-pub const SECTIONS: [Section; 11] = [
+pub const SECTIONS: [Section; 13] = [
     Section {
         id: "overview",
         title: "Übersicht",
+    },
+    Section {
+        id: "history",
+        title: "Verlauf",
+    },
+    Section {
+        id: "template",
+        title: "Soll/Ist",
     },
     Section {
         id: "tree",
