@@ -395,3 +395,50 @@ fn ocr_abgeschaltet_laesst_scans_ohne_kategorie() {
         .stdout(contains("ohne Kategorie 2"))
         .stdout(contains("OCR 0"));
 }
+
+#[test]
+fn bericht_enthaelt_den_abschnitt_inhalte_und_content_csv() {
+    let env = Env::new();
+    env.corpus();
+    env.scan();
+    let out = env.out.path().join("bericht");
+    env.bin()
+        .arg("report")
+        .arg(env.root())
+        .arg("--out")
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(contains("noch nicht klassifiziert"));
+    env.classify(&[]).success();
+    let out2 = env.out.path().join("bericht2");
+    env.bin()
+        .arg("report")
+        .arg(env.root())
+        .arg("--out")
+        .arg(&out2)
+        .assert()
+        .success()
+        .stdout(contains("Inhalte"))
+        .stdout(contains("rechnung 1"));
+    let report_dir = std::fs::read_dir(&out2)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let out2 = report_dir;
+    let csv = std::fs::read_to_string(out2.join("content.csv")).unwrap();
+    assert!(
+        csv.contains("Kategorie") && csv.contains("rechnung"),
+        "{csv}"
+    );
+    assert!(
+        csv.contains("RE-2026-0042") && csv.contains("2026-09-30"),
+        "{csv}"
+    );
+    let html = std::fs::read_to_string(out2.join("report.html")).unwrap();
+    assert!(html.contains("id=\"content\""));
+    let json = std::fs::read_to_string(out2.join("report.json")).unwrap();
+    assert!(json.contains("doc_number") && json.contains("RE-2026-0042"));
+}

@@ -1,6 +1,7 @@
 //! Report-Modell: wird ausschließlich aus dem Index gebaut und in mehrere Formate geschrieben.
 
 mod build;
+pub mod content;
 pub mod csv;
 pub mod history;
 pub mod html;
@@ -47,6 +48,8 @@ pub struct Report {
     pub history: Option<history::HistorySection>,
     /// Soll/Ist-Abgleich mit einer Vorlage; der Aufrufer setzt ihn nach `build`
     pub template: Option<template::TemplateSection>,
+    /// Inhalte (Kategorien, Zum Prüfen, Fotos); der Aufrufer setzt ihn nach `build`
+    pub content: Option<content::ContentSection>,
 }
 
 #[derive(Debug, Clone, Serialize)]

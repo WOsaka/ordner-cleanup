@@ -580,6 +580,57 @@
     ], t.items, { empty: 'Die Struktur entspricht der Vorlage.', facet: { label: 'Art', get: (i) => [i.label] } }));
   }
 
+  /* ---------- Inhalte (Klassifikation) ---------- */
+
+  function renderContent() {
+    const c = data.content;
+    const s = slot('content');
+    if (!c || !c.classified) {
+      s.append(el('p', { class: 'hint', text: 'Noch nicht klassifiziert. Mit `ordner-cleanup classify <pfad>` entstehen hier Kategorien, Quellen und die Liste „Zum Prüfen“.' }));
+      return;
+    }
+    s.append(el('dl', { class: 'figures' },
+      fig('Klassifiziert', nf.format(c.files_classified), 'von ' + plural(c.files_total, 'Datei', 'Dateien')),
+      fig('Zum Prüfen', nf.format(c.review_total), 'Konfidenz unter ' + nf.format(c.min_confidence), c.review_total > 0),
+      fig('Nicht analysiert', nf.format(c.cloud_only + c.not_classified), 'Cloud-only ' + nf.format(c.cloud_only) + ', nicht klassifiziert ' + nf.format(c.not_classified)),
+      fig('Quellen', 'Text ' + nf.format(c.sources.text) + ' · OCR ' + nf.format(c.sources.ocr) + ' · Metadaten ' + nf.format(c.sources.meta) + ' · LLM ' + nf.format(c.sources.llm))));
+    s.append(el('h3', { text: 'Kategorien' }), dataTable([
+      { label: 'Kategorie', get: (k) => k.name },
+      { label: 'Dateien', num: true, get: (k) => k.count, render: (k) => nf.format(k.count) },
+      { label: 'Größe', num: true, get: (k) => k.size, render: (k) => bytes(k.size) },
+      { label: 'Anteil', num: true, get: (k) => k.share, render: (k) => pct(k.share) },
+      { label: 'davon LLM', num: true, get: (k) => k.llm, render: (k) => nf.format(k.llm) },
+    ], c.categories, { pageSize: 20, empty: 'Keine Kategorien erkannt.' }));
+    if (c.unreadable.length || c.unsupported || c.too_large) {
+      s.append(el('h3', { text: 'Nicht lesbar oder nicht unterstützt' }), dataTable([
+        { label: 'Grund', get: (u) => u.key },
+        { label: 'Dateien', num: true, get: (u) => u.count, render: (u) => nf.format(u.count) },
+      ], [...c.unreadable.map((u) => ({ key: u.key, count: u.count })),
+        { key: 'zu groß', count: c.too_large }, { key: 'nicht unterstützt', count: c.unsupported }].filter((u) => u.count > 0), { pageSize: 20 }));
+    }
+    s.append(el('h3', { text: 'Zum Prüfen' }));
+    if (c.review_total > c.review.length) {
+      s.append(el('p', { class: 'hint', text: 'Die Liste zeigt die ersten ' + nf.format(c.review.length) + ' von ' + nf.format(c.review_total) + ' Dateien; vollständig steht sie in content.csv und der JSON-Datei.' }));
+    }
+    s.append(dataTable([
+      { label: 'Pfad', get: (r) => r.path, cls: 'path' },
+      { label: 'Beste Kategorie', get: (r) => r.category + ' ' + r.confidence.toFixed(2) },
+      { label: 'Zweite', get: (r) => (r.category2 ? r.category2 + ' ' + (r.confidence2 || 0).toFixed(2) : '') },
+      { label: 'Treffer', get: (r) => r.hits.join(', ') },
+    ], c.review, { empty: 'Nichts zu prüfen.' }));
+    if (c.places.length || c.cameras.length) {
+      s.append(el('h3', { text: 'Fotos' }));
+      s.append(dataTable([
+        { label: 'Ort', get: (p) => p.key },
+        { label: 'Fotos', num: true, get: (p) => p.count, render: (p) => nf.format(p.count) },
+      ], c.places, { pageSize: 10, empty: 'Keine Orte.' }));
+      s.append(dataTable([
+        { label: 'Kamera', get: (p) => p.key },
+        { label: 'Fotos', num: true, get: (p) => p.count, render: (p) => nf.format(p.count) },
+      ], c.cameras, { pageSize: 10, empty: 'Keine Kameras.' }));
+    }
+  }
+
   /* ---------- Kopf, Navigation, Farbschema ---------- */
 
   function renderHeader() {
@@ -604,6 +655,7 @@
       problems: data.problems.length,
       errors: data.errors.length,
       template: data.template ? data.template.total : null,
+      content: data.content && data.content.classified ? data.content.review_total : null,
     };
     document.querySelectorAll('.nav a').forEach((a) => {
       const id = a.getAttribute('href').slice(1);
@@ -650,6 +702,7 @@
   renderOverview();
   renderHistory();
   renderTemplate();
+  renderContent();
   renderTree();
   renderTop();
   renderTypes();

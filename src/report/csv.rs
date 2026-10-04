@@ -113,7 +113,47 @@ pub fn render_all(report: &Report) -> Result<Vec<(&'static str, Vec<u8>)>> {
         .map(|e| vec![e.path.clone(), e.kind.clone(), e.message.clone()])
         .collect();
 
+    let content: Vec<Vec<String>> = report
+        .content
+        .iter()
+        .flat_map(|c| c.files.iter())
+        .map(|f| {
+            vec![
+                f.path.clone(),
+                f.status.clone(),
+                f.category.clone().unwrap_or_default(),
+                f.confidence.map(|c| format!("{c:.2}")).unwrap_or_default(),
+                f.source.clone().unwrap_or_default(),
+                f.doc_date.clone().unwrap_or_default(),
+                f.doc_sender.clone().unwrap_or_default(),
+                f.doc_number.clone().unwrap_or_default(),
+                f.doc_amount.clone().unwrap_or_default(),
+                f.doc_title.clone().unwrap_or_default(),
+                f.review.to_string(),
+            ]
+        })
+        .collect();
+
     Ok(vec![
+        (
+            "content.csv",
+            render(
+                &[
+                    "Pfad",
+                    "Status",
+                    "Kategorie",
+                    "Konfidenz",
+                    "Quelle",
+                    "Datum",
+                    "Absender",
+                    "Nummer",
+                    "Betrag",
+                    "Titel",
+                    "Zum Prüfen",
+                ],
+                &content,
+            )?,
+        ),
         (
             "duplicates.csv",
             render(

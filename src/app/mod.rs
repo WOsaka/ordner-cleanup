@@ -746,6 +746,10 @@ pub(super) fn build_report(
     if let Err(e) = snapshot::attach_history(&mut model, index, &root, config, template, notes) {
         eprintln!("Warnung: Abschnitt Verlauf ausgelassen: {e:#}");
     }
+    match report::content::build(index, &root.dir_key, config.classify.min_confidence as f32) {
+        Ok(section) => model.content = Some(section),
+        Err(e) => eprintln!("Warnung: Abschnitt Inhalte ausgelassen: {e:#}"),
+    }
     Ok((model, root))
 }
 
