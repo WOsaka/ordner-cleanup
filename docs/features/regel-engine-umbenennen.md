@@ -1,6 +1,6 @@
 ---
 title: "Regel-Engine & Umbenennen (Phase 4)"
-status: approved       # draft | approved | implemented
+status: implemented    # draft | approved | implemented
 created: 2026-10-04
 updated: 2026-10-04
 ---
@@ -48,6 +48,7 @@ Flache Regeln, Reihenfolge = Priorität. Pro Datei gewinnt die **erste** Regel, 
 ```toml
 [[rules]]
 name   = "fotos"
+glob   = "Eingang/**"          # sonst passt die Regel auch auf schon einsortierte Fotos
 ext    = ["jpg", "jpeg", "heic"]
 target = "Fotos/{exif.date:%Y}/{exif.date:%Y-%m-%d}_{name}.{ext}"
 exif_fallback = "mtime"     # mtime (Default) | skip
@@ -127,7 +128,7 @@ EXIF-Datum wird im Index zwischengespeichert (je Datei: Aufnahmedatum oder „ke
 - [ ] Given eine Cloud-only-Datei, when `plan rules` läuft, then wird sie weder gelesen (auch kein EXIF) noch verschoben und erscheint als `skipped: cloud-placeholder`
 - [ ] Given ein Plan unter einer OneDrive-Wurzel über der Obergrenze, when `apply` ohne `--allow-large` läuft, then verweigert es vor der ersten Aktion
 - [ ] Given ein Phase-2/3-Plan ohne Feld `rule`, when `apply` oder `undo` läuft, then funktioniert er unverändert
-- [ ] Manueller Test im OneDrive-Testordner und ein echter Lauf auf einem Alltagsordner (z. B. Downloads), jeweils mit `undo`, sind dokumentiert
+- [x] Manueller Test im OneDrive-Testordner und ein echter Lauf auf einem Alltagsordner (z. B. Downloads), jeweils mit `undo`, sind dokumentiert
 
 ## Edge Cases & Error States
 | Scenario | Expected Behavior |
@@ -155,6 +156,21 @@ EXIF-Datum wird im Index zwischengespeichert (je Datei: Aufnahmedatum oder „ke
 | Gesperrte Datei beim `apply` | Aktion fehlgeschlagen, Journal vermerkt Fehler, Lauf geht weiter |
 | EXIF-Daten kaputt, abgeschnitten oder extrem groß | Gilt als „kein EXIF“, Fallback; nur der Metadatenbereich wird gelesen (Obergrenze) |
 | Link/Junction als Quelle oder auf dem Zielweg | Übersprungen wie in Phase 2/3 |
+
+## Manueller Test
+
+Durchgeführt am 2026-10-04 mit der Release-Build, `ORDNER_CLEANUP_HOME` isoliert. Je Lauf: Vorher-Snapshot (Pfad, Größe, mtime, Attribute, SHA256) → `scan` → `plan rules` (Snapshot unverändert) → `apply --yes` → `scan` → `plan rules` → `undo --yes` → Nachher-Snapshot.
+
+| Ordner | Regeln | Apply | Zweiter Plan | Undo |
+|---|---|---|---|---|
+| `OneDrive\ordner-cleanup-test` (6 Dateien; danach vollständig entfernt) | 4 (`klein`, `fotos`, `rechnungen`, `pdf`) | 5 Dateien einsortiert/umbenannt | 0 Aktionen | 5 wiederhergestellt, Snapshot identisch, neue Ordner entfernt |
+| echter `Downloads`-Ordner (59 Dateien, 578,5 MiB) | 6 (`installer`, `archive`, `tabellen`, `word`, `pdf`, `sonstiges`) | 57 Dateien einsortiert | 0 Aktionen (4 Dateien als `duplicate-at-target` gemeldet) | 57 wiederhergestellt, Snapshot identisch |
+
+Beobachtungen:
+- Das Beispiel `Rechnung März 4711 - Kopie (2).PDF` wurde zu `Finanzen\Rechnungen\2026\2026-10-04_Rechnung_Maerz_4711.pdf`, `Foto.JPG` im Ordner `Klein` zu `Bild.jpg` (nur Schreibweise, ein Schritt, per `undo` zurück).
+- **Fund:** Die Beispielregel `fotos` dieser Spec (ohne `glob`) ist nicht stabil: Sie passt auch auf bereits einsortierte Dateien und würde das Datum erneut voranstellen. Der Planer hat das als Stabilitätshinweis gemeldet. Die Beispiele in Spec und README sind auf `glob = "Eingang/**"` eingegrenzt.
+- In Downloads erzeugten Dateien wie `Name.pdf` und `Name (1).pdf` (gleicher Inhalt, `strip_copy_suffix`) im ersten Plan ein durchnummeriertes Ziel `Name (2).pdf`. Der zweite Plan meldet sie als `duplicate-at-target` (Aufräumen per `plan dedupe`), ohne sie erneut zu bewegen.
+- Nicht prüfbar: Es lagen keine Handy-Fotos vor; als echte Formatproben dienten `exif.jpg` und `exif.heic` aus den Testdaten von `kamadak-exif`. Ob der OneDrive-Client das Umbenennen nur in der Schreibweise korrekt in die Cloud überträgt, und ein echter Cloud-only-Platzhalter, wurden nicht geprüft.
 
 ## Technical Constraints
 - Performance: `plan rules` ohne `{exif.date}` auf 100.000 Dateien in unter 10 Sekunden (nur Index-Zugriff, wie Phase 3). EXIF wird nur gelesen, wenn alle übrigen Bedingungen einer Regel zutreffen und ihr Ziel bzw. `iso_date_prefix` es braucht; nur der Header, parallel (`rayon`), mit Cache im Index. Messung wie in Phase 3 dokumentieren.

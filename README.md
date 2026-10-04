@@ -109,6 +109,7 @@ Die Regeldatei liegt standardmäßig neben der Config (`%APPDATA%\ordner-cleanup
 ```toml
 [[rules]]
 name   = "fotos"
+glob   = "Eingang/**"          # sonst passt die Regel auch auf schon einsortierte Fotos
 ext    = ["jpg", "jpeg", "heic"]
 target = "Fotos/{exif.date:%Y}/{exif.date:%Y-%m-%d}_{name}.{ext}"
 exif_fallback = "mtime"     # mtime (Default) | skip
