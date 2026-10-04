@@ -93,6 +93,23 @@ pub enum PlanCommand {
     Archive(PlanArchiveArgs),
     /// Ältere Versionen (`_v1`, `- Kopie`, …) nach `_Archiv\Versionen\…` verschieben
     Versions(PlanVersionsArgs),
+    /// Dateien nach Regeln aus einer Regeldatei einsortieren und umbenennen
+    Rules(PlanRulesArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PlanRulesArgs {
+    /// Bereits gescannter Ordner
+    pub path: PathBuf,
+    /// Regeldatei (Default: `rules_file` aus der Config, sonst `rules.toml` neben der Config)
+    #[arg(long)]
+    pub rules: Option<PathBuf>,
+    /// Nur diese Regel(n) anwenden (mehrfach möglich)
+    #[arg(long = "rule")]
+    pub rule: Vec<String>,
+    /// Zieldatei für den Plan (Default: plan-<Zeitstempel>.json im aktuellen Ordner)
+    #[arg(long)]
+    pub out: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]

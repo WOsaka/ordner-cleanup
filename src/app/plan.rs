@@ -19,15 +19,18 @@ use crate::change::junk::{plan_junk, JunkOptions};
 use crate::change::limits;
 use crate::change::plan::Plan;
 use crate::change::protect::{ProtectPaths, Protector};
+use crate::change::rules::{plan_rules, CachedExif, LiveContent, RulesEnv, RulesPlan};
 use crate::change::versions::{plan_versions, VersionsOptions};
 use crate::cli::{
-    PlanArchiveArgs, PlanDedupeArgs, PlanEmptyDirsArgs, PlanJunkArgs, PlanVersionsArgs,
+    PlanArchiveArgs, PlanDedupeArgs, PlanEmptyDirsArgs, PlanJunkArgs, PlanRulesArgs,
+    PlanVersionsArgs,
 };
 use crate::config::{Config, BUILTIN_JUNK_CATEGORIES};
 use crate::index::Index;
 use crate::paths;
 use crate::platform::windows::downloads_dir;
 use crate::report;
+use crate::rules::RuleSet;
 use crate::scan::source::TICKS_PER_SEC;
 
 /// Alles, was jeder Planer braucht.
@@ -40,8 +43,16 @@ struct Prepared {
 
 /// Wurzel auflösen, Index öffnen und die Hinweise zu Index-Alter und OneDrive ausgeben.
 fn prepare(path: &Path) -> Result<Prepared> {
-    let root = resolve_root(path, false)?;
-    let config = load_config()?;
+    let (root, config) = start(path)?;
+    open_prepared(root, config)
+}
+
+/// Erster Teil von [`prepare`]: Wurzel und Config, ohne den Index zu öffnen.
+fn start(path: &Path) -> Result<(PathBuf, Config)> {
+    Ok((resolve_root(path, false)?, load_config()?))
+}
+
+fn open_prepared(root: PathBuf, config: Config) -> Result<Prepared> {
     let index = Index::open(&index_path()?)?;
     let scanned = report::select_root(&index, Some(&root))?;
     if let Some(note) = index_age_note(&scanned, chrono::Utc::now()) {
@@ -256,6 +267,114 @@ pub(super) fn plan_versions_command(args: &PlanVersionsArgs) -> Result<i32> {
     finish(plan, &p.config, args.out.as_ref(), &headline, &result.notes)
 }
 
+
+/// Pfad der Regeldatei: `--rules` vor `rules_file` der Config vor `rules.toml` im Config-Ordner.
+fn resolve_rules_path(
+    arg: Option<&Path>,
+    config: &Config,
+    config_dir: Option<&Path>,
+) -> Result<PathBuf> {
+    if let Some(path) = arg {
+        return Ok(path.to_path_buf());
+    }
+    if let Some(path) = &config.rules_file {
+        return Ok(PathBuf::from(path));
+    }
+    let dir = config_dir.context("Config-Ordner (%APPDATA%) nicht ermittelbar")?;
+    Ok(dir.join("rules.toml"))
+}
+
+fn missing_rules_message(path: &Path) -> String {
+    format!(
+        "Regeldatei {} nicht gefunden. Lege sie an oder gib mit --rules eine andere an, \
+         zum Beispiel:\n\n\
+         [[rules]]\n\
+         name   = \"pdf\"\n\
+         ext    = [\"pdf\"]\n\
+         target = \"Dokumente/\"\n\n\
+         [[rules]]\n\
+         name   = \"fotos\"\n\
+         ext    = [\"jpg\", \"jpeg\"]\n\
+         target = \"Fotos/{{exif.date:%Y}}/\"",
+        paths::display(path)
+    )
+}
+
+/// Kopfzeilen der Zusammenfassung: Summe, je Regel Anzahl und Beispiele, Dateien ohne Regel.
+fn rules_headline(result: &RulesPlan) -> String {
+    let plan = &result.plan;
+    let mut lines = vec![format!(
+        "{} Aktionen, {} betroffen, {} übersprungen",
+        plan.actions.len(),
+        ByteSize::b(result.bytes),
+        plan.skipped.len()
+    )];
+    for rule in &result.per_rule {
+        lines.push(format!(
+            "  Regel „{}“: {} Dateien ({})",
+            rule.name,
+            rule.actions,
+            ByteSize::b(rule.bytes)
+        ));
+        for (old, new) in &rule.examples {
+            lines.push(format!("      {old} → {new}"));
+        }
+    }
+    if result.unmatched > 0 {
+        lines.push(format!(
+            "  ohne passende Regel: {} Dateien",
+            result.unmatched
+        ));
+    }
+    lines.join("\n")
+}
+
+pub(super) fn plan_rules_command(args: &PlanRulesArgs) -> Result<i32> {
+    // Die Regeldatei wird vollständig geprüft, bevor der Index geöffnet wird.
+    let (root, config) = start(&args.path)?;
+    let rules_path = resolve_rules_path(
+        args.rules.as_deref(),
+        &config,
+        paths::config_dir().as_deref(),
+    )?;
+    if !rules_path.is_file() {
+        bail!("{}", missing_rules_message(&rules_path));
+    }
+    let mut rules = RuleSet::load(&rules_path)?;
+    if !args.rule.is_empty() {
+        rules = rules.select(&args.rule)?;
+    }
+    let mut p = open_prepared(root, config)?;
+    let created = now_rfc3339();
+    let content = LiveContent::default();
+    let mut result = plan_rules(
+        &mut p.index,
+        &p.root,
+        &rules,
+        &RulesEnv {
+            protector: &p.protector,
+            exif: &CachedExif,
+            content: &content,
+            created: &created,
+            now_ticks: now_ticks(),
+        },
+    )?;
+    // Der Cache behält nur Einträge zu Dateien, die der Index noch kennt.
+    let _ = p.index.exif_prune(&paths::dir_key(&p.root));
+    if !args.rule.is_empty() {
+        let names: Vec<&str> = rules.rules.iter().map(|r| r.name.as_str()).collect();
+        result.plan.params.insert("rules".into(), names.join(","));
+    }
+    let headline = rules_headline(&result);
+    finish(
+        &result.plan,
+        &p.config,
+        args.out.as_ref(),
+        &headline,
+        &result.notes,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,5 +420,75 @@ mod tests {
             [PathBuf::from(r"D:\Eingang"), PathBuf::from(r"E:\Mehr")]
         );
         assert!(downloads_dirs(&Config::default()).len() <= 1);
+    }
+
+    #[test]
+    fn regeldatei_pfad_cli_vor_config_vor_default() {
+        let with_file = config("rules_file = \"D:\\\\Regeln\\\\r.toml\"");
+        let dir = Path::new(r"C:\Cfg");
+        assert_eq!(
+            resolve_rules_path(Some(Path::new(r"X:\a.toml")), &with_file, Some(dir)).unwrap(),
+            PathBuf::from(r"X:\a.toml")
+        );
+        assert_eq!(
+            resolve_rules_path(None, &with_file, Some(dir)).unwrap(),
+            PathBuf::from(r"D:\Regeln\r.toml")
+        );
+        assert_eq!(
+            resolve_rules_path(None, &Config::default(), Some(dir)).unwrap(),
+            PathBuf::from(r"C:\Cfg\rules.toml")
+        );
+        assert!(resolve_rules_path(None, &Config::default(), None).is_err());
+    }
+
+    #[test]
+    fn fehlende_regeldatei_nennt_den_pfad_und_ein_beispiel() {
+        let text = missing_rules_message(Path::new(r"C:\Cfg\rules.toml"));
+        assert!(text.contains(r"C:\Cfg\rules.toml"), "{text}");
+        assert!(text.contains("[[rules]]") && text.contains("--rules"), "{text}");
+        assert!(text.contains("{exif.date:%Y}"), "{text}");
+        // Das Beispiel muss selbst eine gültige Regeldatei sein.
+        let example = text.split("\n\n").skip(1).collect::<Vec<_>>().join("\n\n");
+        RuleSet::parse(&example, Path::new("beispiel.toml")).unwrap();
+    }
+
+    #[test]
+    fn zusammenfassung_zeigt_regeln_beispiele_und_dateien_ohne_regel() {
+        use crate::change::plan::{Plan, PlanKind, PLAN_VERSION};
+        use crate::change::rules::RuleStats;
+        let result = RulesPlan {
+            plan: Plan {
+                version: PLAN_VERSION,
+                created: String::new(),
+                kind: PlanKind::Rules,
+                root: r"D:\Daten".into(),
+                keep_strategy: None,
+                params: Default::default(),
+                actions: vec![],
+                skipped: vec![],
+            },
+            bytes: 2048,
+            per_rule: vec![
+                RuleStats {
+                    name: "fotos".into(),
+                    actions: 2,
+                    bytes: 2048,
+                    examples: vec![("a.jpg".into(), "Fotos/a.jpg".into())],
+                },
+                RuleStats {
+                    name: "leer".into(),
+                    actions: 0,
+                    bytes: 0,
+                    examples: vec![],
+                },
+            ],
+            unmatched: 5,
+            notes: vec![],
+        };
+        let text = rules_headline(&result);
+        assert!(text.contains("Regel „fotos“: 2 Dateien (2.0 KiB)"), "{text}");
+        assert!(text.contains("a.jpg → Fotos/a.jpg"), "{text}");
+        assert!(text.contains("Regel „leer“: 0 Dateien"), "{text}");
+        assert!(text.contains("ohne passende Regel: 5 Dateien"), "{text}");
     }
 }
