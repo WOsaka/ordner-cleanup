@@ -20,7 +20,7 @@ const SERIES_LIMIT: usize = 52;
 
 /// Was eine Momentaufnahme dem Nutzer zu sagen hat.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct Recorded {
+pub(crate) struct Recorded {
     pub snapshot: Snapshot,
     pub previous: Option<(Stored, Comparable)>,
 }
@@ -86,6 +86,7 @@ pub(super) fn attach_history(
     index: &Index,
     root: &ReportRoot,
     config: &Config,
+    extra_notes: Vec<String>,
 ) -> Result<()> {
     // Nur ganze gescannte Wurzeln haben einen Verlauf, keine Unterordner davon.
     if !index.roots()?.iter().any(|r| r.path_key == root.dir_key) {
@@ -101,7 +102,7 @@ pub(super) fn attach_history(
         },
     )?;
     let fp = health::fingerprint(config, None);
-    let mut notes = Vec::new();
+    let mut notes = extra_notes;
     let mut previous = None;
     let mut series = Vec::new();
     match History::open(&paths::history_path()?) {

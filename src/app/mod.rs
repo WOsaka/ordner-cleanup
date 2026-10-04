@@ -35,11 +35,12 @@ use crate::scan::classify::{Classifier, DefaultPaths};
 use crate::scan::lock::ScanLock;
 use crate::scan::source::{StdDirSource, TICKS_PER_SEC};
 use crate::scan::walker::Progress;
-use crate::scan::{scan, ScanEnv};
+use crate::scan::{scan, ScanEnv, ScanOutcome};
 
 mod history;
 mod plan;
 mod profile;
+mod run;
 mod snapshot;
 
 /// Führt den Befehl aus und liefert den Exit-Code (0 OK, 2 OK mit Teilfehlern).
@@ -49,6 +50,7 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Report(args) => report_command(&args),
         Command::History(args) => history_command(&args),
         Command::Profiles => profile::profiles_command(),
+        Command::Run(args) => run::run_command(&args),
         Command::Index(cmd) => index_command(&cmd),
         Command::Plan(PlanCommand::Dedupe(args)) => plan::plan_dedupe_command(&args),
         Command::Plan(PlanCommand::Junk(args)) => plan::plan_junk_command(&args),
@@ -544,26 +546,29 @@ fn history_command(args: &HistoryArgs) -> Result<i32> {
     history::history_command(args, path.as_deref())
 }
 
-fn scan_command(args: &ScanArgs) -> Result<i32> {
-    let target = profile::target(args.path.as_deref(), args.profile.as_deref())?;
-    let root = resolve_root(&target.root, args.force || target.force())?;
-    let profile_name = target.profile_name().map(String::from);
-    let mut config = target.config;
-    config.apply_scan_args(args);
-    let default_paths = DefaultPaths::from_env();
-    if !config.no_default_excludes {
-        if let Some(area) = Classifier::root_in_default_area(&root, &default_paths) {
-            eprintln!(
-                "Hinweis: {} liegt im Standard-Ausschlussbereich {}; der angegebene Pfad hat Vorrang.",
-                paths::display(&root),
-                paths::display(&area)
-            );
-        }
-    }
+/// Was ein Scan liefert: das Ergebnis, der Index und, bei vollständigem Lauf, die Momentaufnahme.
+pub(super) struct ScanResult {
+    pub outcome: ScanOutcome,
+    pub index: Index,
+    pub index_file: PathBuf,
+    pub recorded: Option<Result<snapshot::Recorded>>,
+}
 
-    let _lock = ScanLock::acquire(&paths::scan_lock_path()?)?;
+pub(super) struct ScanJob<'a> {
+    pub root: &'a Path,
+    pub config: &'a Config,
+    pub reset_index: bool,
+    /// Fortschrittsanzeige im Terminal (aus für geplante Läufe)
+    pub spinner: bool,
+    pub profile: Option<&'a str>,
+}
+
+/// Scannt in den Index und schreibt danach bei vollständigem Lauf die Momentaufnahme. Die
+/// Scan-Sperre hält der Aufrufer.
+pub(super) fn run_scan(job: &ScanJob) -> Result<ScanResult> {
+    let default_paths = DefaultPaths::from_env();
     let index_file = index_path()?;
-    if args.reset_index {
+    if job.reset_index {
         Index::reset(&index_file)?;
     }
     let mut index = Index::open(&index_file)?;
@@ -578,7 +583,7 @@ fn scan_command(args: &ScanArgs) -> Result<i32> {
     let progress = Progress::default();
     let env = ScanEnv {
         source: &StdDirSource,
-        config: &config,
+        config: job.config,
         default_paths: &default_paths,
         cancel: &cancel,
         progress: &progress,
@@ -587,12 +592,26 @@ fn scan_command(args: &ScanArgs) -> Result<i32> {
     };
     let finished = AtomicBool::new(false);
     let outcome = std::thread::scope(|s| {
-        s.spawn(|| show_progress(&progress, &finished));
-        let result = scan(&mut index, &root, &env);
+        if job.spinner {
+            s.spawn(|| show_progress(&progress, &finished));
+        }
+        let result = scan(&mut index, job.root, &env);
         finished.store(true, Ordering::Relaxed);
         result
     })?;
+    let recorded = (!outcome.aborted)
+        .then(|| snapshot::record(&index, job.root, job.config, job.profile, outcome.errors));
+    Ok(ScanResult {
+        outcome,
+        index,
+        index_file,
+        recorded,
+    })
+}
 
+/// Zusammenfassung eines Scans; `true`, wenn er vollständig war.
+fn print_scan_result(res: &ScanResult) -> bool {
+    let outcome = &res.outcome;
     println!(
         "{} Dateien, {} Ordner, {} ({} Fehler/Warnungen)",
         outcome.files,
@@ -602,23 +621,48 @@ fn scan_command(args: &ScanArgs) -> Result<i32> {
     );
     if outcome.aborted {
         eprintln!("Scan abgebrochen; der Index bleibt konsistent, aber unvollständig.");
-        return Ok(1);
+        return false;
     }
-    println!("Index: {}", paths::display(&index_file));
-    match snapshot::record(
-        &index,
-        &root,
-        &config,
-        profile_name.as_deref(),
-        outcome.errors,
-    ) {
-        Ok(recorded) => println!(
+    println!("Index: {}", paths::display(&res.index_file));
+    match &res.recorded {
+        Some(Ok(recorded)) => println!(
             "{}",
             report::history::score_line(recorded.score(), recorded.comparison().as_ref())
         ),
-        Err(e) => eprintln!("Warnung: Verlauf nicht aktualisiert: {e:#}"),
+        Some(Err(e)) => eprintln!("Warnung: Verlauf nicht aktualisiert: {e:#}"),
+        None => {}
     }
-    Ok(if outcome.errors > 0 { 2 } else { 0 })
+    true
+}
+
+fn scan_command(args: &ScanArgs) -> Result<i32> {
+    let target = profile::target(args.path.as_deref(), args.profile.as_deref())?;
+    let root = resolve_root(&target.root, args.force || target.force())?;
+    let profile_name = target.profile_name().map(String::from);
+    let mut config = target.config;
+    config.apply_scan_args(args);
+    if !config.no_default_excludes {
+        if let Some(area) = Classifier::root_in_default_area(&root, &DefaultPaths::from_env()) {
+            eprintln!(
+                "Hinweis: {} liegt im Standard-Ausschlussbereich {}; der angegebene Pfad hat Vorrang.",
+                paths::display(&root),
+                paths::display(&area)
+            );
+        }
+    }
+
+    let _lock = ScanLock::acquire(&paths::scan_lock_path()?)?;
+    let res = run_scan(&ScanJob {
+        root: &root,
+        config: &config,
+        reset_index: args.reset_index,
+        spinner: true,
+        profile: profile_name.as_deref(),
+    })?;
+    if !print_scan_result(&res) {
+        return Ok(1);
+    }
+    Ok(if res.outcome.errors > 0 { 2 } else { 0 })
 }
 
 fn show_progress(progress: &Progress, finished: &AtomicBool) {
@@ -647,29 +691,19 @@ fn show_progress(progress: &Progress, finished: &AtomicBool) {
     bar.finish_and_clear();
 }
 
-fn report_command(args: &ReportArgs) -> Result<i32> {
-    let (mut config, requested) = match &args.profile {
-        Some(name) => {
-            let target = profile::target(None, Some(name))?;
-            (target.config, Some(target.root))
-        }
-        None => (load_config()?, args.path.clone()),
-    };
-    config.apply_report_args(args);
+/// Baut das Berichtsmodell samt Abschnitt „Verlauf“ aus dem Index. `notes` landen im Verlauf.
+pub(super) fn build_report(
+    index: &Index,
+    config: &Config,
+    requested: Option<&Path>,
+    notes: Vec<String>,
+) -> Result<(report::Report, report::ReportRoot)> {
     let old_after_days = parse_old_after(&config.old_after).map_err(anyhow::Error::msg)?;
-    let formats = Format::parse_list(&args.format)?;
-
-    let index = Index::open(&index_path()?)?;
-    let requested = requested.as_deref().map(normalize);
-    let root = report::select_root(&index, requested.as_deref())?;
-
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .context("Systemzeit liegt vor 1970")?
-        .as_secs() as i64;
+    let requested = requested.map(normalize);
+    let root = report::select_root(index, requested.as_deref())?;
     let params = ReportParams {
         generated_at: now_rfc3339(),
-        now_ticks: now * TICKS_PER_SEC,
+        now_ticks: now_ticks(),
         top: config.top,
         old_after_days,
         thresholds: Thresholds {
@@ -678,10 +712,27 @@ fn report_command(args: &ReportArgs) -> Result<i32> {
         },
         problem_ctx: ProblemCtx::from_env(&config.onedrive_conflict_hostnames),
     };
-    let mut model = report::build(&index, &root, &params)?;
-    if let Err(e) = snapshot::attach_history(&mut model, &index, &root, &config) {
+    let mut model = report::build(index, &root, &params)?;
+    if let Err(e) = snapshot::attach_history(&mut model, index, &root, config, notes) {
         eprintln!("Warnung: Abschnitt Verlauf ausgelassen: {e:#}");
     }
+    Ok((model, root))
+}
+
+fn report_command(args: &ReportArgs) -> Result<i32> {
+    let (mut config, requested, notes) = match &args.profile {
+        Some(name) => {
+            let target = profile::target(None, Some(name))?;
+            let notes = run::missed_runs_notes(name);
+            (target.config, Some(target.root), notes)
+        }
+        None => (load_config()?, args.path.clone(), Vec::new()),
+    };
+    config.apply_report_args(args);
+    let formats = Format::parse_list(&args.format)?;
+
+    let index = Index::open(&index_path()?)?;
+    let (model, root) = build_report(&index, &config, requested.as_deref(), notes)?;
 
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let dir = report::prepare_out_dir(args.out.as_deref(), &timestamp)?;

@@ -13,6 +13,11 @@ path = "src/lib.rs"
 name = "ordner-cleanup"
 path = "src/main.rs"
 
+# Dasselbe ohne Konsolenfenster, für die Aufgabenplanung
+[[bin]]
+name = "ordner-cleanup-bg"
+path = "src/bin/ordner-cleanup-bg.rs"
+
 [dependencies]
 anyhow = "1"
 askama = "0.16.1"

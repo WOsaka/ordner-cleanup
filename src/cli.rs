@@ -24,6 +24,8 @@ pub enum Command {
     Report(ReportArgs),
     /// Verlauf der Kennzahlen und des Health-Scores anzeigen
     History(HistoryArgs),
+    /// Geplanter Lauf: Scan, Momentaufnahme, Bericht und Pläne eines Profils (nie `apply`)
+    Run(RunArgs),
     /// Profile aus der Config mit Wurzel, letztem Stand und Score auflisten
     Profiles,
     /// Gescannte Wurzeln im Index verwalten
@@ -40,6 +42,16 @@ pub enum Command {
     Runs(RunsArgs),
     /// Abgelaufene Quarantäne-Läufe endgültig löschen
     Purge(PurgeArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct RunArgs {
+    /// Profil aus der Config
+    #[arg(long)]
+    pub profile: String,
+    /// Windows-Benachrichtigung bei relevanten Veränderungen (setzt die geplante Aufgabe)
+    #[arg(long)]
+    pub notify: bool,
 }
 
 #[derive(Debug, Args)]
