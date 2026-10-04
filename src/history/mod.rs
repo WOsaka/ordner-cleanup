@@ -301,6 +301,30 @@ impl History {
         Ok(points)
     }
 
+    /// Id der Momentaufnahme, die zu einem bestimmten Scan gehört (neueste zuerst gefunden).
+    pub fn snapshot_for_scan(&self, root_key: &str, scan_finished_at: &str) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM snapshots WHERE root_key = ?1 AND scan_finished_at = ?2
+                 ORDER BY id DESC LIMIT 1",
+                params![root_key, scan_finished_at],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Wurzeln mit Momentaufnahmen als `(Schlüssel, Pfad)`, alphabetisch.
+    pub fn roots(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT root_key, MAX(root_path) FROM snapshots GROUP BY root_key ORDER BY root_key",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<std::result::Result<_, _>>()?;
+        Ok(rows)
+    }
+
     /// Namen der Ordner der ersten Ebene, die im Verlauf einer Wurzel vorkommen.
     pub fn folders(&self, root_key: &str) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(

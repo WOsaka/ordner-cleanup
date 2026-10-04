@@ -37,6 +37,7 @@ use crate::scan::source::{StdDirSource, TICKS_PER_SEC};
 use crate::scan::walker::Progress;
 use crate::scan::{scan, ScanEnv};
 
+mod history;
 mod plan;
 mod snapshot;
 
@@ -45,6 +46,7 @@ pub fn run(cli: Cli) -> Result<i32> {
     match cli.command {
         Command::Scan(args) => scan_command(&args),
         Command::Report(args) => report_command(&args),
+        Command::History(args) => history::history_command(&args, args.path.as_deref()),
         Command::Index(cmd) => index_command(&cmd),
         Command::Plan(PlanCommand::Dedupe(args)) => plan::plan_dedupe_command(&args),
         Command::Plan(PlanCommand::Junk(args)) => plan::plan_junk_command(&args),
@@ -594,7 +596,7 @@ fn scan_command(args: &ScanArgs) -> Result<i32> {
     match snapshot::record(&index, &root, &config, None, outcome.errors) {
         Ok(recorded) => println!(
             "{}",
-            snapshot::score_line(recorded.score(), recorded.previous.as_ref())
+            report::history::score_line(recorded.score(), recorded.comparison().as_ref())
         ),
         Err(e) => eprintln!("Warnung: Verlauf nicht aktualisiert: {e:#}"),
     }
@@ -652,7 +654,10 @@ fn report_command(args: &ReportArgs) -> Result<i32> {
         },
         problem_ctx: ProblemCtx::from_env(&config.onedrive_conflict_hostnames),
     };
-    let model = report::build(&index, &root, &params)?;
+    let mut model = report::build(&index, &root, &params)?;
+    if let Err(e) = snapshot::attach_history(&mut model, &index, &root, &config) {
+        eprintln!("Warnung: Abschnitt Verlauf ausgelassen: {e:#}");
+    }
 
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let dir = report::prepare_out_dir(args.out.as_deref(), &timestamp)?;

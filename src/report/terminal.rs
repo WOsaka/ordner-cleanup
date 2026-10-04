@@ -38,6 +38,13 @@ pub fn render(report: &Report) -> String {
         size(o.cloud_only_size)
     );
     let _ = writeln!(s, "  Fehler:           {}", o.error_count);
+    if let Some(h) = &report.history {
+        let _ = writeln!(
+            s,
+            "  {}",
+            super::history::score_line(h.score, h.comparison.as_ref())
+        );
+    }
 
     if !report.top_dirs.is_empty() {
         let _ = writeln!(s, "\nGrößte Ordner");

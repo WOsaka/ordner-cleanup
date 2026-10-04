@@ -22,6 +22,8 @@ pub enum Command {
     Scan(ScanArgs),
     /// Bericht aus dem Index erzeugen
     Report(ReportArgs),
+    /// Verlauf der Kennzahlen und des Health-Scores anzeigen
+    History(HistoryArgs),
     /// Gescannte Wurzeln im Index verwalten
     #[command(subcommand)]
     Index(IndexCommand),
@@ -36,6 +38,18 @@ pub enum Command {
     Runs(RunsArgs),
     /// Abgelaufene Quarantäne-Läufe endgültig löschen
     Purge(PurgeArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct HistoryArgs {
+    /// Wurzel (optional, wenn der Verlauf nur eine kennt)
+    pub path: Option<PathBuf>,
+    /// Nur diesen Ordner der ersten Ebene anzeigen (`*` = Sonstige)
+    #[arg(long)]
+    pub folder: Option<String>,
+    /// Anzahl der letzten Momentaufnahmen
+    #[arg(long, default_value_t = 20)]
+    pub limit: usize,
 }
 
 #[derive(Debug, Args)]

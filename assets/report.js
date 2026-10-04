@@ -464,6 +464,95 @@
     ], data.errors, { empty: 'Beim Scan sind keine Fehler aufgetreten.' }));
   }
 
+  /* ---------- Verlauf ---------- */
+
+  // Der SVG-Namensraum ist ein Bezeichner, keine Ressource: es wird nichts geladen.
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  function svgEl(tag, attrs) {
+    const e = document.createElementNS(SVG_NS, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v));
+    return e;
+  }
+
+  function sparkline(values, opts) {
+    const o = Object.assign({ w: 140, h: 32, min: null, max: null, label: 'Trend' }, opts);
+    if (values.length < 2) return el('span', { class: 'muted', text: '–' });
+    const lo = o.min != null ? o.min : Math.min(...values);
+    const hi = o.max != null ? o.max : Math.max(...values);
+    const span = hi - lo || 1;
+    const pad = 3;
+    const x = (i) => pad + (i / (values.length - 1)) * (o.w - 2 * pad);
+    const y = (v) => o.h - pad - ((v - lo) / span) * (o.h - 2 * pad);
+    const last = values.length - 1;
+    const svg = svgEl('svg', { class: 'spark', viewBox: '0 0 ' + o.w + ' ' + o.h, width: o.w, height: o.h, role: 'img',
+      'aria-label': o.label + ': ' + values.map((v) => nf.format(v)).join(', ') });
+    svg.append(
+      svgEl('polyline', { fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linejoin': 'round',
+        points: values.map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ') }),
+      svgEl('circle', { fill: 'currentColor', r: 3, cx: x(last).toFixed(1), cy: y(values[last]).toFixed(1) }));
+    return svg;
+  }
+
+  const shortDate = (iso) => new Date(iso).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
+  const signed = (n, fmt) => (n > 0 ? '+' : n < 0 ? '−' : '±') + (fmt || nf.format)(Math.abs(n));
+
+  function renderHistory() {
+    const h = data.history;
+    const s = slot('history');
+    if (!h) {
+      s.append(el('p', { class: 'hint', text: 'Für diesen Bericht liegt kein Verlauf vor, zum Beispiel weil nur ein Unterordner einer gescannten Wurzel ausgewertet wird.' }));
+      return;
+    }
+    const c = h.comparison;
+    const change = !c ? 'erster Lauf' : signed(c.delta) + ' seit ' + shortDate(c.previous_at) + (c.kind === 'limited' ? ' (eingeschränkt vergleichbar)' : '');
+    s.append(el('dl', { class: 'figures' }, fig('Health-Score', h.score + ' von 100', change, !!c && c.delta < 0)));
+    for (const note of h.notes) s.append(el('p', { class: 'warn', text: note }));
+    if (c && c.kind === 'limited') {
+      s.append(el('p', { class: 'warn', text: 'Einstellungen oder Bewertungsformeln haben sich seit dem letzten Lauf geändert. Der Vergleich ist nur ein Anhaltspunkt.' }));
+    }
+
+    s.append(el('h3', { text: 'Die größten Abzüge' }));
+    if (!h.deductions.length) {
+      s.append(el('p', { class: 'hint', text: 'Keine nennenswerten Abzüge.' }));
+    } else {
+      s.append(el('ul', { class: 'deductions' }, h.deductions.map((d) =>
+        el('li', null, el('strong', { text: '−' + new Intl.NumberFormat('de-DE', { maximumFractionDigits: 1 }).format(d.points) + ': ' }), d.text))));
+    }
+    s.append(el('p', { class: 'hint', text: 'Alte Daten außerhalb von _Archiv erscheinen nur als Kennzahl und senken den Score nicht.' }));
+
+    s.append(el('h3', { text: 'Score im Zeitverlauf' }));
+    s.append(h.series.length >= 2
+      ? sparkline(h.series.map((p) => p.score), { w: 480, h: 90, min: 0, max: 100, label: 'Health-Score' })
+      : el('p', { class: 'hint', text: 'Ein Trend entsteht ab dem zweiten Lauf.' }));
+
+    s.append(el('h3', { text: 'Teilwerte' }), dataTable([
+      { label: 'Teilwert', get: (p) => p.label },
+      { label: 'Wert', get: (p) => (p.value == null ? -1 : p.value), render: (p) => p.value == null
+        ? el('span', { class: 'muted', text: 'nicht bewertet' })
+        : el('span', { class: 'bar', style: 'min-width:8rem' }, el('i', { style: 'width:' + p.value.toFixed(0) + '%' })) },
+      { label: 'Punkte', num: true, get: (p) => (p.value == null ? -1 : p.value), render: (p) => (p.value == null ? '–' : nf.format(Math.round(p.value))) },
+    ], h.parts, { pageSize: 10 }));
+
+    const fmt = (m, v) => (m.unit === 'bytes' ? bytes(v) : nf.format(v));
+    s.append(el('h3', { text: 'Kennzahlen' }), dataTable([
+      { label: 'Kennzahl', get: (m) => m.label },
+      { label: 'Jetzt', num: true, get: (m) => m.now, render: (m) => fmt(m, m.now) },
+      { label: 'Letzter Lauf', num: true, get: (m) => (m.previous == null ? -1 : m.previous), render: (m) => (m.previous == null ? '–' : fmt(m, m.previous)) },
+      { label: 'Veränderung', num: true, get: (m) => (m.previous == null ? 0 : m.now - m.previous),
+        render: (m) => (m.previous == null ? '–' : signed(m.now - m.previous, (n) => fmt(m, n))) },
+      { label: 'Trend', get: () => '', render: (m) => sparkline(h.series.map((p) => p.values[m.key] || 0), { label: m.label }) },
+    ], h.metrics, { pageSize: 20 }));
+
+    s.append(el('h3', { text: 'Ordner der ersten Ebene' }), dataTable([
+      { label: 'Ordner', get: (f) => f.folder === '*' ? 'Sonstige' : f.folder, cls: 'path' },
+      { label: 'Score', num: true, get: (f) => f.score },
+      { label: 'Vorher', num: true, get: (f) => (f.previous_score == null ? -1 : f.previous_score), render: (f) => (f.previous_score == null ? '–' : f.previous_score) },
+      { label: 'Größe', num: true, get: (f) => f.size, render: (f) => bytes(f.size) },
+      { label: 'Dateien', num: true, get: (f) => f.files, render: (f) => nf.format(f.files) },
+      { label: 'Größter Abzug', get: (f) => f.top_deduction || '' },
+    ], h.folders, { pageSize: 25, empty: 'Keine Ordner auf der ersten Ebene.' }));
+  }
+
   /* ---------- Kopf, Navigation, Farbschema ---------- */
 
   function renderHeader() {
@@ -531,6 +620,7 @@
   state.tree = treeView(data.size_tree);
   renderHeader();
   renderOverview();
+  renderHistory();
   renderTree();
   renderTop();
   renderTypes();
