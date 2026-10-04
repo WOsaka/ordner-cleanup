@@ -1,0 +1,8 @@
+cities15000.tsv ist aus GeoNames (https://www.geonames.org/) abgeleitet:
+Datei cities15000.txt, Spalten name, country code, latitude, longitude, population.
+
+GeoNames-Daten stehen unter der Creative Commons Attribution 4.0 License
+(https://creativecommons.org/licenses/by/4.0/). Namensnennung: "GeoNames, geonames.org".
+Änderungen: Spaltenauswahl, Sortierung nach Breitengrad, Zahlenformat.
+
+Erzeugt mit tools/geonames.ps1.

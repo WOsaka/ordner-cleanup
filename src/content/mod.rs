@@ -3,7 +3,7 @@
 
 // pub mod classify;
 pub mod extract;
-// pub mod geo;
+pub mod geo;
 
 use std::collections::BTreeMap;
 
