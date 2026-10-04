@@ -20,6 +20,8 @@ pub struct Cli {
 pub enum Command {
     /// Ordnerbaum scannen und im Index speichern
     Scan(ScanArgs),
+    /// Inhalt und Metadaten der Dateien lesen und klassifizieren (Kategorie, Felder; nur lesend)
+    Classify(ClassifyArgs),
     /// Bericht aus dem Index erzeugen
     Report(ReportArgs),
     /// Verlauf der Kennzahlen und des Health-Scores anzeigen
@@ -195,6 +197,10 @@ pub struct PlanRulesArgs {
     /// Zieldatei für den Plan (Default: plan-<Zeitstempel>.json im aktuellen Ordner)
     #[arg(long)]
     pub out: Option<PathBuf>,
+    /// Veraltete oder fehlende Inhalts-Klassifikation nicht nachholen (Dateien mit Inhalts-
+    /// bedingung erscheinen dann als `not-classified`)
+    #[arg(long)]
+    pub no_classify: bool,
 }
 
 #[derive(Debug, Args)]
@@ -306,6 +312,31 @@ pub struct ScanArgs {
     /// Vorlage für den Soll/Ist-Abgleich: `para`, `johnny-decimal` oder Pfad einer Vorlagendatei
     #[arg(long)]
     pub template: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ClassifyArgs {
+    /// Bereits gescannter Ordner (oder `--profile`)
+    #[arg(required_unless_present = "profile", conflicts_with = "profile")]
+    pub path: Option<PathBuf>,
+    /// Profil aus der Config statt Pfad und Optionen
+    #[arg(long)]
+    pub profile: Option<String>,
+    /// Ohne lokales LLM klassifizieren, auch wenn `[llm] enabled` gesetzt ist
+    #[arg(long, conflicts_with = "clear")]
+    pub no_llm: bool,
+    /// Alle Dateien neu analysieren (auch das LLM neu fragen)
+    #[arg(long, conflicts_with = "clear")]
+    pub force: bool,
+    /// Nur diese Endungen, kommagetrennt (`pdf,jpg`)
+    #[arg(long, value_delimiter = ',', conflicts_with = "clear")]
+    pub ext: Vec<String>,
+    /// Nur Dateien, die auf dieses Glob passen (relativ zur Wurzel)
+    #[arg(long, conflicts_with = "clear")]
+    pub only: Option<String>,
+    /// Inhalts- und OCR-Text-Cache der Wurzel löschen
+    #[arg(long)]
+    pub clear: bool,
 }
 
 #[derive(Debug, Args)]

@@ -233,6 +233,7 @@ fn make_plan(name: &str, kind: &str, stamp: &str) -> PlanRecord {
             rules: None,
             rule: Vec::new(),
             out: out_arg,
+            no_classify: false,
         }),
         "junk" => plan::plan_junk_command(&PlanJunkArgs {
             path: None,

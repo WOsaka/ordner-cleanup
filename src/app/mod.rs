@@ -37,6 +37,7 @@ use crate::scan::source::{StdDirSource, TICKS_PER_SEC};
 use crate::scan::walker::Progress;
 use crate::scan::{scan, ScanEnv, ScanOutcome};
 
+mod classify;
 mod history;
 mod plan;
 mod profile;
@@ -48,6 +49,7 @@ mod snapshot;
 pub fn run(cli: Cli) -> Result<i32> {
     match cli.command {
         Command::Scan(args) => scan_command(&args),
+        Command::Classify(args) => classify::classify_command(&args),
         Command::Report(args) => report_command(&args),
         Command::History(args) => history_command(&args),
         Command::Profiles => profile::profiles_command(),
@@ -145,12 +147,22 @@ fn confirm(prompt: &str, yes: bool) -> Result<bool> {
     confirm_with(prompt, yes, stdin.is_terminal(), &mut stdin.lock())
 }
 
-fn install_cancel_flag() -> Result<Arc<AtomicBool>> {
-    let cancel = Arc::new(AtomicBool::new(false));
-    let flag = Arc::clone(&cancel);
-    ctrlc::set_handler(move || flag.store(true, Ordering::Relaxed))
+/// Das Abbruch-Flag des Prozesses (Strg+C). Der Handler wird nur einmal installiert, deshalb
+/// teilen sich Scan, `classify` und `apply` dasselbe Flag (ein geplanter Lauf nutzt mehrere).
+fn global_cancel_flag() -> Result<Arc<AtomicBool>> {
+    static FLAG: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
+    if let Some(flag) = FLAG.get() {
+        return Ok(Arc::clone(flag));
+    }
+    let flag = Arc::new(AtomicBool::new(false));
+    let handler_flag = Arc::clone(&flag);
+    ctrlc::set_handler(move || handler_flag.store(true, Ordering::Relaxed))
         .context("Strg+C-Handler konnte nicht gesetzt werden")?;
-    Ok(cancel)
+    Ok(Arc::clone(FLAG.get_or_init(|| flag)))
+}
+
+fn install_cancel_flag() -> Result<Arc<AtomicBool>> {
+    global_cancel_flag()
 }
 
 fn status_line(result: &ActionResult) -> Option<String> {
@@ -585,12 +597,7 @@ pub(super) fn run_scan(job: &ScanJob) -> Result<ScanResult> {
     }
     let mut index = Index::open(&index_file)?;
 
-    let cancel = Arc::new(AtomicBool::new(false));
-    {
-        let cancel = Arc::clone(&cancel);
-        ctrlc::set_handler(move || cancel.store(true, Ordering::Relaxed))
-            .context("Strg+C-Handler konnte nicht gesetzt werden")?;
-    }
+    let cancel = global_cancel_flag()?;
 
     let progress = Progress::default();
     let env = ScanEnv {
