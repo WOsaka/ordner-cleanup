@@ -465,5 +465,6 @@ pub fn build(index: &Index, root: &ReportRoot, p: &ReportParams) -> Result<Repor
         problems: problem_items,
         errors,
         history: None,
+        template: None,
     })
 }

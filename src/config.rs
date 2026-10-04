@@ -413,6 +413,7 @@ mod tests {
             force: false,
             reset_index: false,
             threads: None,
+            template: None,
         }
     }
 
@@ -742,6 +743,7 @@ muell = 1",
             format: vec![],
             old_after: Some("18m".into()),
             top: None,
+            template: None,
         });
         assert_eq!(c.old_after, "18m");
         assert_eq!(c.top, 10);

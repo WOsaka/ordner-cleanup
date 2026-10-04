@@ -563,6 +563,7 @@ pub(super) struct ScanJob<'a> {
     /// Fortschrittsanzeige im Terminal (aus für geplante Läufe)
     pub spinner: bool,
     pub profile: Option<&'a str>,
+    pub template: Option<&'a crate::template::Loaded>,
 }
 
 /// Scannt in den Index und schreibt danach bei vollständigem Lauf die Momentaufnahme. Die
@@ -601,8 +602,16 @@ pub(super) fn run_scan(job: &ScanJob) -> Result<ScanResult> {
         finished.store(true, Ordering::Relaxed);
         result
     })?;
-    let recorded = (!outcome.aborted)
-        .then(|| snapshot::record(&index, job.root, job.config, job.profile, outcome.errors));
+    let recorded = (!outcome.aborted).then(|| {
+        snapshot::record(
+            &index,
+            job.root,
+            job.config,
+            job.template,
+            job.profile,
+            outcome.errors,
+        )
+    });
     Ok(ScanResult {
         outcome,
         index,
@@ -641,6 +650,7 @@ fn scan_command(args: &ScanArgs) -> Result<i32> {
     let target = profile::target(args.path.as_deref(), args.profile.as_deref())?;
     let root = resolve_root(&target.root, args.force || target.force())?;
     let profile_name = target.profile_name().map(String::from);
+    let template = profile::load_template(args.template.as_deref(), &target)?;
     let mut config = target.config;
     config.apply_scan_args(args);
     if !config.no_default_excludes {
@@ -660,6 +670,7 @@ fn scan_command(args: &ScanArgs) -> Result<i32> {
         reset_index: args.reset_index,
         spinner: true,
         profile: profile_name.as_deref(),
+        template: template.as_ref(),
     })?;
     if !print_scan_result(&res) {
         return Ok(1);
@@ -698,6 +709,7 @@ pub(super) fn build_report(
     index: &Index,
     config: &Config,
     requested: Option<&Path>,
+    template: Option<&crate::template::Loaded>,
     notes: Vec<String>,
 ) -> Result<(report::Report, report::ReportRoot)> {
     let old_after_days = parse_old_after(&config.old_after).map_err(anyhow::Error::msg)?;
@@ -715,26 +727,39 @@ pub(super) fn build_report(
         problem_ctx: ProblemCtx::from_env(&config.onedrive_conflict_hostnames),
     };
     let mut model = report::build(index, &root, &params)?;
-    if let Err(e) = snapshot::attach_history(&mut model, index, &root, config, notes) {
+    if let Err(e) = snapshot::attach_history(&mut model, index, &root, config, template, notes) {
         eprintln!("Warnung: Abschnitt Verlauf ausgelassen: {e:#}");
     }
     Ok((model, root))
 }
 
 fn report_command(args: &ReportArgs) -> Result<i32> {
-    let (mut config, requested, notes) = match &args.profile {
+    let (mut config, requested, notes, template) = match &args.profile {
         Some(name) => {
             let target = profile::target(None, Some(name))?;
             let notes = run::missed_runs_notes(name);
-            (target.config, Some(target.root), notes)
+            let template = profile::load_template(args.template.as_deref(), &target)?;
+            (target.config, Some(target.root), notes, template)
         }
-        None => (load_config()?, args.path.clone(), Vec::new()),
+        None => {
+            let template = match args.template.as_deref() {
+                Some(spec) => Some(crate::template::resolve(spec, None)?),
+                None => None,
+            };
+            (load_config()?, args.path.clone(), Vec::new(), template)
+        }
     };
     config.apply_report_args(args);
     let formats = Format::parse_list(&args.format)?;
 
     let index = Index::open(&index_path()?)?;
-    let (model, root) = build_report(&index, &config, requested.as_deref(), notes)?;
+    let (model, root) = build_report(
+        &index,
+        &config,
+        requested.as_deref(),
+        template.as_ref(),
+        notes,
+    )?;
 
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let dir = report::prepare_out_dir(args.out.as_deref(), &timestamp)?;

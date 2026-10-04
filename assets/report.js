@@ -553,6 +553,33 @@
     ], h.folders, { pageSize: 25, empty: 'Keine Ordner auf der ersten Ebene.' }));
   }
 
+  /* ---------- Soll/Ist (Vorlage) ---------- */
+
+  function renderTemplate() {
+    const t = data.template;
+    const s = slot('template');
+    if (!t) {
+      s.append(el('p', { class: 'hint', text: 'Keine Vorlage gesetzt. Mit --template (para, johnny-decimal oder eine Vorlagendatei) oder template im Profil entsteht hier der Abgleich mit einer Zielstruktur.' }));
+      return;
+    }
+    s.append(el('dl', { class: 'figures' },
+      fig('Vorlage', t.name, t.source),
+      fig('Abweichungen', nf.format(t.total), 'von ' + plural(t.checked, 'geprüftem Eintrag', 'geprüften Einträgen') + ' (' + pct(t.share) + ')', t.total > 0)));
+    s.append(el('h3', { text: 'Abweichungen nach Art' }), dataTable([
+      { label: 'Art', get: (c) => c.label },
+      { label: 'Anzahl', num: true, get: (c) => c.count, render: (c) => nf.format(c.count) },
+    ], t.counts, { pageSize: 10 }));
+    s.append(el('h3', { text: 'Abweichungen' }));
+    if (t.total > t.items.length) {
+      s.append(el('p', { class: 'hint', text: 'Die Liste zeigt höchstens ' + nf.format(Math.max(...t.counts.map((c) => Math.min(c.count, 100)))) + ' Einträge je Art; insgesamt gibt es ' + nf.format(t.total) + ' Abweichungen.' }));
+    }
+    s.append(dataTable([
+      { label: 'Pfad', get: (i) => i.path, cls: 'path' },
+      { label: 'Art', get: (i) => i.label },
+      { label: 'Ebene', num: true, get: (i) => i.level },
+    ], t.items, { empty: 'Die Struktur entspricht der Vorlage.', facet: { label: 'Art', get: (i) => [i.label] } }));
+  }
+
   /* ---------- Kopf, Navigation, Farbschema ---------- */
 
   function renderHeader() {
@@ -576,6 +603,7 @@
       structure: data.structure.length,
       problems: data.problems.length,
       errors: data.errors.length,
+      template: data.template ? data.template.total : null,
     };
     document.querySelectorAll('.nav a').forEach((a) => {
       const id = a.getAttribute('href').slice(1);
@@ -621,6 +649,7 @@
   renderHeader();
   renderOverview();
   renderHistory();
+  renderTemplate();
   renderTree();
   renderTop();
   renderTypes();

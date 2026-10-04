@@ -86,6 +86,7 @@ fn run_with(files: &[FRow], dirs: &[DRow], dups: &[DupGroup], weights: &Weights)
             old_after_days: 365,
             now_ticks: NOW,
             weights,
+            template: None,
         },
     )
 }

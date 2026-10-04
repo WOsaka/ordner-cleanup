@@ -13,7 +13,9 @@ use crate::history::{Comparable, History, SnapshotMeta, Stored};
 use crate::index::Index;
 use crate::paths;
 use crate::report::history::{self as report_history, Comparison};
+use crate::report::template as report_template;
 use crate::report::{self, Report, ReportRoot};
+use crate::template::Loaded;
 
 /// Länge der Reihen für die Trendgrafiken im Bericht (ein Jahr bei wöchentlichen Läufen).
 const SERIES_LIMIT: usize = 52;
@@ -43,6 +45,7 @@ pub(super) fn record(
     index: &Index,
     root: &Path,
     config: &Config,
+    template: Option<&Loaded>,
     profile: Option<&str>,
     scan_errors: u64,
 ) -> Result<Recorded> {
@@ -54,9 +57,11 @@ pub(super) fn record(
             config,
             downloads_dirs: &downloads_dirs(config),
             now_ticks: now_ticks(),
+            template: template.map(|l| &l.template),
         },
-    )?;
-    let fp = health::fingerprint(config, None);
+    )?
+    .snapshot;
+    let fp = health::fingerprint(config, template.map(|l| l.id.as_str()));
     let mut history = History::open(&paths::history_path()?)?;
     let previous = history.latest_comparable(&scanned.dir_key, &fp, None)?;
     history
@@ -70,7 +75,7 @@ pub(super) fn record(
                 tool_version: env!("CARGO_PKG_VERSION").to_string(),
                 metrics_version: METRICS_VERSION,
                 config_fp: fp,
-                template: None,
+                template: template.map(|l| l.spec.clone()),
                 profile: profile.map(String::from),
                 scan_errors: i64::try_from(scan_errors).unwrap_or(i64::MAX),
             },
@@ -86,22 +91,32 @@ pub(super) fn attach_history(
     index: &Index,
     root: &ReportRoot,
     config: &Config,
+    template: Option<&Loaded>,
     extra_notes: Vec<String>,
 ) -> Result<()> {
     // Nur ganze gescannte Wurzeln haben einen Verlauf, keine Unterordner davon.
     if !index.roots()?.iter().any(|r| r.path_key == root.dir_key) {
         return Ok(());
     }
-    let now = health::collect(
+    let collected = health::collect(
         index,
         root,
         &CollectEnv {
             config,
             downloads_dirs: &downloads_dirs(config),
             now_ticks: now_ticks(),
+            template: template.map(|l| &l.template),
         },
     )?;
-    let fp = health::fingerprint(config, None);
+    let now = collected.snapshot;
+    if let (Some(loaded), Some(result)) = (template, &collected.template) {
+        model.template = Some(report_template::section(
+            &loaded.template.name,
+            &loaded.spec,
+            result,
+        ));
+    }
+    let fp = health::fingerprint(config, template.map(|l| l.id.as_str()));
     let mut notes = extra_notes;
     let mut previous = None;
     let mut series = Vec::new();

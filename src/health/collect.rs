@@ -13,6 +13,8 @@ use crate::config::Config;
 use crate::index::Index;
 use crate::report::rows::{load_dirs, load_errors, load_files};
 use crate::report::ReportRoot;
+use crate::template::check::{check, CheckResult};
+use crate::template::Template;
 
 /// Alles außer Index und Wurzel, was die Kennzahlen bestimmt.
 pub struct CollectEnv<'a> {
@@ -20,9 +22,16 @@ pub struct CollectEnv<'a> {
     /// Ordner, in denen die Müll-Kategorie `installer` greift
     pub downloads_dirs: &'a [PathBuf],
     pub now_ticks: i64,
+    pub template: Option<&'a Template>,
 }
 
-pub fn collect(index: &Index, root: &ReportRoot, env: &CollectEnv) -> Result<Snapshot> {
+/// Momentaufnahme und, falls eine Vorlage gesetzt ist, der Soll/Ist-Abgleich dazu.
+pub struct Collected {
+    pub snapshot: Snapshot,
+    pub template: Option<CheckResult>,
+}
+
+pub fn collect(index: &Index, root: &ReportRoot, env: &CollectEnv) -> Result<Collected> {
     let config = env.config;
     let files = load_files(index, &root.dir_key)?;
     let dirs = load_dirs(index, &root.dir_key)?;
@@ -44,7 +53,8 @@ pub fn collect(index: &Index, root: &ReportRoot, env: &CollectEnv) -> Result<Sna
         huge_entries: config.huge_dir_entries,
     };
     let old_after_days = parse_old_after(&config.old_after).map_err(anyhow::Error::msg)?;
-    Ok(compute(
+    let template = env.template.map(|t| check(&files, &dirs, root, t));
+    let snapshot = compute(
         &Rows {
             files: &files,
             dirs: &dirs,
@@ -59,6 +69,8 @@ pub fn collect(index: &Index, root: &ReportRoot, env: &CollectEnv) -> Result<Sna
             old_after_days,
             now_ticks: env.now_ticks,
             weights: &config.health.weights,
+            template: template.as_ref().map(|t| &t.by_bucket),
         },
-    ))
+    );
+    Ok(Collected { snapshot, template })
 }

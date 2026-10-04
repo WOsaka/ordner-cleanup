@@ -21,7 +21,7 @@ use crate::index::DupGroup;
 use crate::paths;
 use crate::report::rows::{DRow, FRow};
 use crate::report::{ErrorItem, ReportRoot};
-pub use collect::{collect, CollectEnv};
+pub use collect::{collect, CollectEnv, Collected};
 pub use fingerprint::fingerprint;
 pub use score::{score, Deduction, Part, Score, Weights, METRICS_VERSION};
 
@@ -115,10 +115,12 @@ pub struct MetricsCtx<'a> {
     pub old_after_days: i64,
     pub now_ticks: i64,
     pub weights: &'a Weights,
+    /// Ergebnis des Soll/Ist-Abgleichs je Bereich (geprüft, Abweichungen); `None` = keine Vorlage
+    pub template: Option<&'a BTreeMap<String, (u64, u64)>>,
 }
 
 /// Schlüssel des Ordners der ersten Ebene, zu dem ein Schlüssel gehört (`""` = direkt in der Wurzel).
-fn bucket_of(root_key: &str, key: &str) -> String {
+pub(crate) fn bucket_of(root_key: &str, key: &str) -> String {
     let Some(rest) = key.strip_prefix(root_key) else {
         return String::new();
     };
@@ -275,6 +277,18 @@ pub fn compute(rows: &Rows, dups: &[DupGroup], root: &ReportRoot, ctx: &MetricsC
         root_groups += u64::from(!touched.is_empty());
         for bucket in touched {
             acc.entry(bucket).or_default().dup_groups += 1;
+        }
+    }
+
+    if let Some(stats) = ctx.template {
+        for (bucket, (checked, deviations)) in stats {
+            let m = acc.entry(bucket.clone()).or_default();
+            m.template_checked = Some(*checked);
+            m.template_deviations = Some(*deviations);
+        }
+        for m in acc.values_mut() {
+            m.template_checked.get_or_insert(0);
+            m.template_deviations.get_or_insert(0);
         }
     }
 

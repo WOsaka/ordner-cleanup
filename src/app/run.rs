@@ -118,19 +118,28 @@ fn execute(name: &str, target: &Target, record: &mut RunRecord) -> Result<i32> {
     }
     let root = resolve_root(&target.root, target.force())?;
 
+    // Eine unbrauchbare Vorlage kippt den Lauf nicht: Scan und Bericht entstehen ohne sie.
+    let template = match profile::load_template(None, target) {
+        Ok(template) => template,
+        Err(e) => {
+            record.errors.push(format!("Vorlage: {e:#}"));
+            None
+        }
+    };
     let res = run_scan(&ScanJob {
         root: &root,
         config: &target.config,
         reset_index: false,
         spinner: false,
         profile: Some(name),
+        template: template.as_ref(),
     })?;
     let complete = print_scan_result(&res);
     if !complete {
         record.errors.push("Scan abgebrochen".into());
         return Ok(EXIT_FAILED);
     }
-    let mut partial = res.outcome.errors > 0;
+    let mut partial = res.outcome.errors > 0 || !record.errors.is_empty();
     match &res.recorded {
         Some(Ok(recorded)) => {
             record.score = Some(recorded.score());
@@ -144,7 +153,7 @@ fn execute(name: &str, target: &Target, record: &mut RunRecord) -> Result<i32> {
     }
 
     let stamp = stamp();
-    match write_report(name, target, &res.index, &root, &stamp) {
+    match write_report(name, target, template.as_ref(), &res.index, &root, &stamp) {
         Ok(latest) => record.report = Some(paths::display(&latest)),
         Err(e) => {
             partial = true;
@@ -180,12 +189,13 @@ fn execute(name: &str, target: &Target, record: &mut RunRecord) -> Result<i32> {
 fn write_report(
     name: &str,
     target: &Target,
+    template: Option<&crate::template::Loaded>,
     index: &crate::index::Index,
     root: &Path,
     stamp: &str,
 ) -> Result<PathBuf> {
     let notes = missed_runs_notes(name);
-    let (model, _) = build_report(index, &target.config, Some(root), notes)?;
+    let (model, _) = build_report(index, &target.config, Some(root), template, notes)?;
     let dir = paths::reports_dir(name)?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Berichtsordner {} nicht anlegbar", paths::display(&dir)))?;

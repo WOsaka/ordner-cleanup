@@ -53,7 +53,7 @@ fn keine_externen_referenzen() {
 #[test]
 fn alle_abschnitte_sind_vorhanden() {
     let html = page();
-    assert_eq!(SECTIONS.len(), 12);
+    assert_eq!(SECTIONS.len(), 13);
     for s in SECTIONS {
         assert!(
             html.contains(&format!(r#"<section id="{}""#, s.id)),

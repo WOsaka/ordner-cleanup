@@ -14,3 +14,4 @@ pub mod rules;
 pub mod runlog;
 pub mod scan;
 pub mod schedule;
+pub mod template;

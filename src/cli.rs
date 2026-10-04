@@ -288,6 +288,9 @@ pub struct ScanArgs {
     /// Anzahl Threads (0 = automatisch)
     #[arg(long)]
     pub threads: Option<usize>,
+    /// Vorlage für den Soll/Ist-Abgleich: `para`, `johnny-decimal` oder Pfad einer Vorlagendatei
+    #[arg(long)]
+    pub template: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -310,6 +313,9 @@ pub struct ReportArgs {
     /// Anzahl Einträge in den Top-Listen
     #[arg(long)]
     pub top: Option<usize>,
+    /// Vorlage für den Soll/Ist-Abgleich: `para`, `johnny-decimal` oder Pfad einer Vorlagendatei
+    #[arg(long)]
+    pub template: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

@@ -9,6 +9,7 @@ use super::{load_config, local_time, normalize};
 use crate::config::{Config, Profile};
 use crate::history::History;
 use crate::paths;
+use crate::template::{self, Loaded};
 
 /// Das Profil, über das ein Befehl läuft.
 #[derive(Debug, Clone)]
@@ -75,6 +76,25 @@ fn target_from(
     }
 }
 
+/// Die Vorlage des Befehls: `--template` vor dem Profil. Relative Pfade gelten für `--template`
+/// ab dem aktuellen Ordner, für das Profil ab dem Config-Ordner.
+pub(super) fn load_template(cli: Option<&str>, target: &Target) -> Result<Option<Loaded>> {
+    match (
+        cli,
+        target
+            .profile
+            .as_ref()
+            .and_then(|p| p.profile.template.as_deref()),
+    ) {
+        (Some(spec), _) => Ok(Some(template::resolve(spec, None)?)),
+        (None, Some(spec)) => Ok(Some(template::resolve(
+            spec,
+            paths::config_dir().as_deref(),
+        )?)),
+        (None, None) => Ok(None),
+    }
+}
+
 /// `profiles`: alle Profile mit Wurzel, letztem Verlaufseintrag und Score.
 pub(super) fn profiles_command() -> Result<i32> {
     let config = load_config()?;
@@ -88,11 +108,20 @@ pub(super) fn profiles_command() -> Result<i32> {
         .ok()
         .filter(|p| p.exists())
         .and_then(|p| History::open(&p).ok());
-    print!("{}", render(&config, history.as_ref()));
+    let last_run = |name: &str| {
+        paths::runs_log(name)
+            .ok()
+            .and_then(|log| crate::runlog::read_all(&log).pop())
+    };
+    print!("{}", render(&config, history.as_ref(), &last_run));
     Ok(0)
 }
 
-fn render(config: &Config, history: Option<&History>) -> String {
+fn render(
+    config: &Config,
+    history: Option<&History>,
+    last_run: &dyn Fn(&str) -> Option<crate::runlog::RunRecord>,
+) -> String {
     let mut s = String::new();
     for (name, p) in &config.profiles {
         let _ = writeln!(s, "{name}");
@@ -105,6 +134,19 @@ fn render(config: &Config, history: Option<&History>) -> String {
         let _ = writeln!(s, "  Pläne:    {plans}");
         if let Some(t) = &p.template {
             let _ = writeln!(s, "  Vorlage:  {t}");
+        }
+        match last_run(name) {
+            Some(r) => {
+                let _ = writeln!(
+                    s,
+                    "  Letzter Lauf:  {} – {}",
+                    local_time(&r.started),
+                    r.status.label()
+                );
+            }
+            None => {
+                let _ = writeln!(s, "  Letzter Lauf:  noch keiner");
+            }
         }
         let key = paths::dir_key(&normalize(Path::new(&p.root)));
         let last = history
@@ -213,9 +255,10 @@ force = true
 
     #[test]
     fn liste_zeigt_wurzel_plaene_und_fehlenden_verlauf() {
-        let text = render(&cfg(CONFIG), None);
+        let text = render(&cfg(CONFIG), None, &|_| None);
         assert!(text.starts_with("downloads\n"), "{text}");
         assert!(text.contains(r"C:\Users\x\Downloads") && text.contains("rules, junk"));
         assert!(text.contains("noch kein Verlauf"));
+        assert!(text.contains("Letzter Lauf:  noch keiner"));
     }
 }

@@ -1,0 +1,16 @@
+# Johnny.Decimal: Bereiche (`10-19 Name`), Kategorien (`11 Name`), IDs (`11.01 Name`).
+# Auf diesen drei Ebenen sind nur Ordner mit passendem Namensmuster erlaubt und keine Dateien;
+# die Dateien liegen in den ID-Ordnern (Ebene 4 und tiefer ist frei).
+name = "Johnny.Decimal"
+
+[[levels]]
+patterns = ['^\d0-\d9 ']
+files = false
+
+[[levels]]
+patterns = ['^\d\d ']
+files = false
+
+[[levels]]
+patterns = ['^\d\d\.\d\d ']
+files = false
