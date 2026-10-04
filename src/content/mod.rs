@@ -1,7 +1,7 @@
 //! Inhaltsbasierte Klassifikation (Phase 6a): Extraktion von Text und Metadaten, Zuordnung
 //! zu Kategorien, Felder für Regeln und Bericht. Es wird nie Volltext gespeichert.
 
-// pub mod classify;
+pub mod classify;
 pub mod extract;
 pub mod geo;
 

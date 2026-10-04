@@ -386,4 +386,8 @@ Schritte 1, 2 und 4 sind voneinander unabhängig und können parallel laufen. Eb
 
 ## Umsetzungsnotizen (Abweichungen vom Plan)
 
-_Werden während `/feature:code` ergänzt (Spike-Ergebnisse, Abweichungen)._
+- **Spikes 0a/0b/0c nicht auf echten Daten gelaufen.** `/feature:code` lief als Hintergrund-Sitzung ohne Zugriff auf echte PDFs/Scans (Datenschutz), ohne Ollama und ohne OCR-Sprachpaket-Test. Entscheidung für 0a: `pdf-extract` (bringt `lopdf` 0.42 mit, wird über `pdf_extract::Document` genutzt, kein zweites `lopdf` im Baum), Worker-Thread mit Zeitwächter, höchstens 4 aufgegebene Worker, 30 Seiten. Die Qualität an echten Rechnungen/Scans bleibt der manuelle Test (Schritt 14); 0b und 0c ebenso.
+- **Schritt 1:** `first_seen` wird über einen `meta`-Schlüssel `root_complete:<key>` entschieden (kein zusätzliches Schema); abgebrochene Erstscans zählen nicht als vollständig. `FileRow` hat `ctime` und `first_seen`.
+- **Schritt 1:** `ocr_text_get` prüft zusätzlich `ocr_version` und `languages` (Plan: Signatur ohne `ocr_version`). `CachedContent` ist eine flache Zeile (JSON-Spalten als String); die Umwandlung in `ContentRecord` liegt in `content/`.
+- **Schritt 3:** `LimitedReader` und `open_local` sind `pub(crate)` in `scan/exif.rs`. Test-Bausteine (`jpeg_with_camera`, `mp4`, `docx`, `pdf_with_pages` …) liegen als `#[doc(hidden)] pub mod testing` in den Extraktor-Dateien, damit `tests/support/corpus.rs` sie nutzen kann.
+- **Schritt 4:** Die TSV hat eine fünfte Spalte `population`. Stadtteile großer Städte stehen in GeoNames als eigene Orte (Lissabon → „São Jorge de Arroios“); unter den Orten, die höchstens 10 km weiter weg liegen als der nächste (und höchstens 50 km), gewinnt der einwohnerstärkste.
