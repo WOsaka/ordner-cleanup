@@ -69,6 +69,7 @@ pub const TRANSIENT_REASONS: &[&str] = &[
     "vanished",
     "timeout",
     "no-ocr-language",
+    "ocr-failed",
     "io",
 ];
 

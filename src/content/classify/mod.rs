@@ -158,6 +158,11 @@ impl Classifier {
         &self.defs
     }
 
+    /// Passt der Dateiname auf einen Bildschirmfoto-Namen („Screenshot …“)?
+    pub fn is_screenshot_name(&self, name: &str) -> bool {
+        self.screenshot_name.is_match(name.trim())
+    }
+
     pub fn fingerprint(&self) -> &str {
         self.defs.fingerprint()
     }

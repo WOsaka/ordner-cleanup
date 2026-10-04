@@ -6,6 +6,8 @@ pub mod extract;
 pub mod geo;
 pub mod llm;
 pub mod ocr;
+pub mod pipeline;
+pub mod record;
 
 use std::collections::BTreeMap;
 
@@ -15,6 +17,8 @@ pub const EXTRACTOR_VERSION: i64 = 1;
 pub const CLASSIFIER_VERSION: i64 = 1;
 /// Wird erhöht, wenn sich die OCR-Ausgabe ändert (macht den OCR-Text-Cache ungültig).
 pub const OCR_VERSION: i64 = 1;
+
+pub use record::{cache_state, CacheState, ContentRecord};
 
 /// Feldname → Wert (`doc.date` → `2026-09-30`).
 pub type Fields = BTreeMap<String, String>;
