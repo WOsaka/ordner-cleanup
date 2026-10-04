@@ -61,8 +61,6 @@ pub enum Entry {
         #[serde(default, skip_serializing_if = "is_false")]
         is_dir: bool,
     },
-    /// Vor dem Entfernen eines leeren Ordners geschrieben. Attribute und Zeiten stammen vom
-    /// Zustand unmittelbar vor dem Entfernen und dienen dem Undo zur Wiederherstellung.
     /// Vor dem Anlegen eines **neuen** Zielordners geschrieben (`rules`). Undo entfernt genau
     /// diese Ordner wieder, wenn sie leer sind, und nie einen, der vorher schon existierte.
     CreatedDir {
@@ -70,6 +68,8 @@ pub enum Entry {
         action: u32,
         path: String,
     },
+    /// Vor dem Entfernen eines leeren Ordners geschrieben. Attribute und Zeiten stammen vom
+    /// Zustand unmittelbar vor dem Entfernen und dienen dem Undo zur Wiederherstellung.
     IntentRemoveDir {
         run: RunId,
         action: u32,

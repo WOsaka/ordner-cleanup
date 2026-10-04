@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 use crate::config::Config;
 use crate::paths;
@@ -215,7 +215,11 @@ impl Protector {
             return self.check(path);
         };
         let resolved_parent = {
-            let mut cache = self.dir_cache.lock().ok()?;
+            // Ein vergifteter Lock darf den Schutz nie abschalten: Der Cache bleibt nutzbar.
+            let mut cache = self
+                .dir_cache
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             cache
                 .entry(paths::path_key(parent))
                 .or_insert_with(|| resolve(parent))
@@ -283,7 +287,10 @@ impl Protector {
     }
 
     fn marker_in(&self, dir_key: &str, dir: &Path) -> Option<String> {
-        let mut cache = self.marker_cache.lock().ok()?;
+        let mut cache = self
+            .marker_cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         cache
             .entry(dir_key.to_string())
             .or_insert_with(|| self.probe.marker_in(dir))
