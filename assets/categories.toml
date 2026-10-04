@@ -35,7 +35,7 @@ patterns    = { '(?i)\bbon[- ]?nr\.?' = 2 }
 [[categories]]
 name        = "vertrag"
 description = "Vertrag, Vereinbarung, Contract"
-keywords    = { "vertrag" = 3, "vertragsnummer" = 4, "vertragspartner" = 3, "kündigungsfrist" = 4, "vertragslaufzeit" = 4, "vertragsbeginn" = 3, "mietvertrag" = 5, "arbeitsvertrag" = 5, "kaufvertrag" = 5, "dienstleistungsvertrag" = 5, "agreement" = 3, "contract" = 3, "unterschrift" = 1 }
+keywords    = { "vertrag" = 3, "vertragsnummer" = 4, "vertragspartner" = 3, "kündigungsfrist" = 4, "vertragslaufzeit" = 4, "vertragsbeginn" = 3, "mietvertrag" = 5, "arbeitsvertrag" = 5, "kaufvertrag" = 5, "dienstleistungsvertrag" = 5, "agreement" = 2, "contract" = 2, "unterschrift" = 1 }
 patterns    = { '(?i)vertrags?-?(nr|nummer)\.?\s*[:#]?\s*[\w-]+' = 4 }
 
 [[categories]]

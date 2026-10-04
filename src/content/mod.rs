@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 /// Wird erhöht, wenn sich ändert, was die Extraktoren liefern (macht den Cache ungültig).
 pub const EXTRACTOR_VERSION: i64 = 1;
 /// Wird erhöht, wenn sich Konfidenzformel oder Feldmuster ändern.
-pub const CLASSIFIER_VERSION: i64 = 1;
+pub const CLASSIFIER_VERSION: i64 = 2;
 /// Wird erhöht, wenn sich die OCR-Ausgabe ändert (macht den OCR-Text-Cache ungültig).
 pub const OCR_VERSION: i64 = 1;
 

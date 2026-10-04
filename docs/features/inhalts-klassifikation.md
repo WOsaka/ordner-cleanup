@@ -284,3 +284,16 @@ Profile können `[classify]`- und `[llm]`-Werte überschreiben (Phase-5-Mechanis
 - [ ] Welches lokale Modell empfiehlt das README als Default (Größe vs. Qualität auf typischer Hardware ohne GPU)?
 - [ ] Exakte Formel für die Konfidenz und Kalibrierung der Default-Schwelle 0,8 am Testkorpus
 - [ ] Soll ein Inhalts-Hash (aus Phase 1, falls vorhanden) als zweiter Cache-Schlüssel dienen, damit verschobene Dateien nicht neu analysiert werden? (In 6a: nein, ggf. später)
+
+## Manueller Test (2026-10-04, ohne LLM)
+
+Ordner: echter Downloads-Ordner, 60 Dateien (42 lesbare Dokumente, 18 nicht unterstützt: exe, zip, xls …), isolierter Index (`ORDNER_CLEANUP_HOME`), `classify --no-llm`, 3 s.
+
+- **Sichere Zuordnungen (Konfidenz ≥ 0,8): 4.** Zwei Studienbescheinigungen (0,99) und die Vorsorgevollmacht (`vertrag` 0,95) sind richtig. Die Mitteilung `5410291004_…` (`kontoauszug` 0,80) wurde nicht inhaltlich geprüft. **Keine erkennbar falsche sichere Zuordnung.**
+- **Unsicher: alle übrigen Treffer** (u. a. Auslandskrankenversicherung `versicherung` 0,61 gegen `medizin` 0,63, Wohnungsgeberbestätigung `bescheinigung` 0,47). Sie erzeugen im Plan `low-confidence` und keine Aktion.
+- **Fund und Korrektur:** Fachartikel (PDF) bekamen durch ein einzelnes englisches Wort („contract“, „agreement“) `vertrag` 0,38 und füllten „Zum Prüfen“ (16 von 60). Jetzt gilt `MIN_SCORE = 3` (eine Kategorie braucht mindestens ein Wort mit Gewicht 3), die beiden Wörter haben Gewicht 2; `CLASSIFIER_VERSION` ist 2. Danach: 6 Dateien zum Prüfen, 50 ohne Kategorie.
+- **Plan** (`category = bescheinigung` und `vertrag/versicherung`, Ziel mit `{doc.date:%Y}` und `{doc.title|{name}}`): 3 Aktionen, 2 übersprungen, 55 ohne Regel, 0 falsche Aktionen.
+- **apply → scan → plan → undo** auf einer Kopie der Dokumente: 3 Dateien bewegt, zweiter Plan ohne Aktion (Idempotenz), `undo` stellt alle Dateien byteidentisch her (MD5-Vergleich).
+- OCR: 2 Dateien wurden per OCR gelesen (Windows-OCR, Sprachpaket de vorhanden).
+
+**Noch offen:** Lauf mit lokalem LLM (Ollama ist auf diesem PC nicht installiert; Modellwahl 0c), Stichprobe von 100 Dateien (der Ordner hat nur 60) und ein echter Cloud-only-Platzhalter.

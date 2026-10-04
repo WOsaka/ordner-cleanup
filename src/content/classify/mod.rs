@@ -1,7 +1,7 @@
 //! Klassifikation: rein und deterministisch. Aus Text, Dateiname und Metadaten berechnet sie
 //! Kategorie, Konfidenz, zweitbeste Kategorie und die ausschlaggebenden Treffer.
 //!
-//! Konfidenz (`CLASSIFIER_VERSION = 1`): `best` und `second` sind die Punktwerte der zwei
+//! Konfidenz (`CLASSIFIER_VERSION = 2`): `best` und `second` sind die Punktwerte der zwei
 //! stärksten Kategorien (Summe der Gewichte aller verschiedenen Treffer; Ausschlusswörter
 //! setzen den Wert auf 0). `stärke = min(1, best / STRENGTH_FULL)`,
 //! `abstand = 1 − (second / best)²`, `konfidenz = stärke · abstand`, auf 2 Stellen gerundet.
@@ -20,6 +20,10 @@ use text::{KeywordMatcher, Slot};
 
 /// Punktwert, ab dem die Stärke 1 erreicht (Kalibrierung: Schritt 13 des Plans).
 pub const STRENGTH_FULL: f64 = 8.0;
+/// Unter diesem Punktwert gibt es keine Kategorie: ein einzelnes schwaches Wort (z. B.
+/// „contract“ in einem Fachartikel) ist Rauschen, kein Kandidat für „Zum Prüfen“. Ergebnis des
+/// Tests an echten Downloads.
+pub const MIN_SCORE: u32 = 3;
 /// Mindestzahl Wörter, damit ein per OCR gelesenes Bild als Dokument gilt.
 pub const DOC_MIN_WORDS: usize = 25;
 /// Höchstens so viele Treffer werden zur Erklärung gespeichert.
@@ -230,7 +234,7 @@ impl Classifier {
     /// Ergebnis aus Text und Dateiname; `None`, wenn keine Textkategorie trifft.
     fn classify_text(&self, input: &ClassifyInput<'_>) -> Option<Classification> {
         let scored = self.score(input);
-        let best = scored.first()?;
+        let best = scored.first().filter(|b| b.score >= MIN_SCORE)?;
         let second = scored.get(1);
         let second_score = second.map_or(0, |s| s.score);
         Some(Classification {
@@ -640,5 +644,23 @@ mod tests {
         let (name, conf) = r.second.unwrap();
         assert!(!name.is_empty());
         assert!((0.0..=1.0).contains(&conf));
+    }
+
+    #[test]
+    fn einzelnes_schwaches_wort_ergibt_keine_kategorie() {
+        let c = classifier();
+        let r = run(
+            &c,
+            "artikel.pdf",
+            "pdf",
+            Some("This contract between theory and practice"),
+        );
+        assert_eq!(r, Classification::none());
+        let r = run(&c, "x.pdf", "pdf", Some("Ihre Rechnung liegt bei"));
+        assert_eq!(
+            r.category.as_deref(),
+            Some("rechnung"),
+            "ein Wort mit Gewicht 3 bleibt Kandidat"
+        );
     }
 }
