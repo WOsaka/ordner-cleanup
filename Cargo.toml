@@ -3,7 +3,7 @@ name = "ordner-cleanup"
 version = "0.1.0"
 edition = "2021"
 description = "Scan, Analyse-Bericht und sicheres Aufräumen (Quarantäne, Undo) für Ordnersysteme (Windows)"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 
 [lib]
 name = "ordner_cleanup"
