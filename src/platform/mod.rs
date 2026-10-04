@@ -1,3 +1,5 @@
+pub mod dpapi;
+pub mod priority;
 pub mod toast;
 pub mod windows;
 
