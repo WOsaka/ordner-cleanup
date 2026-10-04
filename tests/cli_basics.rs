@@ -35,3 +35,13 @@ fn unterbefehle_haben_hilfe() {
         bin().args(args).assert().success();
     }
 }
+
+#[test]
+fn version_nennt_geonames() {
+    assert_cmd::Command::cargo_bin("ordner-cleanup")
+        .unwrap()
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("GeoNames"));
+}

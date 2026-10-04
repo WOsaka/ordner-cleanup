@@ -659,3 +659,7 @@ Features entstehen über den Workflow `/feature:spec` → `/feature:implementati
 | Phase 3: Aufräumaktionen | [features/aufraeumaktionen.md](features/aufraeumaktionen.md) | [implementation-plans/aufraeumaktionen.md](implementation-plans/aufraeumaktionen.md) |
 
 Ausblick und Priorisierung (Regel-Engine, Umbenennen, Watch-Mode, GUI): [roadmap.md](roadmap.md). Kurzfassung für den Einstieg: [../README.md](../README.md).
+
+## Inhaltsklassifikation (Phase 6a)
+
+`classify` liest Inhalt und Metadaten (PDF, Office, EXIF, Video, OCR, optional ein lokales LLM) und legt Kategorie und Felder im Index-Cache ab; `plan rules` und der Bericht nutzen sie. Befehle, Konfiguration, Kategorien, neue Regelbedingungen und Platzhalter, OCR, LLM und Datenschutz stehen im [README, Abschnitt „Inhalte klassifizieren“](../README.md#inhalte-klassifizieren-phase-6a).

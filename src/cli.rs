@@ -9,6 +9,12 @@ use crate::change::RunId;
 #[command(
     name = "ordner-cleanup",
     version,
+    long_version = concat!(
+        env!("CARGO_PKG_VERSION"),
+        "
+
+Ortsdaten: GeoNames (geonames.org), CC BY 4.0"
+    ),
     about = "Scan, Analyse-Bericht und sicheres Aufräumen für Ordnersysteme (Windows)"
 )]
 pub struct Cli {
