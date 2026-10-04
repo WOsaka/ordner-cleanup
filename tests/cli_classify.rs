@@ -276,11 +276,23 @@ fn llm_ohne_server_warnt_und_laeuft_durch() {
 
 const SCAN_JPG: &[u8] = include_bytes!("fixtures/content/rechnung-scan.jpg");
 
+/// Prüft in einem Hilfsprozess, ob das deutsche OCR-Sprachpaket da ist: WinRT bleibt so aus dem
+/// Testprozess draußen (dort stürzt es auf manchen Systemen beim Beenden ab).
+fn german_ocr_probe(exe: &str) -> bool {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("probe.pdf");
+    std::fs::write(&file, b"%PDF-1.4").unwrap();
+    let out = std::process::Command::new(exe)
+        .arg("ocr-worker")
+        .arg(&file)
+        .args(["--langs", "de"])
+        .output()
+        .unwrap();
+    !String::from_utf8_lossy(&out.stdout).contains("no-language")
+}
+
 fn german_ocr_available() -> bool {
-    use ordner_cleanup::content::ocr::Ocr;
-    let available = !ordner_cleanup::platform::ocr::WinOcr::new(vec!["de".into()])
-        .languages()
-        .is_empty();
+    let available = german_ocr_probe(env!("CARGO_BIN_EXE_ordner-cleanup"));
     if !available {
         eprintln!("OCR-Test übersprungen: kein deutsches OCR-Sprachpaket");
     }
