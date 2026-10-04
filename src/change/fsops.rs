@@ -75,6 +75,11 @@ pub trait FsOps {
     fn exists(&self, path: &Path) -> bool {
         self.metadata(path).is_ok()
     }
+
+    /// Beide Pfade bezeichnen dieselbe Datei (Volume und File-ID), z. B. `a.JPG` und `a.jpg`.
+    fn same_file(&self, a: &Path, b: &Path) -> io::Result<bool> {
+        Ok(file_identity(a)? == file_identity(b)?)
+    }
 }
 
 pub struct RealFs;
@@ -165,6 +170,8 @@ pub mod testing {
         /// Alle Pfade, deren Inhalt gelesen wurde (Nachweis: Platzhalter werden nie gehasht).
         hashed: Mutex<Vec<String>>,
         renames: AtomicUsize,
+        create_dirs: AtomicUsize,
+        panic_before_create_dir: Mutex<Option<usize>>,
         panic_before_rename: Mutex<Option<usize>>,
         panic_after_rename: Mutex<Option<usize>>,
     }
@@ -193,6 +200,12 @@ pub mod testing {
             self
         }
 
+        /// Simuliert einen Prozessabbruch vor dem n-ten `create_dir` (1-basiert).
+        pub fn crash_before_create_dir(self, n: usize) -> Self {
+            *self.panic_before_create_dir.lock().unwrap() = Some(n);
+            self
+        }
+
         pub fn crash_after_rename(self, n: usize) -> Self {
             *self.panic_after_rename.lock().unwrap() = Some(n);
             self
@@ -201,6 +214,7 @@ pub mod testing {
         pub fn disarm(&self) {
             *self.panic_before_rename.lock().unwrap() = None;
             *self.panic_after_rename.lock().unwrap() = None;
+            *self.panic_before_create_dir.lock().unwrap() = None;
             self.failing.lock().unwrap().clear();
         }
 
@@ -244,6 +258,10 @@ pub mod testing {
         }
 
         fn create_dir(&self, path: &Path) -> io::Result<()> {
+            let n = self.create_dirs.fetch_add(1, Ordering::SeqCst) + 1;
+            if *self.panic_before_create_dir.lock().unwrap() == Some(n) {
+                panic!("simulierter Absturz vor create_dir {n}");
+            }
             if self.is_failing(Op::CreateDir, path) {
                 return Err(locked());
             }
@@ -484,5 +502,16 @@ mod tests {
         }
         let meta = RealFs.metadata(&link).unwrap();
         assert!(meta.is_link && meta.is_reparse_point());
+    }
+
+    #[test]
+    fn same_file_erkennt_schreibweise_und_hardlinks_aber_keine_anderen_dateien() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a.JPG"), dir.path().join("b.txt"));
+        std::fs::write(&a, "x").unwrap();
+        std::fs::write(&b, "x").unwrap();
+        assert!(RealFs.same_file(&a, &dir.path().join("a.jpg")).unwrap());
+        assert!(!RealFs.same_file(&a, &b).unwrap());
+        assert!(RealFs.same_file(&a, &dir.path().join("fehlt")).is_err());
     }
 }

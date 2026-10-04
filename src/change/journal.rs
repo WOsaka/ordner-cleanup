@@ -28,6 +28,8 @@ pub enum Dest {
     #[default]
     Quarantine,
     Archive,
+    /// `plan rules`: Ziel irgendwo unter der Wurzel.
+    Rules,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -61,6 +63,13 @@ pub enum Entry {
     },
     /// Vor dem Entfernen eines leeren Ordners geschrieben. Attribute und Zeiten stammen vom
     /// Zustand unmittelbar vor dem Entfernen und dienen dem Undo zur Wiederherstellung.
+    /// Vor dem Anlegen eines **neuen** Zielordners geschrieben (`rules`). Undo entfernt genau
+    /// diese Ordner wieder, wenn sie leer sind, und nie einen, der vorher schon existierte.
+    CreatedDir {
+        run: RunId,
+        action: u32,
+        path: String,
+    },
     IntentRemoveDir {
         run: RunId,
         action: u32,
@@ -118,6 +127,7 @@ impl Entry {
             Self::RunStart { run, .. }
             | Self::Intent { run, .. }
             | Self::IntentRemoveDir { run, .. }
+            | Self::CreatedDir { run, .. }
             | Self::Done { run, .. }
             | Self::Skip { run, .. }
             | Self::Fail { run, .. }
@@ -432,5 +442,45 @@ mod tests {
         let path = dir.path().join("r.jsonl");
         std::fs::write(&path, "").unwrap();
         assert!(read(&path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn created_dir_und_dest_rules_sind_verlustfrei_serialisierbar() {
+        let created = Entry::CreatedDir {
+            run: run(),
+            action: 7,
+            path: r"D:\Daten\Fotos\2026".into(),
+        };
+        let json = serde_json::to_string(&created).unwrap();
+        assert!(json.contains("\"t\":\"created_dir\""), "{json}");
+        assert_eq!(serde_json::from_str::<Entry>(&json).unwrap(), created);
+        assert_eq!(created.run(), &run());
+
+        let rules = Entry::Intent {
+            run: run(),
+            action: 1,
+            from: r"D:\Daten\a.txt".into(),
+            to: r"D:\Daten\Fotos\a.txt".into(),
+            size: 5,
+            hash: None,
+            dest: Dest::Rules,
+            is_dir: false,
+        };
+        let json = serde_json::to_string(&rules).unwrap();
+        assert!(json.contains("\"dest\":\"rules\""), "{json}");
+        assert_eq!(serde_json::from_str::<Entry>(&json).unwrap(), rules);
+    }
+
+    #[test]
+    fn journal_aus_phase_2_und_3_bleibt_lesbar() {
+        let phase_2 = r#"{"t":"intent","run":"20261003-120000-ab12","action":1,"from":"D:\\a","to":"D:\\q\\a","size":1}"#;
+        let entry: Entry = serde_json::from_str(phase_2).unwrap();
+        assert!(matches!(
+            entry,
+            Entry::Intent {
+                dest: Dest::Quarantine,
+                ..
+            }
+        ));
     }
 }

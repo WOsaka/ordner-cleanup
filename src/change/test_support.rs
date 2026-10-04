@@ -245,6 +245,45 @@ impl Fx {
         }
     }
 
+    /// `rules`-Plan (wie `plan rules`): Datei nach `<Wurzel>\<ziel>`, Größe und mtime aus dem
+    /// aktuellen Dateizustand.
+    pub fn rules_plan(&self, pairs: &[(&str, &str)]) -> Plan {
+        let actions = pairs
+            .iter()
+            .zip(1u32..)
+            .map(|((rel, target), id)| {
+                let path = self.root.join(rel);
+                let meta = RealFs.metadata(&path).unwrap();
+                PlannedAction {
+                    id,
+                    action: ActionType::Move,
+                    path: paths::display(&path),
+                    size: meta.size,
+                    mtime_ticks: meta.mtime_ticks,
+                    mtime: String::new(),
+                    hash: None,
+                    keep: None,
+                    keep_hash: None,
+                    reason: "rule:r".into(),
+                    target: Some(paths::display(&self.root.join(target))),
+                    is_dir: false,
+                    files: None,
+                    rule: Some("r".into()),
+                }
+            })
+            .collect();
+        Plan {
+            version: PLAN_VERSION,
+            created: "t".into(),
+            kind: PlanKind::Rules,
+            root: paths::display(&self.root),
+            keep_strategy: None,
+            params: Default::default(),
+            actions,
+            skipped: vec![],
+        }
+    }
+
     pub fn protector(&self) -> Protector {
         Protector::new(&self.root, &Config::default(), &ProtectPaths::default())
     }

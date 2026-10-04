@@ -857,6 +857,7 @@ mod confirm_tests {
             id: 1,
             path: r"D:\x.txt".into(),
             kind: crate::change::plan::ActionType::Quarantine,
+            sorted: false,
             status,
         };
         assert!(status_line(&result(ActionStatus::Done)).is_none());
