@@ -6,12 +6,13 @@ mod file;
 pub mod normalize;
 pub mod template;
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, NaiveDateTime};
 
-pub use condition::{Candidate, Conditions};
+pub use condition::{Candidate, CategorySource, Conditions, MatchCtx, MatchResult, NearMiss};
 pub use normalize::Normalize;
 pub use template::{TargetError, TargetKind, Template};
 
@@ -49,9 +50,40 @@ pub enum ExifFallback {
     Skip,
 }
 
+/// Kategorienamen, die `category` in Regeln annehmen darf.
+#[derive(Debug, Clone)]
+pub enum KnownCategories {
+    Names(BTreeSet<String>),
+    /// Die Kategorie-Datei ließ sich nicht laden; Regeln mit `category` scheitern damit.
+    /// (Regeln ohne Inhaltsbedingung brauchen keine gültige `categories.toml`.)
+    Unavailable(String),
+}
+
+impl KnownCategories {
+    /// Nur die eingebauten Kategorien.
+    pub fn builtin() -> Self {
+        Self::Names(crate::content::classify::defs::CategoryDefs::builtin().names())
+    }
+
+    pub fn check(&self, name: &str) -> Result<(), String> {
+        match self {
+            Self::Names(names) if names.contains(name) => Ok(()),
+            Self::Names(names) => Err(format!(
+                "unbekannte Kategorie „{name}“ (bekannt: {})",
+                names.iter().cloned().collect::<Vec<_>>().join(", ")
+            )),
+            Self::Unavailable(why) => Err(format!(
+                "Kategorie „{name}“ nicht prüfbar, die Kategorie-Datei ist fehlerhaft: {why}"
+            )),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Rule {
     pub name: String,
+    /// Position in der Regeldatei (0-basiert), Schlüssel für die `text_regex`-Ergebnisse.
+    pub index: usize,
     /// Zeile des `[[rules]]`-Blocks in der Regeldatei.
     pub line: usize,
     pub conditions: Conditions,
@@ -83,18 +115,18 @@ pub fn local_naive(ticks: i64) -> NaiveDateTime {
 }
 
 impl RuleSet {
-    pub fn load(path: &Path) -> Result<Self, RulesError> {
+    pub fn load(path: &Path, known: &KnownCategories) -> Result<Self, RulesError> {
         let text = std::fs::read_to_string(path).map_err(|e| RulesError {
             file: path.display().to_string(),
             line: None,
             rule: None,
             message: format!("nicht lesbar ({e})"),
         })?;
-        Self::parse(&text, path)
+        Self::parse(&text, path, known)
     }
 
-    pub fn parse(text: &str, source: &Path) -> Result<Self, RulesError> {
-        file::parse(text, source)
+    pub fn parse(text: &str, source: &Path, known: &KnownCategories) -> Result<Self, RulesError> {
+        file::parse(text, source, known)
     }
 
     /// `--rule`: behält nur die genannten Regeln (Reihenfolge der Datei bleibt).
@@ -131,6 +163,38 @@ impl Rule {
     /// Gruppen der `name_regex`, wenn alle Bedingungen zutreffen.
     pub fn matches(&self, c: &Candidate, now_ticks: i64) -> Option<Vec<String>> {
         self.conditions.matches(c, now_ticks)
+    }
+
+    /// Volle Auswertung mit Treffer, Nicht-Treffer oder nahem Treffer.
+    pub fn evaluate(&self, c: &Candidate, ctx: &MatchCtx) -> MatchResult {
+        self.conditions.evaluate(
+            c,
+            &MatchCtx {
+                rule_index: self.index,
+                ..*ctx
+            },
+        )
+    }
+
+    /// Wie [`evaluate`](Self::evaluate), aber ohne `text_regex` und `min_dwell`.
+    pub fn matches_before_text(&self, c: &Candidate, ctx: &MatchCtx) -> MatchResult {
+        self.conditions.matches_before_text(
+            c,
+            &MatchCtx {
+                rule_index: self.index,
+                ..*ctx
+            },
+        )
+    }
+
+    /// Braucht der Inhalts-Cache: Bedingung oder Ziel nutzt Kategorie bzw. Felder.
+    pub fn needs_content(&self) -> bool {
+        self.conditions.needs_content() || self.target.uses_content()
+    }
+
+    /// Braucht den Volltext (`text_regex`).
+    pub fn needs_text(&self) -> bool {
+        self.conditions.needs_text()
     }
 
     /// Das Ziel braucht das Aufnahmedatum.
@@ -170,6 +234,7 @@ impl Rule {
             mtime,
             exif,
             groups: captures,
+            content: c.content,
         })?;
         let raw = expanded.file.unwrap_or_else(|| c.name.to_string());
         let date = exif.unwrap_or(mtime).date();
@@ -202,17 +267,17 @@ mod tests {
     const NOW: i64 = 1_790_985_600 * TICKS_PER_SEC;
 
     fn parse(text: &str) -> Result<RuleSet, RulesError> {
-        RuleSet::parse(text, Path::new("rules.toml"))
+        RuleSet::parse(text, Path::new("rules.toml"), &KnownCategories::builtin())
     }
 
     fn cand<'a>(rel: &'a str, size: u64, mtime_ticks: i64) -> Candidate<'a> {
-        Candidate {
+        Candidate::new(
             rel,
-            name: rel.rsplit('/').next().unwrap(),
-            parent: rel.rsplit('/').nth(1).unwrap_or("Wurzel"),
+            rel.rsplit('/').next().unwrap(),
+            rel.rsplit('/').nth(1).unwrap_or("Wurzel"),
             size,
             mtime_ticks,
-        }
+        )
     }
 
     const SPEC_FILE: &str = r#"
@@ -352,7 +417,11 @@ strip_copy_suffix = true
 
     #[test]
     fn fehlende_datei_ist_ein_fehler_mit_pfad() {
-        let err = RuleSet::load(Path::new(r"C:\gibt\es\nicht\rules.toml")).unwrap_err();
+        let err = RuleSet::load(
+            Path::new(r"C:\gibt\es\nicht\rules.toml"),
+            &KnownCategories::builtin(),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("rules.toml"), "{err}");
     }
 
@@ -408,5 +477,169 @@ lowercase_ext = true
             set.rules[0].target(&c, &[], None),
             Err(TargetError::NoExifDate)
         );
+    }
+
+    // ---- Inhaltsbedingungen (Phase 6a) ----
+
+    const SPEC_CONTENT_FILE: &str = r#"
+[[rules]]
+name           = "rechnungen"
+glob           = "Downloads/**"
+category       = ["rechnung", "mahnung"]
+min_confidence = 0.85
+min_dwell      = "14d"
+target         = "Finanzen/Rechnungen/{doc.date:%Y}/{doc.date:%Y-%m-%d}_{doc.sender|Unbekannt}_{doc.number|{name}}.{ext}"
+
+[[rules]]
+name            = "vertraege"
+glob            = "Scans/**"
+category        = "vertrag"
+category_source = "rules"
+target          = "Verträge/{doc.sender|Unbekannt}/{doc.date:%Y-%m-%d}_{doc.title|{name}}.{ext}"
+
+[[rules]]
+name   = "urlaubsfotos"
+glob   = "Eingang/**"
+ext    = ["jpg", "jpeg", "heic"]
+fields = { "exif.has_gps" = "true" }
+fields_regex = { "exif.country" = '^(?:[^D].|D[^E])$' }
+target = "Fotos/{exif.date:%Y}/{exif.country}-{exif.city}/{exif.date:%Y-%m-%d}_{name}.{ext}"
+
+[[rules]]
+name       = "telekom"
+glob       = "Downloads/**"
+ext        = ["pdf"]
+text_regex = '(?i)telekom deutschland gmbh'
+target     = "Finanzen/Telekom/"
+"#;
+
+    #[test]
+    fn beispiel_mit_inhaltsbedingungen_aus_der_spec_wird_geladen() {
+        let set = parse(SPEC_CONTENT_FILE).unwrap();
+        let names: Vec<_> = set.rules.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["rechnungen", "vertraege", "urlaubsfotos", "telekom"]
+        );
+        assert_eq!(
+            set.rules.iter().map(|r| r.index).collect::<Vec<_>>(),
+            [0, 1, 2, 3]
+        );
+        let [rechnungen, vertraege, fotos, telekom] = &set.rules[..] else {
+            panic!()
+        };
+        assert_eq!(rechnungen.conditions.category, ["rechnung", "mahnung"]);
+        assert_eq!(rechnungen.conditions.min_confidence, Some(0.85));
+        assert_eq!(rechnungen.conditions.min_dwell_days, Some(14));
+        assert!(rechnungen.needs_content() && !rechnungen.needs_text());
+        assert_eq!(vertraege.conditions.category_source, CategorySource::Rules);
+        assert_eq!(fotos.conditions.fields["exif.has_gps"], "true");
+        assert_eq!(fotos.conditions.fields_regex.len(), 1);
+        assert!(telekom.needs_text() && !telekom.needs_content());
+    }
+
+    #[test]
+    fn ziel_mit_feldern_macht_eine_regel_inhaltsabhaengig() {
+        let text = "[[rules]]\nname = \"r\"\next = [\"pdf\"]\ntarget = \"{doc.sender|X}/\"\n";
+        let set = parse(text).unwrap();
+        assert!(set.rules[0].needs_content());
+        let plain = parse("[[rules]]\nname = \"r\"\next = [\"pdf\"]\ntarget = \"x/\"\n").unwrap();
+        assert!(!plain.rules[0].needs_content());
+    }
+
+    #[test]
+    fn kategorie_gross_klein_und_liste() {
+        let set = parse(
+            "[[rules]]\nname = \"r\"\ncategory = [\" Rechnung \", \"MAHNUNG\"]\ntarget = \"x/\"\n",
+        )
+        .unwrap();
+        assert_eq!(set.rules[0].conditions.category, ["rechnung", "mahnung"]);
+    }
+
+    #[rstest]
+    #[case("category = \"gibtsnicht\"", "unbekannte Kategorie")]
+    #[case("category = [\"rechnung\", \"nope\"]", "„nope“")]
+    #[case("category = []", "leere Liste")]
+    #[case("min_confidence = 0.9\next = [\"pdf\"]", "braucht eine category")]
+    #[case("category = \"rechnung\"\nmin_confidence = 1.5", "zwischen 0 und 1")]
+    #[case("category = \"rechnung\"\nmin_confidence = -0.1", "zwischen 0 und 1")]
+    #[case(
+        "category_source = \"rules\"\next = [\"pdf\"]",
+        "braucht eine category"
+    )]
+    #[case(
+        "category = \"rechnung\"\ncategory_source = \"llm\"",
+        "category_source"
+    )]
+    #[case("fields = { \"doc.bogus\" = \"x\" }", "unbekanntes Feld")]
+    #[case("fields_regex = { \"exif.bogus\" = \"x\" }", "unbekanntes Feld")]
+    #[case("fields_regex = { \"doc.sender\" = \"(\" }", "ungültige Regex")]
+    #[case("ext = [\"pdf\"]\ntext_regex = \"(\"", "text_regex")]
+    #[case("ext = [\"pdf\"]\nmin_dwell = \"bald\"", "min_dwell")]
+    #[case("ext = [\"pdf\"]\nmin_dwell = \"0d\"", "min_dwell")]
+    #[case("ext = [\"pdf\"]\ncategory = 5", "category")]
+    fn fehler_in_inhaltsbedingungen_haben_zeile_und_regelname(
+        #[case] body: &str,
+        #[case] hint: &str,
+    ) {
+        let target = if body.contains("target") {
+            ""
+        } else {
+            "\ntarget = \"x/\""
+        };
+        let err = parse(&one(&format!("{body}{target}"))).unwrap_err();
+        assert!(err.message.contains(hint), "{err}");
+        assert_eq!(err.rule.as_deref(), Some("r"), "{err}");
+        assert!(err.line.is_some(), "{err}");
+    }
+
+    #[test]
+    fn unbekannte_kategorie_nennt_bekannte_namen() {
+        let err = parse(&one("category = \"x\"\ntarget = \"y/\"")).unwrap_err();
+        assert!(
+            err.message.contains("rechnung") && err.message.contains("vertrag"),
+            "{err}"
+        );
+        assert_eq!(err.line, Some(3));
+    }
+
+    #[test]
+    fn kategorie_datei_kaputt_betrifft_nur_regeln_mit_category() {
+        let known = KnownCategories::Unavailable("categories.toml:3: kaputt".into());
+        let with_category = RuleSet::parse(
+            &one("category = \"rechnung\"\ntarget = \"y/\""),
+            Path::new("rules.toml"),
+            &known,
+        )
+        .unwrap_err();
+        assert!(
+            with_category.message.contains("categories.toml:3"),
+            "{with_category}"
+        );
+        let without = RuleSet::parse(
+            &one("ext = [\"pdf\"]\ntarget = \"y/\""),
+            Path::new("rules.toml"),
+            &known,
+        );
+        assert!(
+            without.is_ok(),
+            "Regeln ohne Inhaltsbedingung brauchen keine gültige Datei"
+        );
+    }
+
+    #[test]
+    fn eigene_kategorien_sind_bekannt() {
+        let defs = crate::content::classify::defs::CategoryDefs::load(
+            "[[categories]]\nname = \"kita\"\nkeywords = { kita = 3 }\n",
+            "c.toml",
+        )
+        .unwrap();
+        let known = KnownCategories::Names(defs.names());
+        assert!(RuleSet::parse(
+            &one("category = \"kita\"\ntarget = \"y/\""),
+            Path::new("rules.toml"),
+            &known
+        )
+        .is_ok());
     }
 }

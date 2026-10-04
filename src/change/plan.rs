@@ -110,6 +110,9 @@ fn is_false(b: &bool) -> bool {
 pub struct Skipped {
     pub path: String,
     pub reason: SkipReason,
+    /// Zusatz zum Grund, z. B. das fehlende Feld oder `rechnung 0.62 / mahnung 0.41`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// Ergebnis eines Planers der Aufräumaktionen (`junk`, `empty-dirs`, `archive`, `versions`).
@@ -420,6 +423,7 @@ mod tests {
             skipped: vec![Skipped {
                 path: r"D:\Daten\x.txt".into(),
                 reason: SkipReason::Protected,
+                detail: None,
             }],
         }
     }

@@ -78,6 +78,7 @@ pub fn plan_versions(
                     Skipped {
                         path: file.path.clone(),
                         reason,
+                        detail: None,
                     },
                 ));
             };

@@ -105,6 +105,7 @@ pub fn plan_dedupe(
                 Skipped {
                     path: file.path.clone(),
                     reason,
+                    detail: None,
                 },
             ));
         };
@@ -385,7 +386,8 @@ mod tests {
             plan.skipped,
             [Skipped {
                 path: r"Z:\Root\proj\.git\obj.txt".into(),
-                reason: SkipReason::Protected
+                reason: SkipReason::Protected,
+                detail: None,
             }]
         );
     }
@@ -431,7 +433,8 @@ mod tests {
             result.plan.skipped,
             [Skipped {
                 path: r"Z:\Root\a-link.txt".into(),
-                reason: SkipReason::Hardlink
+                reason: SkipReason::Hardlink,
+                detail: None,
             }]
         );
     }

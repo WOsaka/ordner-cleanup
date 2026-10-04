@@ -131,6 +131,7 @@ pub fn plan_archive(
                 Skipped {
                     path: row.path.clone(),
                     reason,
+                    detail: None,
                 },
             ));
             continue;

@@ -78,7 +78,7 @@ name   = "urlaubsfotos"
 glob   = "Eingang/**"
 ext    = ["jpg", "jpeg", "heic"]
 fields = { "exif.has_gps" = "true" }
-fields_regex = { "exif.country" = '^(?!DE$)' }  # nur Auslandsfotos
+fields_regex = { "exif.country" = '^(?:[^D].|D[^E])$' }  # nur Auslandsfotos (ohne Look-around: die Regex-Engine kennt keines)
 target = "Fotos/{exif.date:%Y}/{exif.country}-{exif.city}/{exif.date:%Y-%m-%d}_{name}.{ext}"
 
 [[rules]]

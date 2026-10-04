@@ -16,10 +16,11 @@ use super::plan::{
 use super::protect::{Protector, TOOL_DIR};
 use super::SkipReason;
 use crate::analysis::problems::{name_issue, MAX_PATH_CHARS};
+use crate::content::ContentRecord;
 use crate::index::{ExifEntry, FileRow, Index, IndexError};
 use crate::paths;
 use crate::rules::template::TargetError;
-use crate::rules::{Candidate, RuleSet};
+use crate::rules::{Candidate, MatchCtx, MatchResult, NearMiss, RuleSet};
 use crate::scan::exif::{self, ExifError};
 use crate::scan::hasher;
 
@@ -48,12 +49,63 @@ pub trait ContentSource: Sync {
     fn same_content(&self, a: &FileRow, b: &FileRow) -> bool;
 }
 
+/// Inhaltsdaten (Kategorie, Felder) aus dem Cache. Die echte Implementierung klassifiziert
+/// fehlende oder veraltete Einträge über `classify`, sofern nicht `--no-classify` gilt.
+pub trait ContentLookup: Sync {
+    /// Datensätze zu `files` (Schlüssel → Datensatz); Dateien ohne Datensatz fehlen im Ergebnis.
+    fn content(
+        &self,
+        index: &mut Index,
+        files: &[&FileRow],
+    ) -> Result<HashMap<String, ContentRecord>, IndexError>;
+}
+
+/// Volltext für `text_regex`. Der Text lebt nur im Speicher und nur für diesen Aufruf.
+pub trait TextProvider: Sync {
+    /// Text zu den Dateien (gleiche Reihenfolge); `None`, wenn keiner lesbar ist.
+    fn texts(
+        &self,
+        index: &Index,
+        items: &[(&FileRow, Option<&ContentRecord>)],
+    ) -> Vec<Option<String>>;
+}
+
+/// Ohne Inhaltsdaten (alle Regeln mit Inhaltsbedingung ergeben `not-classified`).
+pub struct NoContent;
+
+impl ContentLookup for NoContent {
+    fn content(
+        &self,
+        _: &mut Index,
+        _: &[&FileRow],
+    ) -> Result<HashMap<String, ContentRecord>, IndexError> {
+        Ok(HashMap::new())
+    }
+}
+
+/// Ohne Text (`text_regex` trifft nie).
+pub struct NoText;
+
+impl TextProvider for NoText {
+    fn texts(
+        &self,
+        _: &Index,
+        items: &[(&FileRow, Option<&ContentRecord>)],
+    ) -> Vec<Option<String>> {
+        vec![None; items.len()]
+    }
+}
+
 pub struct RulesEnv<'a> {
     pub protector: &'a Protector,
     pub exif: &'a dyn ExifSource,
     pub content: &'a dyn ContentSource,
     pub created: &'a str,
     pub now_ticks: i64,
+    pub content_lookup: &'a dyn ContentLookup,
+    pub text: &'a dyn TextProvider,
+    /// `[classify] min_confidence`, Standardschwelle für Regeln ohne eigene
+    pub min_confidence: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +126,10 @@ pub struct RulesPlan {
     pub unmatched: usize,
     /// Hinweise, z. B. Regeln, die einander die Dateien weiterreichen.
     pub notes: Vec<String>,
+    /// Dateien, die nur an der Konfidenz scheiterten (zum Prüfen)
+    pub review: usize,
+    /// Dateien, die nicht klassifiziert waren
+    pub not_classified: usize,
 }
 
 /// Was an einem Pfad (Schlüssel) schon liegt oder im Plan dorthin soll.
@@ -89,16 +145,39 @@ struct Pending {
     caps: Vec<String>,
     rel: String,
     parent: String,
+    /// `text_regex`-Ergebnisse je Regel, falls der Text gelesen wurde
+    hits: Option<Vec<bool>>,
 }
 
-fn candidate<'a>(p: &'a Pending, row: &'a FileRow) -> Candidate<'a> {
-    Candidate {
-        rel: &p.rel,
-        name: &row.name,
-        parent: &p.parent,
-        size: row.size.max(0) as u64,
-        mtime_ticks: row.mtime,
-    }
+/// Datei nach der Vorauswahl mit den Regeln, deren billige Bedingungen passen.
+struct Prep {
+    file: usize,
+    rel: String,
+    parent: String,
+    /// Regelnummer und Gruppen, in Reihenfolge der Regeldatei, bis zur ersten Regel, die ohne
+    /// Inhalt, Text und Wartezeit entscheidet
+    cheap: Vec<(usize, Vec<String>)>,
+    hits: Option<Vec<bool>>,
+}
+
+/// Ankunft im Ordner: das spätere von Erstellzeit (bzw. mtime) und `first_seen`.
+fn arrival(row: &FileRow) -> i64 {
+    row.ctime
+        .unwrap_or(row.mtime)
+        .max(row.first_seen.unwrap_or(i64::MIN))
+}
+
+fn candidate<'a>(
+    rel: &'a str,
+    parent: &'a str,
+    row: &'a FileRow,
+    content: Option<&'a ContentRecord>,
+    hits: Option<&'a [bool]>,
+) -> Candidate<'a> {
+    Candidate::new(rel, &row.name, parent, row.size.max(0) as u64, row.mtime)
+        .with_content(content)
+        .with_arrival(arrival(row))
+        .with_text_hits(hits)
 }
 
 fn rel_string(root: &Path, path: &Path) -> String {
@@ -116,11 +195,21 @@ fn numbered(file: &str, n: usize) -> String {
 }
 
 fn skip(skipped: &mut Vec<(String, Skipped)>, row: &FileRow, reason: SkipReason) {
+    skip_with(skipped, row, reason, None);
+}
+
+fn skip_with(
+    skipped: &mut Vec<(String, Skipped)>,
+    row: &FileRow,
+    reason: SkipReason,
+    detail: Option<String>,
+) {
     skipped.push((
         row.key.clone(),
         Skipped {
             path: row.path.clone(),
             reason,
+            detail,
         },
     ));
 }
@@ -159,7 +248,17 @@ pub fn plan_rules(
 
     let mut skipped: Vec<(String, Skipped)> = Vec::new();
     let mut unmatched = 0usize;
-    let mut pending: Vec<Pending> = Vec::new();
+    let mut review = 0usize;
+    let mut not_classified = 0usize;
+    let ctx = MatchCtx {
+        now_ticks: env.now_ticks,
+        min_confidence: env.min_confidence,
+        rule_index: 0,
+    };
+
+    // Durchgang 1: billige Bedingungen. Ergibt je Datei die Regeln, die überhaupt passen können,
+    // und damit, für welche Dateien Inhalt oder Text gebraucht wird.
+    let mut preps: Vec<Prep> = Vec::new();
     for (i, row) in files.iter().enumerate() {
         if row.dir_key.starts_with(&archive_key) || row.dir_key.starts_with(&tool_key) {
             continue;
@@ -171,36 +270,138 @@ pub fn plan_rules(
             .filter(|p| paths::dir_key(p) != root_key)
             .and_then(Path::file_name)
             .map_or_else(|| root_name.clone(), |n| n.to_string_lossy().into_owned());
-        let cand = Candidate {
-            rel: &rel,
-            name: &row.name,
-            parent: &parent,
-            size: row.size.max(0) as u64,
-            mtime_ticks: row.mtime,
-        };
-        let Some((rule, caps)) = rules
-            .rules
-            .iter()
-            .enumerate()
-            .find_map(|(r, rule)| rule.matches(&cand, env.now_ticks).map(|c| (r, c)))
-        else {
+        let cand = candidate(&rel, &parent, row, None, None);
+        let mut cheap: Vec<(usize, Vec<String>)> = Vec::new();
+        for (r, rule) in rules.rules.iter().enumerate() {
+            if let Some(caps) = rule.conditions.matches_cheap(&cand, env.now_ticks) {
+                cheap.push((r, caps));
+                if !rule.needs_content()
+                    && !rule.needs_text()
+                    && rule.conditions.min_dwell_days.is_none()
+                {
+                    break;
+                }
+            }
+        }
+        if cheap.is_empty() {
             unmatched += 1;
-            continue;
-        };
-        if env.protector.check_cached(path).is_some() {
+        } else if env.protector.check_cached(path).is_some() {
             skip(&mut skipped, row, SkipReason::Protected);
         } else if row.is_link {
             skip(&mut skipped, row, SkipReason::Link);
         } else if row.cloud_only {
             skip(&mut skipped, row, SkipReason::CloudPlaceholder);
         } else {
-            pending.push(Pending {
+            preps.push(Prep {
                 file: i,
-                rule,
-                caps,
                 rel,
                 parent,
+                cheap,
+                hits: None,
             });
+        }
+    }
+
+    // Durchgang 2: Inhaltsdaten für Dateien, bei denen eine mögliche Regel sie braucht.
+    let needing_content: Vec<usize> = preps
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.cheap.iter().any(|(r, _)| rules.rules[*r].needs_content()))
+        .map(|(i, _)| i)
+        .collect();
+    let contents: HashMap<String, ContentRecord> = if needing_content.is_empty() {
+        HashMap::new()
+    } else {
+        let rows: Vec<&FileRow> = needing_content
+            .iter()
+            .map(|&i| &files[preps[i].file])
+            .collect();
+        env.content_lookup.content(index, &rows)?
+    };
+
+    // Durchgang 3: Text nur für Dateien, bei denen eine `text_regex`-Regel nach allen anderen
+    // Bedingungen noch passen könnte. Der Text wird je Datei einmal gelesen, ausgewertet und
+    // verworfen; behalten wird nur, welche Regex getroffen hat.
+    let mut text_work: Vec<usize> = Vec::new();
+    for (pi, prep) in preps.iter().enumerate() {
+        let row = &files[prep.file];
+        let content = contents.get(&row.key);
+        let cand = candidate(&prep.rel, &prep.parent, row, content, None);
+        let wanted = prep.cheap.iter().any(|(r, _)| {
+            let rule = &rules.rules[*r];
+            rule.needs_text()
+                && match rule.matches_before_text(&cand, &ctx) {
+                    MatchResult::Match(_) => true,
+                    MatchResult::NearMiss(NearMiss { reason, .. }) => {
+                        reason == SkipReason::LowConfidence
+                    }
+                    MatchResult::NoMatch => false,
+                }
+        });
+        if wanted {
+            text_work.push(pi);
+        }
+    }
+    if !text_work.is_empty() {
+        let items: Vec<(&FileRow, Option<&ContentRecord>)> = text_work
+            .iter()
+            .map(|&pi| {
+                let row = &files[preps[pi].file];
+                (row, contents.get(&row.key))
+            })
+            .collect();
+        let texts = env.text.texts(index, &items);
+        for (&pi, text) in text_work.iter().zip(texts) {
+            let mut hits = vec![false; rules.rules.len()];
+            if let Some(text) = text {
+                for (r, _) in &preps[pi].cheap {
+                    if let Some(regex) = &rules.rules[*r].conditions.text_regex {
+                        hits[*r] = regex.is_match(&text);
+                    }
+                }
+            }
+            preps[pi].hits = Some(hits);
+        }
+    }
+
+    // Durchgang 4: Zuordnung mit vollständigen Daten; die erste passende Regel gewinnt.
+    let mut pending: Vec<Pending> = Vec::new();
+    for prep in preps {
+        let row = &files[prep.file];
+        let content = contents.get(&row.key);
+        let cand = candidate(&prep.rel, &prep.parent, row, content, prep.hits.as_deref());
+        let mut winner: Option<(usize, Vec<String>)> = None;
+        let mut near: Option<NearMiss> = None;
+        for (r, _) in &prep.cheap {
+            match rules.rules[*r].evaluate(&cand, &ctx) {
+                MatchResult::Match(caps) => {
+                    winner = Some((*r, caps));
+                    break;
+                }
+                MatchResult::NearMiss(n) => {
+                    near.get_or_insert(n);
+                }
+                MatchResult::NoMatch => {}
+            }
+        }
+        match (winner, near) {
+            (Some((rule, caps)), _) => pending.push(Pending {
+                file: prep.file,
+                rule,
+                caps,
+                rel: prep.rel,
+                parent: prep.parent,
+                hits: prep.hits,
+            }),
+            (None, Some(n)) => {
+                match n.reason {
+                    SkipReason::LowConfidence => review += 1,
+                    SkipReason::NotClassified => not_classified += 1,
+                    _ => {}
+                }
+                skip_with(&mut skipped, row, n.reason, n.detail);
+            }
+            (None, None) => unmatched += 1,
         }
     }
 
@@ -242,10 +443,21 @@ pub fn plan_rules(
             Some(ExifResult::Date(d)) => Some(*d),
             _ => None,
         };
-        let rel_target = match rule.target(&candidate(p, row), &p.caps, exif_date) {
+        let cand = candidate(
+            &p.rel,
+            &p.parent,
+            row,
+            contents.get(&row.key),
+            p.hits.as_deref(),
+        );
+        let rel_target = match rule.target(&cand, &p.caps, exif_date) {
             Ok(t) => t,
             Err(TargetError::NoExifDate) => {
                 skip(&mut skipped, row, SkipReason::NoExifDate);
+                continue;
+            }
+            Err(TargetError::MissingField(name)) => {
+                skip_with(&mut skipped, row, SkipReason::MissingField, Some(name));
                 continue;
             }
             Err(TargetError::Invalid(_)) => {
@@ -411,6 +623,7 @@ pub fn plan_rules(
         &probes,
         &pending,
         &files,
+        &contents,
         &taken,
         rules,
         &root_spelling,
@@ -445,15 +658,19 @@ pub fn plan_rules(
         per_rule: stats,
         unmatched,
         notes,
+        review,
+        not_classified,
     })
 }
 
 /// Wendet die Regeln probehalber auf jedes Ziel an: Würde eine Datei beim nächsten Lauf erneut
 /// bewegt, bekommt das Regelpaar einen Hinweis (einmal je Paar).
+#[allow(clippy::too_many_arguments)]
 fn stability_notes(
     probes: &[(usize, PathBuf)],
     pending: &[Pending],
     files: &[FileRow],
+    contents: &HashMap<String, ContentRecord>,
     taken: &HashMap<usize, ExifResult>,
     rules: &RuleSet,
     root: &Path,
@@ -478,18 +695,24 @@ fn stability_notes(
             .filter(|d| paths::dir_key(d) != paths::dir_key(root))
             .and_then(Path::file_name)
             .map_or_else(|| root_name.clone(), |n| n.to_string_lossy().into_owned());
-        let cand = Candidate {
-            rel: &rel,
-            name: &name,
-            parent: &parent,
-            size: row.size.max(0) as u64,
-            mtime_ticks: row.mtime,
+        let cand = Candidate::new(&rel, &name, &parent, row.size.max(0) as u64, row.mtime)
+            .with_content(contents.get(&row.key))
+            .with_arrival(arrival(row))
+            .with_text_hits(p.hits.as_deref());
+        let ctx = MatchCtx {
+            now_ticks: env.now_ticks,
+            min_confidence: env.min_confidence,
+            rule_index: 0,
         };
-        let Some((next, caps)) = rules
-            .rules
-            .iter()
-            .enumerate()
-            .find_map(|(r, rule)| rule.matches(&cand, env.now_ticks).map(|c| (r, c)))
+        let Some((next, caps)) =
+            rules
+                .rules
+                .iter()
+                .enumerate()
+                .find_map(|(r, rule)| match rule.evaluate(&cand, &ctx) {
+                    MatchResult::Match(c) => Some((r, c)),
+                    _ => None,
+                })
         else {
             continue;
         };

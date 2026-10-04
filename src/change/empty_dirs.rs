@@ -94,6 +94,7 @@ pub fn plan_empty_dirs(
                 Skipped {
                     path: row.path.clone(),
                     reason,
+                    detail: None,
                 },
             ));
         };

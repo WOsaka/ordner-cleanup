@@ -13,6 +13,7 @@ use globset::GlobBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use super::profile;
+use crate::change::rules::{ContentLookup, TextProvider};
 use crate::cli::ClassifyArgs;
 use crate::config::Config;
 use crate::content::classify::defs::CategoryDefs;
@@ -106,10 +107,38 @@ impl TextCache for IndexTextCache<'_, '_> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Progress {
-    Bar,
-    Quiet,
+/// OCR-Einrichtung: nur nutzbar, wenn ein passendes Sprachpaket installiert ist.
+pub(super) struct OcrSetup {
+    pub engine: Option<WinOcr>,
+    /// Installierte Sprachen, die zu `ocr_languages` passen
+    pub languages: Vec<String>,
+    /// Schlüssel für den OCR-Text-Cache (sortierte Tags)
+    pub lang_key: String,
+}
+
+impl OcrSetup {
+    pub fn new(config: &Config) -> Self {
+        let engine = config
+            .classify
+            .ocr
+            .then(|| WinOcr::new(config.classify.ocr_languages.clone()));
+        let languages = engine.as_ref().map(|o| o.languages()).unwrap_or_default();
+        let mut sorted = languages.clone();
+        sorted.sort();
+        Self {
+            engine,
+            languages,
+            lang_key: sorted.join(","),
+        }
+    }
+
+    /// `None`, wenn OCR aus ist oder kein Sprachpaket passt.
+    pub fn usable(&self) -> Option<&dyn Ocr> {
+        match &self.engine {
+            Some(o) if !self.languages.is_empty() => Some(o),
+            _ => None,
+        }
+    }
 }
 
 /// Was ein Aufruf von [`classify_files`] braucht.
@@ -119,7 +148,6 @@ pub(super) struct ClassifyJob<'a> {
     pub classifier: &'a Classifier,
     pub force: bool,
     pub no_llm: bool,
-    pub progress: Progress,
 }
 
 /// Zähler eines Laufs.
@@ -224,15 +252,9 @@ pub(super) fn classify_files(
     let llm_model = llm_client.as_ref().map(|c| c.model().to_string());
 
     // OCR: nur, wenn ein passendes Sprachpaket installiert ist
-    let ocr = cfg.ocr.then(|| WinOcr::new(cfg.ocr_languages.clone()));
-    let ocr_langs = ocr.as_ref().map(|o| o.languages()).unwrap_or_default();
-    let ocr_ref: Option<&dyn Ocr> = match &ocr {
-        Some(o) if !ocr_langs.is_empty() => Some(o),
-        _ => None,
-    };
-    let mut lang_key = ocr_langs.clone();
-    lang_key.sort();
-    let lang_key = lang_key.join(",");
+    let ocr_setup = OcrSetup::new(job.config);
+    let ocr_ref = ocr_setup.usable();
+    let lang_key = ocr_setup.lang_key.clone();
     if !cfg.cache_ocr_text {
         let _ = index.ocr_text_clear(&root_key);
     }
@@ -268,133 +290,130 @@ pub(super) fn classify_files(
     }
 
     if !items.is_empty() {
-        let _priority = ProcessPriorityGuard::below_normal();
-        let extract_opts = ExtractOpts {
-            max_file_size: cfg.max_file_size_bytes(),
-            max_text_chars: cfg.max_text_chars,
-            ..ExtractOpts::default()
-        };
-        let settings = ocr_settings(job.config)?;
-        let ocr_gate = OcrGate::new(OCR_PARALLEL);
-        let llm_gate = LlmGate::default();
-        let index_mx = Mutex::new(&mut *index);
-        let text_cache: Box<dyn TextCache + '_> = if cfg.cache_ocr_text && ocr_ref.is_some() {
-            Box::new(IndexTextCache {
-                index: &index_mx,
-                languages: lang_key.clone(),
-            })
-        } else {
-            Box::new(NoTextCache)
-        };
-        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let ctx = PipelineCtx {
-            root: job.root,
-            classifier: job.classifier,
-            extract: &extract_opts,
-            ocr: ocr_ref,
-            ocr_settings: &settings,
-            ocr_cache: text_cache.as_ref(),
-            ocr_gate: &ocr_gate,
-            llm: llm_client.as_ref().map(|client| LlmSettings {
-                client,
-                tasks: llm_tasks(job.config),
-                max_input_chars: job.config.llm.max_input_chars,
-                max_confidence: job.config.llm.max_confidence,
-                gate: &llm_gate,
-            }),
-            min_confidence: cfg.min_confidence as f32,
-            today: chrono::Local::now().date_naive(),
-            now: &now,
-            force: job.force,
-        };
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(cfg.worker_threads())
-            .build()
-            .context("Thread-Pool konnte nicht erstellt werden")?;
-        let bar = match job.progress {
-            Progress::Bar => {
-                let bar = ProgressBar::new(items.len() as u64);
-                bar.set_style(
-                    ProgressStyle::with_template("{bar:30} {pos}/{len} {msg}")
-                        .unwrap_or_else(|_| ProgressStyle::default_bar()),
-                );
-                bar
-            }
-            Progress::Quiet => ProgressBar::hidden(),
-        };
-        let (tx, rx) =
-            crossbeam_channel::bounded::<(usize, crate::content::pipeline::Processed)>(64);
-        let mut block: Vec<crate::index::CachedContent> = Vec::new();
-        let mut write_error: Option<anyhow::Error> = None;
+        let extra = (|| -> Result<Vec<String>> {
+            let mut local_warnings = Vec::new();
+            let _priority = ProcessPriorityGuard::below_normal();
+            let extract_opts = ExtractOpts {
+                max_file_size: cfg.max_file_size_bytes(),
+                max_text_chars: cfg.max_text_chars,
+                ..ExtractOpts::default()
+            };
+            let settings = ocr_settings(job.config)?;
+            let ocr_gate = OcrGate::new(OCR_PARALLEL);
+            let llm_gate = LlmGate::default();
+            let index_mx = Mutex::new(&mut *index);
+            let text_cache: Box<dyn TextCache + '_> = if cfg.cache_ocr_text && ocr_ref.is_some() {
+                Box::new(IndexTextCache {
+                    index: &index_mx,
+                    languages: lang_key.clone(),
+                })
+            } else {
+                Box::new(NoTextCache)
+            };
+            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            let ctx = PipelineCtx {
+                root: job.root,
+                classifier: job.classifier,
+                extract: &extract_opts,
+                ocr: ocr_ref,
+                ocr_settings: &settings,
+                ocr_cache: text_cache.as_ref(),
+                ocr_gate: &ocr_gate,
+                llm: llm_client.as_ref().map(|client| LlmSettings {
+                    client,
+                    tasks: llm_tasks(job.config),
+                    max_input_chars: job.config.llm.max_input_chars,
+                    max_confidence: job.config.llm.max_confidence,
+                    gate: &llm_gate,
+                }),
+                min_confidence: cfg.min_confidence as f32,
+                today: chrono::Local::now().date_naive(),
+                now: &now,
+                force: job.force,
+            };
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(cfg.worker_threads())
+                .build()
+                .context("Thread-Pool konnte nicht erstellt werden")?;
+            // indicatif zeichnet nur in einem Terminal (geplante Läufe bleiben still)
+            let bar = ProgressBar::new(items.len() as u64);
+            bar.set_style(
+                ProgressStyle::with_template("{bar:30} {pos}/{len} {msg}")
+                    .unwrap_or_else(|_| ProgressStyle::default_bar()),
+            );
+            let (tx, rx) =
+                crossbeam_channel::bounded::<(usize, crate::content::pipeline::Processed)>(64);
+            let mut block: Vec<crate::index::CachedContent> = Vec::new();
+            let mut write_error: Option<anyhow::Error> = None;
 
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                use rayon::prelude::*;
-                pool.install(|| {
-                    items.par_iter().enumerate().for_each(|(i, item)| {
-                        if cancel.load(Ordering::Relaxed) {
-                            return;
-                        }
-                        let processed = process_file(item.file, item.existing.as_ref(), &ctx);
-                        let _ = tx.send((i, processed));
-                    });
-                });
-                drop(tx);
-            });
-            for (i, processed) in rx {
-                let item = &items[i];
-                stats.ocr_runs += processed.ocr_runs as usize;
-                stats.ocr_cache_hits += processed.ocr_cache_hits as usize;
-                stats.llm_calls += processed.llm_calls as usize;
-                match processed.outcome {
-                    Outcome::Record(record) => {
-                        stats.analysed += 1;
-                        if item.reassign {
-                            stats.reassigned += 1;
-                        }
-                        bar.set_message(match (record.text_source, record.source) {
-                            (_, Source::Llm) => "LLM",
-                            (TextSource::Ocr, _) => "OCR",
-                            (TextSource::Layer | TextSource::Office, _) => "Text",
-                            _ => "Metadaten",
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    use rayon::prelude::*;
+                    pool.install(|| {
+                        items.par_iter().enumerate().for_each(|(i, item)| {
+                            if cancel.load(Ordering::Relaxed) {
+                                return;
+                            }
+                            let processed = process_file(item.file, item.existing.as_ref(), &ctx);
+                            let _ = tx.send((i, processed));
                         });
-                        block.push(record.to_cached());
-                        records.insert(item.file.key.clone(), *record);
+                    });
+                    drop(tx);
+                });
+                for (i, processed) in rx {
+                    let item = &items[i];
+                    stats.ocr_runs += processed.ocr_runs as usize;
+                    stats.ocr_cache_hits += processed.ocr_cache_hits as usize;
+                    stats.llm_calls += processed.llm_calls as usize;
+                    match processed.outcome {
+                        Outcome::Record(record) => {
+                            stats.analysed += 1;
+                            if item.reassign {
+                                stats.reassigned += 1;
+                            }
+                            bar.set_message(match (record.text_source, record.source) {
+                                (_, Source::Llm) => "LLM",
+                                (TextSource::Ocr, _) => "OCR",
+                                (TextSource::Layer | TextSource::Office, _) => "Text",
+                                _ => "Metadaten",
+                            });
+                            block.push(record.to_cached());
+                            records.insert(item.file.key.clone(), *record);
+                        }
+                        Outcome::Skipped(Skip::CloudPlaceholder) => stats.cloud_only += 1,
+                        Outcome::Skipped(Skip::Stale) => stats.stale += 1,
+                        Outcome::Skipped(Skip::Transient(why)) => {
+                            *stats.transient.entry(why).or_default() += 1
+                        }
                     }
-                    Outcome::Skipped(Skip::CloudPlaceholder) => stats.cloud_only += 1,
-                    Outcome::Skipped(Skip::Stale) => stats.stale += 1,
-                    Outcome::Skipped(Skip::Transient(why)) => {
-                        *stats.transient.entry(why).or_default() += 1
+                    bar.inc(1);
+                    if block.len() >= BLOCK && write_error.is_none() {
+                        write_error = flush(&index_mx, &mut block).err();
                     }
                 }
-                bar.inc(1);
-                if block.len() >= BLOCK && write_error.is_none() {
-                    write_error = flush(&index_mx, &mut block).err();
-                }
+            });
+            bar.finish_and_clear();
+            if write_error.is_none() {
+                write_error = flush(&index_mx, &mut block).err();
             }
-        });
-        bar.finish_and_clear();
-        if write_error.is_none() {
-            write_error = flush(&index_mx, &mut block).err();
-        }
-        drop(ctx);
-        drop(text_cache);
-        drop(index_mx);
-        if let Some(e) = write_error {
-            return Err(e);
-        }
-        if let Some(w) = llm_gate.warning() {
-            warnings.push(w);
-        }
-        if abandoned_workers() > 0 {
-            warnings.push(format!(
-                "{} PDF-Parser haben nicht geantwortet und wurden aufgegeben",
-                abandoned_workers()
-            ));
-        }
-        if ocr.is_some() && ocr_langs.is_empty() {
-            warnings.push(NO_LANGUAGE_HINT.to_string());
-        }
+            if let Some(e) = write_error {
+                return Err(e);
+            }
+            if let Some(w) = llm_gate.warning() {
+                local_warnings.push(w);
+            }
+            if abandoned_workers() > 0 {
+                local_warnings.push(format!(
+                    "{} PDF-Parser haben nicht geantwortet und wurden aufgegeben",
+                    abandoned_workers()
+                ));
+            }
+            if ocr_setup.engine.is_some() && ocr_setup.languages.is_empty() {
+                local_warnings.push(NO_LANGUAGE_HINT.to_string());
+            }
+            Ok(local_warnings)
+        })()?;
+        warnings.extend(extra);
     }
 
     let aborted = cancel.load(Ordering::Relaxed);
@@ -421,6 +440,175 @@ fn flush(index: &Mutex<&mut Index>, block: &mut Vec<crate::index::CachedContent>
         .content_store(block)?;
     block.clear();
     Ok(())
+}
+
+/// `ContentLookup` für `plan rules`: Cache lesen, fehlende oder veraltete Einträge über
+/// `classify` nachholen (außer bei `--no-classify`).
+pub(super) struct CachedLookup<'a> {
+    pub root: &'a Path,
+    pub config: &'a Config,
+    pub classifier: &'a Classifier,
+    /// `false` bei `--no-classify`
+    pub classify: bool,
+    pub notes: Mutex<Vec<String>>,
+}
+
+impl ContentLookup for CachedLookup<'_> {
+    fn content(
+        &self,
+        index: &mut Index,
+        files: &[&FileRow],
+    ) -> std::result::Result<HashMap<String, ContentRecord>, crate::index::IndexError> {
+        use crate::index::IndexError;
+        let root_key = paths::dir_key(self.root);
+        let cached = index.content_lookup(&root_key)?;
+        let fingerprint = self.classifier.fingerprint();
+        let mut records = HashMap::new();
+        let mut missing: Vec<&FileRow> = Vec::new();
+        for file in files {
+            if file.cloud_only || file.is_link {
+                continue;
+            }
+            match cached.get(&file.key) {
+                // Das LLM-Modell zählt hier nicht: ein vorhandenes Ergebnis genügt für den Plan.
+                Some(c)
+                    if cache_state(file.size, file.mtime, c, fingerprint, None)
+                        == CacheState::Valid =>
+                {
+                    records.insert(file.key.clone(), ContentRecord::from_cached(c));
+                }
+                _ => missing.push(file),
+            }
+        }
+        if missing.is_empty() || !self.classify {
+            if !missing.is_empty() {
+                self.notes.lock().unwrap_or_else(|e| e.into_inner()).push(format!(
+                    "Hinweis: {} Dateien sind nicht (aktuell) klassifiziert und bleiben ohne Inhaltsregeln (--no-classify).",
+                    missing.len()
+                ));
+            }
+            return Ok(records);
+        }
+        let _lock = ScanLock::acquire(
+            &paths::scan_lock_path().map_err(|e| IndexError::Other(e.to_string()))?,
+        )
+        .map_err(|e| IndexError::Other(e.to_string()))?;
+        eprintln!(
+            "Hinweis: {} Dateien werden zuerst klassifiziert (--no-classify schaltet das ab).",
+            missing.len()
+        );
+        let cancel = super::global_cancel_flag().map_err(|e| IndexError::Other(e.to_string()))?;
+        let job = ClassifyJob {
+            root: self.root,
+            config: self.config,
+            classifier: self.classifier,
+            force: false,
+            no_llm: false,
+        };
+        let run = classify_files(index, &job, &missing, &cancel)
+            .map_err(|e| IndexError::Other(format!("{e:#}")))?;
+        for w in &run.warnings {
+            eprintln!("Warnung: {w}");
+        }
+        if run.aborted {
+            return Err(IndexError::Other("Abgebrochen".into()));
+        }
+        records.extend(run.records);
+        Ok(records)
+    }
+}
+
+/// `TextSource` für `plan rules`: Textlayer und Office-Text werden live gelesen, OCR-Text kommt
+/// aus dem verschlüsselten Cache (bei Fehltreffer läuft OCR erneut). Nichts wird gespeichert.
+pub(super) struct LiveText<'a> {
+    pub config: &'a Config,
+}
+
+impl TextProvider for LiveText<'_> {
+    fn texts(
+        &self,
+        index: &Index,
+        items: &[(&FileRow, Option<&ContentRecord>)],
+    ) -> Vec<Option<String>> {
+        use rayon::prelude::*;
+        let cfg = &self.config.classify;
+        let opts = ExtractOpts {
+            max_file_size: cfg.max_file_size_bytes(),
+            max_text_chars: cfg.max_text_chars,
+            ..ExtractOpts::default()
+        };
+        let ocr_setup = OcrSetup::new(self.config);
+        // OCR-Text zuerst, sequentiell (braucht den Index)
+        let mut results: Vec<Option<String>> = vec![None; items.len()];
+        let mut live: Vec<usize> = Vec::new();
+        let mut ocr_misses: Vec<usize> = Vec::new();
+        for (i, (file, record)) in items.iter().enumerate() {
+            let is_ocr = record.is_some_and(|r| r.text_source == TextSource::Ocr);
+            if !is_ocr {
+                live.push(i);
+                continue;
+            }
+            let hit = index
+                .ocr_text_get(
+                    &file.key,
+                    file.size,
+                    file.mtime,
+                    OCR_VERSION,
+                    &ocr_setup.lang_key,
+                )
+                .ok()
+                .flatten()
+                .and_then(|h| dpapi::unprotect(&h.data).ok())
+                .and_then(|b| String::from_utf8(b).ok());
+            match hit {
+                Some(text) => results[i] = Some(text),
+                None => ocr_misses.push(i),
+            }
+        }
+        let extracted: Vec<(usize, Option<String>)> = live
+            .par_iter()
+            .map(|&i| {
+                let (file, _) = items[i];
+                let ext = Path::new(&file.name)
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
+                let out = crate::content::extract::extract(
+                    Path::new(&file.path),
+                    &ext,
+                    file.size as u64,
+                    &opts,
+                );
+                (i, out.text)
+            })
+            .collect();
+        for (i, text) in extracted {
+            results[i] = text;
+        }
+        if let Some(ocr) = ocr_setup.usable() {
+            for i in ocr_misses {
+                let (file, _) = items[i];
+                let ext = Path::new(&file.name)
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
+                let path = Path::new(&file.path);
+                let read = if ext == "pdf" {
+                    ocr.pdf(path, cfg.ocr_max_pages)
+                } else {
+                    ocr.image(path)
+                };
+                results[i] = read.ok().map(|t| t.text);
+            }
+        }
+        results
+            .into_iter()
+            .map(|t| {
+                t.map(|t| crate::content::classify::text::clean(&t, cfg.max_text_chars))
+                    .filter(|t| !t.is_empty())
+            })
+            .collect()
+    }
 }
 
 /// Zusammenfassung über alle Dateien der Auswahl.
@@ -497,7 +685,7 @@ fn grouped(n: usize) -> String {
     let digits = n.to_string();
     let mut out = String::new();
     for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push('.');
         }
         out.push(c);
@@ -702,7 +890,6 @@ pub(super) fn classify_command(args: &ClassifyArgs) -> Result<i32> {
         classifier: &classifier,
         force: args.force,
         no_llm: args.no_llm,
-        progress: Progress::Bar,
     };
     let run = classify_files(&mut index, &job, &files, &cancel)?;
     let summary =

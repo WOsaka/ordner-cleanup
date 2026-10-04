@@ -242,6 +242,14 @@ pub enum SkipReason {
     InvalidTarget,
     /// `rules`: Das Ziel wäre länger als 260 Zeichen.
     PathTooLong,
+    /// `rules`: Die Kategorie ist zu unsicher (Konfidenz unter der Schwelle der Regel).
+    LowConfidence,
+    /// `rules`: Die Datei ist (noch) nicht klassifiziert, z. B. mit `--no-classify`.
+    NotClassified,
+    /// `rules`: Ein Feld im Ziel fehlt und hat keinen Ersatzwert (`detail` nennt es).
+    MissingField,
+    /// `rules`: `min_dwell` ist noch nicht erreicht (Zeit seit Ankunft im Ordner).
+    TooRecentArrival,
 }
 
 impl fmt::Display for SkipReason {
@@ -267,6 +275,10 @@ impl fmt::Display for SkipReason {
             Self::DuplicateAtTarget => "am Ziel liegt bereits eine Datei mit identischem Inhalt",
             Self::InvalidTarget => "Ziel ungültig (Zeichen, reservierter Name oder leer)",
             Self::PathTooLong => "Ziel länger als 260 Zeichen",
+            Self::LowConfidence => "Kategorie zu unsicher (zum Prüfen)",
+            Self::NotClassified => "Inhalt noch nicht klassifiziert",
+            Self::MissingField => "Feld für das Ziel fehlt",
+            Self::TooRecentArrival => "zu kurz im Ordner (Wartezeit nicht erreicht)",
         })
     }
 }
