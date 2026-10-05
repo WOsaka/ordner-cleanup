@@ -381,3 +381,65 @@ fn plan_rules_mit_10000_jpegs_liest_beim_zweiten_lauf_aus_dem_cache() {
             && second.plan.actions[0].target == first.plan.actions[0].target
     );
 }
+
+/// `Plan::validate` bleibt bei vielen Aktionen schnell (Laden, Anwenden und Teilplan rufen es auf):
+/// 100.000 Datei-Verschiebungen und 1.000 Ordner-Verschiebungen ins Archiv.
+#[test]
+#[ignore = "Performance-Messung, siehe Modul-Dokumentation"]
+fn plan_validate_schafft_100000_aktionen_mit_1000_ordnern_in_unter_zwei_sekunden() {
+    use ordner_cleanup::change::plan::{ActionType, Plan, PlanKind, PlannedAction, PLAN_VERSION};
+
+    let root = r"Z:\Root";
+    let action = |id: u32, path: String, target: String, is_dir: bool| PlannedAction {
+        id,
+        action: ActionType::Move,
+        path,
+        size: 1,
+        mtime_ticks: 0,
+        mtime: String::new(),
+        hash: None,
+        keep: None,
+        keep_hash: None,
+        reason: "archive".into(),
+        target: Some(target),
+        is_dir,
+        files: is_dir.then_some(1),
+        rule: None,
+    };
+    let mut actions = Vec::new();
+    for d in 0..1_000u32 {
+        actions.push(action(
+            d + 1,
+            format!(r"{root}\ordner{d}"),
+            format!(r"{root}\_Archiv\ordner{d}"),
+            true,
+        ));
+    }
+    for f in 0..100_000u32 {
+        actions.push(action(
+            f + 1_001,
+            format!(r"{root}\lose\datei{f}.txt"),
+            format!(r"{root}\_Archiv\lose\datei{f}.txt"),
+            false,
+        ));
+    }
+    let plan = Plan {
+        version: PLAN_VERSION,
+        created: "t".into(),
+        kind: PlanKind::Archive,
+        root: root.into(),
+        keep_strategy: None,
+        params: Default::default(),
+        protected_paths: Vec::new(),
+        actions,
+        skipped: Vec::new(),
+    };
+    let start = Instant::now();
+    plan.validate().unwrap();
+    let elapsed = start.elapsed();
+    println!("validate: {elapsed:.2?}");
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "validate braucht {elapsed:?} (Grenze 2 s)"
+    );
+}

@@ -1,6 +1,6 @@
 //! Plan-Datei (JSON): Datenmodell, Laden mit Versionsprüfung und Validierung.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::Path;
 
@@ -269,6 +269,15 @@ impl Plan {
             }
             sources.insert(key);
         }
+        // Verschobene Ordner einmal vorab erfassen (Schlüssel → Aktions-IDs), damit die Prüfung
+        // je Ziel nur seine Vorfahren nachschlägt statt alle Aktionen zu durchlaufen.
+        let mut dir_moves: HashMap<String, Vec<u32>> = HashMap::new();
+        for o in self.actions.iter().filter(|o| o.is_dir) {
+            dir_moves
+                .entry(paths::path_key(Path::new(&o.path)))
+                .or_default()
+                .push(o.id);
+        }
         for a in &self.actions {
             if let Some(keep) = &a.keep {
                 if sources.contains(&paths::path_key(Path::new(keep))) {
@@ -287,13 +296,7 @@ impl Plan {
                         a.id
                     ));
                 }
-                let nested = self.actions.iter().any(|o| {
-                    o.is_dir && o.id != a.id && {
-                        let dir = paths::path_key(Path::new(&o.path));
-                        paths::is_under(&target_key, &dir)
-                    }
-                });
-                if nested {
+                if moved_with_dir(&dir_moves, a.id, &target_key) {
                     return invalid(format!(
                         "Aktion {}: Ziel {target} liegt in einem Ordner, der selbst verschoben wird",
                         a.id
@@ -404,6 +407,27 @@ impl Plan {
     }
 }
 
+/// `key` und seine Vorfahren (je Ebene bis vor das letzte `\`), von innen nach außen.
+fn ancestors_inclusive(key: &str) -> impl Iterator<Item = &str> {
+    let mut next = Some(key);
+    std::iter::from_fn(move || {
+        let current = next?;
+        next = current.rfind('\\').map(|i| &current[..i]);
+        Some(current)
+    })
+}
+
+/// Liegt `target_key` auf oder in einem Ordner, den eine andere Aktion als `id` verschiebt?
+/// Gleichwertig zu `paths::is_under(target_key, ordner)` für jeden Ordner der Aktionen, nur über
+/// die Vorfahren des Ziels statt über alle Aktionen.
+fn moved_with_dir(dir_moves: &HashMap<String, Vec<u32>>, id: u32, target_key: &str) -> bool {
+    ancestors_inclusive(target_key).any(|ancestor| {
+        dir_moves
+            .get(ancestor)
+            .is_some_and(|ids| ids.iter().any(|o| *o != id))
+    })
+}
+
 /// Aktionen, die scheitern bzw. übersprungen werden, wenn `id` aus dem Plan fehlt: `remove-dir`
 /// auf Vorfahren-Ordnern (der Ordner wäre nicht mehr leer) und das Verschieben ganzer
 /// Vorfahren-Ordner (sie nähmen die abgewählte Aktion mit).
@@ -477,6 +501,53 @@ mod tests {
     fn roundtrip_ist_verlustfrei() {
         let p = ok_plan();
         assert_eq!(Plan::from_json(&p.to_json()).unwrap(), p);
+    }
+
+    #[test]
+    fn verschobener_ordner_wird_wie_is_under_erkannt() {
+        // (id, Pfad) der verschobenen Ordner; `\a\b` kommt doppelt vor (zwei IDs).
+        let dirs: [(u32, &str); 5] = [
+            (1, r"D:\Daten\a"),
+            (2, r"D:\Daten\a\b"),
+            (3, r"D:\Daten\a\b"),
+            (4, r"D:\Daten\x y"),
+            (5, r"D:\Daten\Gross\Klein"),
+        ];
+        let targets = [
+            r"D:\Daten\a",
+            r"D:\Daten\a\datei.txt",
+            r"D:\Daten\a\b",
+            r"D:\Daten\a\b\c\d.txt",
+            r"D:\Daten\ab",
+            r"D:\Daten\ab\datei.txt",
+            r"D:\Daten\x y\z",
+            r"D:\Daten\x",
+            r"D:\Daten\gross\klein\f.txt",
+            r"D:\Daten\GROSS",
+            r"D:\Daten",
+            r"D:\",
+            r"E:\Daten\a\f.txt",
+        ];
+        let mut dir_moves: HashMap<String, Vec<u32>> = HashMap::new();
+        for (id, path) in dirs {
+            dir_moves
+                .entry(paths::path_key(Path::new(path)))
+                .or_default()
+                .push(id);
+        }
+        for target in targets {
+            let target_key = paths::path_key(Path::new(target));
+            for id in 0..=6 {
+                let reference = dirs.iter().any(|(o, path)| {
+                    *o != id && paths::is_under(&target_key, &paths::path_key(Path::new(path)))
+                });
+                assert_eq!(
+                    moved_with_dir(&dir_moves, id, &target_key),
+                    reference,
+                    "Ziel {target}, Aktion {id}"
+                );
+            }
+        }
     }
 
     #[test]
