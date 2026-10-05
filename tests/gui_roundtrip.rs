@@ -303,3 +303,80 @@ fn obergrenze_wird_von_apply_execute_selbst_geprueft() {
     assert_eq!(result.outcome.executed(), 2);
     std::env::remove_var("OneDrive");
 }
+
+#[test]
+fn mit_settings_gespeicherte_regel_wird_von_der_cli_genutzt() {
+    use ordner_cleanup::settings::fields::Value;
+    use ordner_cleanup::settings::validate::rules_text;
+    use ordner_cleanup::settings::{rules_doc, tables, EditableFile};
+
+    let env = Env::new();
+    env.write("Downloads/bericht.pdf", "pdf-inhalt", 5000);
+    env.write("Downloads/foto.jpg", "jpg-inhalt", 4000);
+    env.scan();
+
+    // Regel wie im Regel-Editor anlegen und mit der Validierung der CLI speichern
+    let rules_path = paths::config_dir().unwrap().join("rules.toml");
+    let mut file = EditableFile::load_or_empty(&rules_path).unwrap();
+    let i = tables::add(
+        file.doc_mut(),
+        rules_doc::KEY,
+        "pdfs",
+        &rules_doc::new_rule_defaults(),
+    );
+    tables::set_field(
+        file.doc_mut(),
+        rules_doc::KEY,
+        i,
+        "ext",
+        &Value::List(vec!["pdf".into()]),
+    );
+    tables::set_field(
+        file.doc_mut(),
+        rules_doc::KEY,
+        i,
+        "target",
+        &Value::Text("Dokumente/".into()),
+    );
+    let config = ordner_cleanup::config::Config::default();
+    file.save(&|t| rules_text(t, &config), false).unwrap();
+
+    // Die CLI plant mit dieser Datei
+    let plan_file = env.out.path().join("regeln.json");
+    env.bin()
+        .args(["plan", "rules"])
+        .arg(env.root())
+        .arg("--out")
+        .arg(&plan_file)
+        .assert()
+        .success();
+    let plan = Plan::load(&plan_file).unwrap();
+    assert_eq!(plan.actions.len(), 1);
+    assert_eq!(plan.actions[0].rule.as_deref(), Some("pdfs"));
+    assert!(plan.actions[0].path.ends_with("bericht.pdf"));
+
+    // Die Vorschau der GUI (Entwurf als Text, nicht gespeichert) liefert dasselbe
+    let preview = plan_preview_with_text(&env, &std::fs::read_to_string(&rules_path).unwrap());
+    assert_eq!(preview.plan.actions.len(), 1);
+    assert!(preview.saved.is_none());
+}
+
+fn plan_preview_with_text(env: &Env, text: &str) -> ordner_cleanup::ops::plan::PlanOutcome {
+    plan(
+        &PlanRequest {
+            target: TargetSpec::Path {
+                path: env.root().to_path_buf(),
+                force: false,
+            },
+            kind: PlanKindRequest::Rules {
+                rules_file: None,
+                rules_text: Some(text.to_string()),
+                only: vec![],
+                no_classify: true,
+            },
+            out: PlanOut::DontSave,
+        },
+        &OpCtx::default(),
+    )
+    .unwrap()
+}

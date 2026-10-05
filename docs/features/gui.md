@@ -103,6 +103,9 @@ Nach Stufe 1 bleiben die Einstellungen weiter per Editor pflegbar. Die GUI biete
 26. **Vorlagen:** eingebaute (PARA, Johnny.Decimal) ansehen, eigene Vorlagendateien anlegen und bearbeiten.
 27. **Klassifikation & LLM:** eigene Kategorien, Mindest-Konfidenz, OCR-Sprachen, LLM an/aus, Modell und Endpunkt (nur Loopback), Knopf „Verbindung testen“.
 
+## Stand der Umsetzung
+Stufe 1 und 2 sind im Code vorhanden (siehe Plan, Abschnitt „Umsetzungsstand“). Die Akzeptanzkriterien, die sich nur in einem echten Fenster oder auf anderer Hardware prüfen lassen (200.000 Dateien, Schließen während Apply, DPI, VM/RDP, offene Ports, Nutzertest), sind noch nicht abgehakt.
+
 ## Acceptance Criteria
 - [ ] Given ein frischer PC ohne Admin-Rechte, when der Nutzer `ordner-cleanup-gui.exe` startet, then öffnet sich das Fenster ohne Konsolenfenster und ohne Installation
 - [ ] Given ein Ordner mit 200.000 Dateien, when der Nutzer scannt, then bleibt die Oberfläche bedienbar (Fenster verschieben, Tabs wechseln), der Fortschritt aktualisiert sich mindestens einmal pro Sekunde, und „Abbrechen“ beendet den Scan innerhalb weniger Sekunden

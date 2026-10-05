@@ -353,4 +353,12 @@ pub struct ValidationError { pub message: String, pub line: Option<usize>, pub r
 - **Undo bekommt Abbruch**: Die Änderung in `undo.rs` ist klein, berührt aber sicherheitsrelevanten Code. Tests für Abbruch an jeder Position, das bestehende Fortsetzen über `PartiallyUndone` bleibt.
 - [x] Spike 0 (2026-10-05, lokal, ohne VM/RDP): `eframe`/`egui_extras` `=0.36.2` (ohne Default-Features, mit `accesskit`, `default_fonts`, `persistence`), `egui_plot` 0.37.0, `rfd` 0.17.2, `toml_edit` 0.25. `cargo tree -e normal` zeigt keinen gesperrten HTTP-/TLS-Stack, weder mit `wgpu` noch mit `glow`. Release-exe mit einer Tabelle über 100.000 Zeilen: `wgpu` 12,4 MB, `glow` 6,7 MB (beide unter 25 MB), beide starten lokal. Entscheidung: `wgpu` als Standard mit Rückfall auf `glow`, `rfd` für Dialoge. Offen bleiben VM/RDP, `egui_kittest` auf dem CI-Runner und das Ruckeln bei 100.000 Zeilen (manuell, Teil A).
 - [ ] Sollen Pläne aus geplanten Läufen (`plans\<profil>`) in der Übersicht aktiv als „neue Pläne zum Prüfen“ angezeigt werden? Vorschlag: ja, mit Zähler, ohne Benachrichtigung
-- [ ] Feature-Gate `gui` für die Bibliothek nur bei Bedarf (siehe Binary-Größe)
+- [x] Feature-Gate `gui` für die Bibliothek: nicht eingeführt. Die GUI-exe ist mit `wgpu` und `glow` zusammen 25,9 MB groß (Grenze „ca. 25 MB“), die CLI-exe wird durch LTO nicht vom GUI-Code belastet (siehe Umsetzungsstand).
+
+## Umsetzungsstand (2026-10-05)
+
+Alle Schritte 1 bis 19 sind im Code umgesetzt und mit Tests belegt; der Plan bleibt auf `approved`, bis die manuellen Prüfungen erledigt sind.
+
+- **Offen (nur von Hand prüfbar):** Teil A und B der manuellen Testliste (Scan mit 200.000 Dateien und Abbrechen, Fenster schließen während Scan und Apply, 500 Einträge in unter 5 Minuten, DPI 150/200 %, VM und RDP, `netstat`, Cloud-only-Datei, parallel laufender geplanter Lauf), der Nutzertest, Messung von 100.000 Zeilen im echten Fenster, `egui_kittest` auf dem CI-Runner (lokal ohne GPU grün).
+- **Abweichungen:** In der Übersicht fehlt die Zahl „Zum Prüfen“ (Berechnung wäre bei großen Wurzeln teuer; sie steht in der Analyse unter „Inhalte“). Die Benachrichtigung ist je Zeitplan nicht einzeln schaltbar, weil die Aufgabe immer `run --notify` startet; die Schwellen stehen in `[notify]`. Der Test „`schedule_add` mit Fake-`TaskService`“ entfällt als Integrationstest, die Logik deckt `src/schedule/tests.rs` ab. Die Review-Liste zeigt „Alter“ als gerundeten Text. Kategorien und Vorlagen sind wie geplant Roh-TOML mit Prüfung.
+- **Weitere Hilfen:** `ops::text` (gemeinsame Texte), `settings::fields::Loc` (Felder in Tabellen und in Listen), `platform::shell::edit` (Notepad).
