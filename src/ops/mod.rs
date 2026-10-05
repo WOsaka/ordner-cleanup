@@ -22,6 +22,8 @@ use crate::scan::lock::{LockError, ScanLock};
 use crate::scan::source::TICKS_PER_SEC;
 
 pub mod classify;
+pub mod scan;
+pub mod snapshot;
 pub mod target;
 
 /// Ab diesem Alter des letzten Scans weist `plan` auf einen möglicherweise veralteten Index hin.
@@ -46,6 +48,8 @@ pub enum Error {
 #[derive(Debug, Default)]
 pub struct TaskProgress {
     pub done: AtomicU64,
+    /// Nur beim Scan: gefundene Ordner (`done` zählt dort die Dateien)
+    pub dirs: AtomicU64,
     pub total: AtomicU64,
     pub bytes: AtomicU64,
     pub errors: AtomicU64,
@@ -76,6 +80,7 @@ impl TaskProgress {
 
     pub fn reset(&self, phase: &str, total: u64) {
         self.done.store(0, Ordering::Relaxed);
+        self.dirs.store(0, Ordering::Relaxed);
         self.total.store(total, Ordering::Relaxed);
         self.bytes.store(0, Ordering::Relaxed);
         self.errors.store(0, Ordering::Relaxed);
@@ -232,6 +237,21 @@ pub fn known_roots() -> Result<Vec<PathBuf>> {
         .filter(|r| seen.insert(paths::path_key(Path::new(r))))
         .map(PathBuf::from)
         .collect())
+}
+
+/// Ordner, in denen `installer` greift: die Config ersetzt den Known Folder.
+pub fn downloads_dirs(config: &Config) -> Vec<PathBuf> {
+    if config.downloads_dirs.is_empty() {
+        crate::platform::windows::downloads_dir()
+            .into_iter()
+            .collect()
+    } else {
+        config
+            .downloads_dirs
+            .iter()
+            .map(|d| normalize(Path::new(d)))
+            .collect()
+    }
 }
 
 pub fn load_config() -> Result<Config> {

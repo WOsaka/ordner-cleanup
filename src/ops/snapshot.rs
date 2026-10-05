@@ -5,8 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::plan::downloads_dirs;
-use super::{now_rfc3339, now_ticks};
+use super::{downloads_dirs, now_rfc3339, now_ticks};
 use crate::config::Config;
 use crate::health::{self, CollectEnv, Snapshot, METRICS_VERSION};
 use crate::history::{Comparable, History, SnapshotMeta, Stored};
@@ -22,7 +21,7 @@ const SERIES_LIMIT: usize = 52;
 
 /// Was eine Momentaufnahme dem Nutzer zu sagen hat.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Recorded {
+pub struct Recorded {
     pub snapshot: Snapshot,
     pub previous: Option<(Stored, Comparable)>,
 }
@@ -41,7 +40,7 @@ impl Recorded {
 
 /// Berechnet die Kennzahlen aus dem Index, schreibt sie in den Verlauf und liefert sie samt
 /// Vergleichslauf. Fehler im Verlauf brechen den Scan nicht ab; der Aufrufer meldet sie.
-pub(super) fn record(
+pub fn record(
     index: &Index,
     root: &Path,
     config: &Config,
@@ -86,7 +85,7 @@ pub(super) fn record(
 
 /// Ergänzt den Bericht um den Abschnitt „Verlauf“. Ohne Verlauf (Fehler, Unterordner) bleibt er
 /// leer bzw. nennt den Grund; der Bericht entsteht in jedem Fall.
-pub(super) fn attach_history(
+pub fn attach_history(
     model: &mut Report,
     index: &Index,
     root: &ReportRoot,

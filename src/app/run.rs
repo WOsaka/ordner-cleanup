@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use super::profile::{self, Target};
-use super::{build_report, now_rfc3339, plan, print_scan_result, resolve_root, run_scan, ScanJob};
+use super::{build_report, now_rfc3339, plan, print_scan_result, resolve_root};
 use crate::change::dedupe::KeepStrategy;
 use crate::change::plan::Plan;
 use crate::cli::{
@@ -15,6 +15,7 @@ use crate::cli::{
     PlanVersionsArgs, RunArgs,
 };
 use crate::notify::{self, OpenTarget};
+use crate::ops::scan::{run_scan, ScanJob};
 use crate::paths;
 use crate::platform::toast;
 use crate::runlog::{self, PlanRecord, RunRecord, RunStatus};
@@ -127,15 +128,18 @@ fn execute(name: &str, target: &Target, record: &mut RunRecord) -> Result<i32> {
             None
         }
     };
-    let mut res = run_scan(&ScanJob {
-        root: &root,
-        config: &target.config,
-        reset_index: false,
-        spinner: false,
-        profile: Some(name),
-        template: template.as_ref(),
-    })?;
-    let complete = print_scan_result(&res);
+    let ctx = crate::ops::OpCtx::new(super::global_cancel_flag()?);
+    let mut res = run_scan(
+        &ScanJob {
+            root: &root,
+            config: &target.config,
+            reset_index: false,
+            profile: Some(name),
+            template: template.as_ref(),
+        },
+        &ctx,
+    )?;
+    let complete = print_scan_result(&res.report(&root, Default::default()));
     if !complete {
         record.errors.push("Scan abgebrochen".into());
         return Ok(EXIT_FAILED);

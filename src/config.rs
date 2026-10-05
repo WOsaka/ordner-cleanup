@@ -574,10 +574,26 @@ impl Config {
 
     /// CLI-Flags haben Vorrang vor der Config; Listen werden ergänzt.
     pub fn apply_scan_args(&mut self, args: &ScanArgs) {
-        self.exclude.extend(args.exclude.iter().cloned());
-        self.summary_only.extend(args.summary_only.iter().cloned());
-        self.no_default_excludes |= args.no_default_excludes;
-        if let Some(threads) = args.threads {
+        self.apply_scan_options(
+            &args.exclude,
+            &args.summary_only,
+            args.no_default_excludes,
+            args.threads,
+        );
+    }
+
+    /// Wie [`Config::apply_scan_args`], aber ohne CLI-Typ (auch für die GUI).
+    pub fn apply_scan_options(
+        &mut self,
+        exclude: &[String],
+        summary_only: &[String],
+        no_default_excludes: bool,
+        threads: Option<usize>,
+    ) {
+        self.exclude.extend(exclude.iter().cloned());
+        self.summary_only.extend(summary_only.iter().cloned());
+        self.no_default_excludes |= no_default_excludes;
+        if let Some(threads) = threads {
             self.threads = threads;
         }
     }

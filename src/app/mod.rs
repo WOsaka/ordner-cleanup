@@ -2,7 +2,6 @@ use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use bytesize::ByteSize;
@@ -28,17 +27,14 @@ use crate::cli::{
 };
 use crate::config::Config;
 use crate::index::{Index, RootStatus};
+use crate::ops::scan::{scan, ScanReport, ScanRequest};
+use crate::ops::target::TargetSpec;
 use crate::ops::{
     find_run_root, index_age_note, known_roots, load_config, local_time, normalize, now_rfc3339,
-    now_ticks, onedrive_roots_from_env, onedrive_warning, resolve_root, status_label,
+    now_ticks, onedrive_roots_from_env, onedrive_warning, resolve_root, status_label, OpCtx,
 };
 use crate::paths::{self, index_path, registry_path};
 use crate::report::{self, Format, ReportParams};
-use crate::scan::classify::{Classifier, DefaultPaths};
-use crate::scan::lock::ScanLock;
-use crate::scan::source::StdDirSource;
-use crate::scan::walker::Progress;
-use crate::scan::{scan, ScanEnv, ScanOutcome};
 
 mod classify;
 mod history;
@@ -47,7 +43,6 @@ mod profile;
 mod progress;
 mod run;
 mod schedule;
-mod snapshot;
 
 /// Führt den Befehl aus und liefert den Exit-Code (0 OK, 2 OK mit Teilfehlern).
 pub fn run(cli: Cli) -> Result<i32> {
@@ -443,75 +438,8 @@ fn history_command(args: &HistoryArgs) -> Result<i32> {
     history::history_command(args, path.as_deref())
 }
 
-/// Was ein Scan liefert: das Ergebnis, der Index und, bei vollständigem Lauf, die Momentaufnahme.
-pub(super) struct ScanResult {
-    pub outcome: ScanOutcome,
-    pub index: Index,
-    pub index_file: PathBuf,
-    pub recorded: Option<Result<snapshot::Recorded>>,
-}
-
-pub(super) struct ScanJob<'a> {
-    pub root: &'a Path,
-    pub config: &'a Config,
-    pub reset_index: bool,
-    /// Fortschrittsanzeige im Terminal (aus für geplante Läufe)
-    pub spinner: bool,
-    pub profile: Option<&'a str>,
-    pub template: Option<&'a crate::template::Loaded>,
-}
-
-/// Scannt in den Index und schreibt danach bei vollständigem Lauf die Momentaufnahme. Die
-/// Scan-Sperre hält der Aufrufer.
-pub(super) fn run_scan(job: &ScanJob) -> Result<ScanResult> {
-    let default_paths = DefaultPaths::from_env();
-    let index_file = index_path()?;
-    if job.reset_index {
-        Index::reset(&index_file)?;
-    }
-    let mut index = Index::open(&index_file)?;
-
-    let cancel = global_cancel_flag()?;
-
-    let progress = Progress::default();
-    let env = ScanEnv {
-        source: &StdDirSource,
-        config: job.config,
-        default_paths: &default_paths,
-        cancel: &cancel,
-        progress: &progress,
-        find_duplicates: true,
-        now: &now_rfc3339(),
-    };
-    let finished = AtomicBool::new(false);
-    let outcome = std::thread::scope(|s| {
-        if job.spinner {
-            s.spawn(|| show_progress(&progress, &finished));
-        }
-        let result = scan(&mut index, job.root, &env);
-        finished.store(true, Ordering::Relaxed);
-        result
-    })?;
-    let recorded = (!outcome.aborted).then(|| {
-        snapshot::record(
-            &index,
-            job.root,
-            job.config,
-            job.template,
-            job.profile,
-            outcome.errors,
-        )
-    });
-    Ok(ScanResult {
-        outcome,
-        index,
-        index_file,
-        recorded,
-    })
-}
-
 /// Zusammenfassung eines Scans; `true`, wenn er vollständig war.
-fn print_scan_result(res: &ScanResult) -> bool {
+fn print_scan_result(res: &ScanReport) -> bool {
     let outcome = &res.outcome;
     println!(
         "{} Dateien, {} Ordner, {} ({} Fehler/Warnungen)",
@@ -525,73 +453,46 @@ fn print_scan_result(res: &ScanResult) -> bool {
         return false;
     }
     println!("Index: {}", paths::display(&res.index_file));
-    match &res.recorded {
-        Some(Ok(recorded)) => println!(
-            "{}",
-            report::history::score_line(recorded.score(), recorded.comparison().as_ref())
-        ),
-        Some(Err(e)) => eprintln!("Warnung: Verlauf nicht aktualisiert: {e:#}"),
-        None => {}
+    if let Some(line) = &res.score_line {
+        println!("{line}");
+    }
+    if let Some(e) = &res.history_warning {
+        eprintln!("Warnung: Verlauf nicht aktualisiert: {e}");
     }
     true
 }
 
 fn scan_command(args: &ScanArgs) -> Result<i32> {
-    let target = profile::target(args.path.as_deref(), args.profile.as_deref())?;
-    let root = resolve_root(&target.root, args.force || target.force())?;
-    let profile_name = target.profile_name().map(String::from);
-    let template = profile::load_template(args.template.as_deref(), &target)?;
-    let mut config = target.config;
-    config.apply_scan_args(args);
-    if !config.no_default_excludes {
-        if let Some(area) = Classifier::root_in_default_area(&root, &DefaultPaths::from_env()) {
-            eprintln!(
-                "Hinweis: {} liegt im Standard-Ausschlussbereich {}; der angegebene Pfad hat Vorrang.",
-                paths::display(&root),
-                paths::display(&area)
-            );
-        }
-    }
-
-    let _lock = ScanLock::acquire(&paths::scan_lock_path()?)?;
-    let res = run_scan(&ScanJob {
-        root: &root,
-        config: &config,
-        reset_index: args.reset_index,
-        spinner: true,
-        profile: profile_name.as_deref(),
-        template: template.as_ref(),
+    let target = match (&args.path, &args.profile) {
+        (_, Some(name)) => TargetSpec::Profile(name.clone()),
+        (Some(path), None) => TargetSpec::Path {
+            path: path.clone(),
+            force: args.force,
+        },
+        (None, None) => bail!("Pfad oder --profile angeben"),
+    };
+    let ctx = OpCtx::new(global_cancel_flag()?);
+    let res = progress::with_spinner(&ctx.progress, || {
+        scan(
+            &ScanRequest {
+                target,
+                exclude: args.exclude.clone(),
+                summary_only: args.summary_only.clone(),
+                no_default_excludes: args.no_default_excludes,
+                reset_index: args.reset_index,
+                threads: args.threads,
+                template: args.template.clone(),
+            },
+            &ctx,
+        )
     })?;
+    for hint in &res.notes.hints {
+        eprintln!("{hint}");
+    }
     if !print_scan_result(&res) {
         return Ok(1);
     }
     Ok(if res.outcome.errors > 0 { 2 } else { 0 })
-}
-
-fn show_progress(progress: &Progress, finished: &AtomicBool) {
-    let bar = ProgressBar::new_spinner();
-    bar.set_style(
-        ProgressStyle::with_template("{spinner} {msg}")
-            .unwrap_or_else(|_| ProgressStyle::default_spinner()),
-    );
-    while !finished.load(Ordering::Relaxed) {
-        let current = progress
-            .current
-            .lock()
-            .map(|c| c.clone())
-            .unwrap_or_default();
-        bar.set_message(format!(
-            "{} Dateien, {} Ordner, {}, {} Fehler – {}",
-            progress.files.load(Ordering::Relaxed),
-            progress.dirs.load(Ordering::Relaxed),
-            ByteSize::b(progress.bytes.load(Ordering::Relaxed)),
-            progress.errors.load(Ordering::Relaxed),
-            current
-        ));
-        bar.tick();
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    bar.finish_and_clear();
 }
 
 /// Baut das Berichtsmodell samt Abschnitt „Verlauf“ aus dem Index. `notes` landen im Verlauf.
@@ -617,7 +518,9 @@ pub(super) fn build_report(
         problem_ctx: ProblemCtx::from_env(&config.onedrive_conflict_hostnames),
     };
     let mut model = report::build(index, &root, &params)?;
-    if let Err(e) = snapshot::attach_history(&mut model, index, &root, config, template, notes) {
+    if let Err(e) =
+        crate::ops::snapshot::attach_history(&mut model, index, &root, config, template, notes)
+    {
         eprintln!("Warnung: Abschnitt Verlauf ausgelassen: {e:#}");
     }
     match report::content::build(index, &root.dir_key, config.classify.min_confidence as f32) {
