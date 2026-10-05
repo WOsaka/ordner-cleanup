@@ -21,9 +21,11 @@ use crate::scan::lock::{LockError, ScanLock};
 use crate::scan::source::TICKS_PER_SEC;
 
 pub mod admin;
+pub mod apply;
 pub mod classify;
 pub mod plan;
 pub mod report;
+pub mod runs;
 pub mod scan;
 pub mod snapshot;
 pub mod target;

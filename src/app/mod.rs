@@ -1,23 +1,13 @@
 use std::io::{BufRead, IsTerminal, Write};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use bytesize::ByteSize;
-use indicatif::{ProgressBar, ProgressStyle};
 
-use crate::analysis::age::parse_old_after;
-use crate::change::apply::{apply_plan, ActionResult, ActionStatus, ApplyEnv, ApplyOutcome};
-use crate::change::fsops::RealFs;
-use crate::change::limits;
+use crate::change::apply::{ActionResult, ActionStatus, ApplyOutcome};
 use crate::change::plan::Plan;
-use crate::change::protect::{ProtectPaths, Protector};
-use crate::change::registry::{self, RunRecord};
-use crate::change::undo::{
-    expired_runs, list_runs, purge_run, undo_run, RestoreStatus, RunStatus, RunSummary, UndoEnv,
-    UndoError,
-};
+use crate::change::undo::{RestoreStatus, RunStatus, RunSummary};
 use crate::change::{ActionCounts, RunId};
 use crate::cli::{
     ApplyArgs, Cli, Command, IndexCommand, PlanCommand, PurgeArgs, ReportArgs, RunsArgs, ScanArgs,
@@ -25,14 +15,15 @@ use crate::cli::{
 };
 use crate::index::RootStatus;
 use crate::ops::admin::{index_remove, index_roots};
+use crate::ops::apply::{apply_check, apply_execute};
 use crate::ops::report::{export_report, report_model, ReportRequest};
+use crate::ops::runs::{purge_candidates, purge_execute, runs, undo_check, undo_execute};
 use crate::ops::scan::{scan, ScanReport, ScanRequest};
 use crate::ops::target::TargetSpec;
 use crate::ops::{
-    find_run_root, known_roots, load_config, local_time, normalize, now_rfc3339,
-    onedrive_roots_from_env, onedrive_warning, resolve_root, status_label, OpCtx,
+    load_config, local_time, normalize, now_rfc3339, resolve_root, status_label, OpCtx,
 };
-use crate::paths::{self, registry_path};
+use crate::paths::{self};
 use crate::report::{self, Format};
 
 mod classify;
@@ -186,31 +177,25 @@ fn print_apply_summary(outcome: &ApplyOutcome) {
 
 fn apply_command(args: &ApplyArgs) -> Result<i32> {
     let plan = Plan::load(&args.plan)?;
-    let root = PathBuf::from(&plan.root);
-    if !root.is_dir() {
-        bail!("Wurzel {} des Plans existiert nicht", plan.root);
-    }
-    let config = load_config()?;
-    let protector = Protector::new(&root, &config, &ProtectPaths::from_env());
+    let check = apply_check(&plan)?;
 
     println!(
         "Plan vom {}: {} Aktionen, {}, Wurzel {}",
         plan.created,
-        plan.actions.len(),
-        ByteSize::b(plan.total_bytes()),
+        check.actions,
+        ByteSize::b(check.bytes),
         plan.root
     );
-    let onedrive_roots = onedrive_roots_from_env();
-    if let Some(warning) = onedrive_warning(&root, &onedrive_roots) {
+    for warning in &check.notes.warnings {
         eprintln!("{warning}");
     }
-    if let Some(message) = limits::exceeds(&plan, &onedrive_roots, &config) {
+    if let Some(message) = &check.limit {
         if !args.allow_large {
             bail!("{message}");
         }
         eprintln!("Hinweis: Obergrenze mit --allow-large aufgehoben.");
     }
-    if plan.actions.is_empty() {
+    if check.empty {
         println!("Der Plan enthält keine Aktionen.");
         return Ok(0);
     }
@@ -219,92 +204,42 @@ fn apply_command(args: &ApplyArgs) -> Result<i32> {
         return Ok(1);
     }
 
-    let cancel = install_cancel_flag()?;
-    let run = RunId::generate(chrono::Local::now());
-    let now = now_rfc3339();
-    let registered = registry_path().and_then(|file| {
-        registry::append(
-            &file,
-            &RunRecord {
-                run: run.clone(),
-                root: plan.root.clone(),
-                at: now.clone(),
-            },
-        )
-        .map_err(Into::into)
-    });
-    if let Err(e) = registered {
-        eprintln!("Hinweis: Lauf nicht im Register vermerkt ({e}); für undo --root angeben.");
-    }
-
-    let bar = ProgressBar::new(plan.actions.len() as u64);
-    bar.set_style(
-        ProgressStyle::with_template("{bar:30} {pos}/{len} {msg}")
-            .unwrap_or_else(|_| ProgressStyle::default_bar()),
-    );
     let plan_name = args
         .plan
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let outcome = apply_plan(
-        &plan,
-        &ApplyEnv {
-            fs: &RealFs,
-            protector: &protector,
-            cancel: &cancel,
-            progress: &|r| {
-                bar.set_message(r.path.clone());
-                bar.inc(1);
-            },
-            run,
-            plan_name: &plan_name,
-            now: &now,
-        },
-    );
-    bar.finish_and_clear();
-    let outcome = outcome?;
-    print_apply_summary(&outcome);
-    Ok(outcome.exit_code())
+    let ctx = OpCtx::new(install_cancel_flag()?);
+    let result = progress::with_bar(&ctx.progress, || {
+        apply_execute(&plan, &plan_name, args.allow_large, &ctx)
+    })?;
+    if let Some(warning) = &result.register_warning {
+        eprintln!("Hinweis: {warning}");
+    }
+    print_apply_summary(&result.outcome);
+    Ok(result.outcome.exit_code())
 }
 
 fn undo_command(args: &UndoArgs) -> Result<i32> {
-    let config = load_config()?;
-    let root = find_run_root(&args.run_id, args.root.as_deref())?;
-    let summary = list_runs(&root, config.quarantine_days)?
-        .into_iter()
-        .find(|s| s.run == args.run_id)
-        .ok_or_else(|| UndoError::NotFound(args.run_id.clone()))?;
-    match summary.status {
-        RunStatus::Undone => {
-            println!("Lauf {} wurde bereits zurückgedreht.", args.run_id);
-            return Ok(0);
-        }
-        RunStatus::Purged => {
-            println!(
-                "Lauf {}: Quarantäne wurde gelöscht, nicht mehr wiederherstellbar.",
-                args.run_id
-            );
-            return Ok(2);
-        }
-        _ => {}
+    let check = undo_check(&args.run_id, args.root.as_deref())?;
+    if check.already_undone() {
+        println!("Lauf {} wurde bereits zurückgedreht.", args.run_id);
+        return Ok(0);
     }
-    if !confirm(&undo_question(&args.run_id, &summary), args.yes)? {
+    if check.purged() {
+        println!(
+            "Lauf {}: Quarantäne wurde gelöscht, nicht mehr wiederherstellbar.",
+            args.run_id
+        );
+        return Ok(2);
+    }
+    if !confirm(&undo_question(&args.run_id, &check.summary), args.yes)? {
         println!("Abgebrochen. Es wurde nichts verändert.");
         return Ok(1);
     }
 
-    let now = now_rfc3339();
-    let cancel = install_cancel_flag()?;
-    let outcome = undo_run(
-        &root,
-        &args.run_id,
-        &UndoEnv {
-            fs: &RealFs,
-            now: &now,
-            cancel: &cancel,
-        },
-    )?;
+    let ctx = OpCtx::new(install_cancel_flag()?);
+    let outcome = undo_execute(&args.run_id, &check.root, &ctx)?;
     println!(
         "Lauf {}: {} wiederhergestellt, {} Kollisionen, {} nicht mehr vorhanden, {} Fehler",
         outcome.run,
@@ -331,18 +266,12 @@ fn undo_command(args: &UndoArgs) -> Result<i32> {
 }
 
 fn runs_command(args: &RunsArgs) -> Result<i32> {
-    let config = load_config()?;
-    let roots = match &args.path {
-        Some(path) => vec![normalize(path)],
-        None => known_roots()?,
-    };
-    let mut any = false;
-    for root in roots {
-        let runs = list_runs(&root, config.quarantine_days)?;
-        if runs.is_empty() {
-            continue;
-        }
-        any = true;
+    let listing = runs(args.path.as_deref())?;
+    if listing.is_empty() {
+        println!("Keine Läufe gefunden.");
+        return Ok(0);
+    }
+    for (root, runs) in listing {
         println!("Wurzel: {}", paths::display(&root));
         for r in runs {
             println!(
@@ -361,68 +290,47 @@ fn runs_command(args: &RunsArgs) -> Result<i32> {
             );
         }
     }
-    if !any {
-        println!("Keine Läufe gefunden.");
-    }
     Ok(0)
 }
 
 fn purge_command(args: &PurgeArgs) -> Result<i32> {
-    let config = load_config()?;
-    let days = match &args.older_than {
-        Some(text) => u32::try_from(parse_old_after(text).map_err(anyhow::Error::msg)?)
-            .context("Dauer ist zu groß")?,
-        None => config.quarantine_days,
-    };
-    let roots = match &args.root {
-        Some(path) => vec![normalize(path)],
-        None => known_roots()?,
-    };
-    let now = chrono::Utc::now();
-    let mut candidates = Vec::new();
-    for root in roots {
-        for run in expired_runs(&root, days, now)? {
-            candidates.push((root.clone(), run));
-        }
-    }
-    if candidates.is_empty() {
-        println!("Keine abgelaufenen Läufe (älter als {days} Tage).");
+    let check = purge_candidates(args.older_than.as_deref(), args.root.as_deref())?;
+    if check.candidates.is_empty() {
+        println!("Keine abgelaufenen Läufe (älter als {} Tage).", check.days);
         return Ok(0);
     }
-    let total: u64 = candidates.iter().map(|(_, r)| r.bytes).sum();
-    for (root, r) in &candidates {
+    for c in &check.candidates {
         println!(
             "  {}  {}  {}  ({})",
-            r.run,
-            ByteSize::b(r.bytes),
-            status_label(r.status),
-            paths::display(root)
+            c.run.run,
+            ByteSize::b(c.run.bytes),
+            status_label(c.run.status),
+            paths::display(&c.root)
         );
     }
     let question = format!(
         "{} Läufe ({}) endgültig löschen? Das lässt sich nicht rückgängig machen. [j/N] ",
-        candidates.len(),
-        ByteSize::b(total)
+        check.candidates.len(),
+        ByteSize::b(check.total_bytes())
     );
     if !confirm(&question, args.yes)? {
         println!("Abgebrochen. Es wurde nichts gelöscht.");
         return Ok(1);
     }
 
-    let stamp = now_rfc3339();
-    let cancel = install_cancel_flag()?;
-    let env = UndoEnv {
-        fs: &RealFs,
-        now: &stamp,
-        cancel: &cancel,
-    };
+    let ctx = OpCtx::new(install_cancel_flag()?);
     let mut failures = 0;
-    for (root, r) in &candidates {
-        match purge_run(root, &r.run, &env) {
-            Ok(()) => println!("Gelöscht: {} ({})", r.run, ByteSize::b(r.bytes)),
+    for (run, result) in purge_execute(&check.candidates, &ctx)? {
+        let bytes = check
+            .candidates
+            .iter()
+            .find(|c| c.run.run == run)
+            .map_or(0, |c| c.run.bytes);
+        match result {
+            Ok(()) => println!("Gelöscht: {run} ({})", ByteSize::b(bytes)),
             Err(e) => {
                 failures += 1;
-                eprintln!("Fehler bei {}: {e}", r.run);
+                eprintln!("Fehler bei {run}: {e}");
             }
         }
     }
