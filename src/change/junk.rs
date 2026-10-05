@@ -165,7 +165,7 @@ pub fn plan_junk(
     let installer_active = classifier.installer_active;
     if installer_active && classifier.downloads_empty {
         notes.push(format!(
-            "Kategorie installer: kein Downloads-Ordner unter {} gefunden              (Known Folder oder downloads_dirs); es werden keine Installer geplant.",
+            "Kategorie installer: kein Downloads-Ordner unter {} gefunden (Known Folder oder downloads_dirs); es werden keine Installer geplant.",
             paths::display(root)
         ));
     }
@@ -555,6 +555,7 @@ mod tests {
             assert!(result.plan.actions.is_empty());
             assert_eq!(result.notes.len(), 1, "{:?}", result.notes);
             assert!(result.notes[0].contains("installer"), "{:?}", result.notes);
+            assert!(!result.notes[0].contains("  "), "{:?}", result.notes);
         }
         let without = run_with(&index, &cats(&["temp"]), &[], &[], &protector());
         assert!(without.notes.is_empty());
