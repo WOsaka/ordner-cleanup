@@ -2,7 +2,7 @@ use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use bytesize::ByteSize;
@@ -28,12 +28,15 @@ use crate::cli::{
 };
 use crate::config::Config;
 use crate::index::{Index, RootStatus};
+use crate::ops::{
+    find_run_root, index_age_note, known_roots, load_config, local_time, normalize, now_rfc3339,
+    now_ticks, onedrive_roots_from_env, onedrive_warning, resolve_root, status_label,
+};
 use crate::paths::{self, index_path, registry_path};
-use crate::platform::windows::{drive_kind, DriveKind};
 use crate::report::{self, Format, ReportParams};
 use crate::scan::classify::{Classifier, DefaultPaths};
 use crate::scan::lock::ScanLock;
-use crate::scan::source::{StdDirSource, TICKS_PER_SEC};
+use crate::scan::source::StdDirSource;
 use crate::scan::walker::Progress;
 use crate::scan::{scan, ScanEnv, ScanOutcome};
 
@@ -76,43 +79,6 @@ pub fn run(cli: Cli) -> Result<i32> {
                 .collect(),
         ),
     }
-}
-
-/// Ab diesem Alter des letzten Scans weist `plan` auf einen möglicherweise veralteten Index hin.
-const STALE_SCAN_DAYS: i64 = 7;
-
-/// Hinweis, wenn die Wurzel unter einem OneDrive-Ordner liegt: Die Quarantäne läge dann im
-/// synchronisierten Bereich und erzeugt Sync-Traffic.
-fn onedrive_warning(root: &Path, onedrive_roots: &[PathBuf]) -> Option<String> {
-    limits::under_onedrive(root, onedrive_roots).then(|| {
-        "Warnung: Der Ordner liegt in OneDrive. Die Quarantäne (.ordner-cleanup) wird \
-             mitsynchronisiert und erzeugt Sync-Traffic; Dateien lassen sich später mit \
-             `purge` endgültig entsorgen."
-            .to_string()
-    })
-}
-
-fn onedrive_roots_from_env() -> Vec<PathBuf> {
-    ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"]
-        .iter()
-        .filter_map(|v| std::env::var_os(v).map(|p| normalize(Path::new(&p))))
-        .collect()
-}
-
-/// Hinweis zum Index-Zustand der Wurzel (kein Abbruch).
-fn index_age_note(root: &report::ReportRoot, now: chrono::DateTime<chrono::Utc>) -> Option<String> {
-    if root.status != RootStatus::Complete {
-        return Some(
-            "Hinweis: Der letzte Scan dieses Ordners war nicht vollständig; der Plan kann \
-             unvollständig sein. Bitte neu scannen."
-                .to_string(),
-        );
-    }
-    let scanned = chrono::DateTime::parse_from_rfc3339(root.scanned_at.as_deref()?).ok()?;
-    let age = now.signed_duration_since(scanned).num_days();
-    (age >= STALE_SCAN_DAYS).then(|| {
-        format!("Hinweis: Der letzte Scan ist {age} Tage alt. Bitte neu scannen, falls sich viel geändert hat.")
-    })
 }
 
 /// Fragt einmal j/N. Ohne `--yes` bricht eine nicht interaktive Sitzung hart ab, damit ein
@@ -307,39 +273,6 @@ fn apply_command(args: &ApplyArgs) -> Result<i32> {
     Ok(outcome.exit_code())
 }
 
-/// Wurzel eines Laufs: ausdrücklich angegeben oder aus dem Register.
-fn find_run_root(run: &RunId, explicit: Option<&Path>) -> Result<PathBuf> {
-    if let Some(path) = explicit {
-        return Ok(normalize(path));
-    }
-    match registry::find_root(&registry_path()?, run) {
-        Some(root) => Ok(PathBuf::from(root)),
-        None => bail!("Lauf {run} ist im Register unbekannt; Wurzel mit --root angeben"),
-    }
-}
-
-fn status_label(status: RunStatus) -> &'static str {
-    match status {
-        RunStatus::Complete => "vollständig",
-        RunStatus::Partial => "teilweise",
-        RunStatus::Incomplete => "unvollständig",
-        RunStatus::Undone => "zurückgedreht",
-        RunStatus::PartiallyUndone => "teilweise zurückgedreht",
-        RunStatus::Purged => "Quarantäne gelöscht",
-        RunStatus::Unreadable => "Journal unlesbar",
-    }
-}
-
-fn local_time(rfc3339: &str) -> String {
-    chrono::DateTime::parse_from_rfc3339(rfc3339)
-        .map(|t| {
-            t.with_timezone(&chrono::Local)
-                .format("%Y-%m-%d %H:%M")
-                .to_string()
-        })
-        .unwrap_or_else(|_| rfc3339.to_string())
-}
-
 fn undo_command(args: &UndoArgs) -> Result<i32> {
     let config = load_config()?;
     let root = find_run_root(&args.run_id, args.root.as_deref())?;
@@ -400,26 +333,6 @@ fn undo_command(args: &UndoArgs) -> Result<i32> {
         );
     }
     Ok(outcome.exit_code())
-}
-
-/// Alle Wurzeln mit möglichen Läufen: Register plus gescannte Wurzeln, ohne Duplikate.
-fn known_roots() -> Result<Vec<PathBuf>> {
-    let mut roots = registry::known_roots(&registry_path()?);
-    let index_file = index_path()?;
-    if index_file.exists() {
-        roots.extend(
-            Index::open(&index_file)?
-                .roots()?
-                .into_iter()
-                .map(|r| r.path),
-        );
-    }
-    let mut seen = std::collections::HashSet::new();
-    Ok(roots
-        .into_iter()
-        .filter(|r| seen.insert(paths::path_key(Path::new(r))))
-        .map(PathBuf::from)
-        .collect())
 }
 
 fn runs_command(args: &RunsArgs) -> Result<i32> {
@@ -519,50 +432,6 @@ fn purge_command(args: &PurgeArgs) -> Result<i32> {
         }
     }
     Ok(if failures > 0 { 2 } else { 0 })
-}
-
-fn load_config() -> Result<Config> {
-    match paths::config_dir() {
-        Some(dir) => Config::load(&dir.join("config.toml")),
-        None => Ok(Config::default()),
-    }
-}
-
-fn now_ticks() -> i64 {
-    let secs = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64);
-    secs * TICKS_PER_SEC
-}
-
-fn now_rfc3339() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-}
-
-/// Löst Kurznamen (8.3), Symlinks und relative Pfade auf, damit Scan, Report und
-/// `index remove` denselben Schlüssel verwenden. Nicht existierende Pfade bleiben unverändert.
-fn normalize(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path)
-        .map(|p| PathBuf::from(paths::display(&p)))
-        .unwrap_or_else(|_| path.to_path_buf())
-}
-
-/// Prüft die Wurzel und liefert den normalisierten Pfad.
-fn resolve_root(path: &Path, force: bool) -> Result<PathBuf> {
-    let meta = std::fs::metadata(paths::extended(path))
-        .with_context(|| format!("Pfad nicht lesbar: {}", paths::display(path)))?;
-    if !meta.is_dir() {
-        bail!("{} ist kein Ordner", paths::display(path));
-    }
-    let absolute = normalize(path);
-    if drive_kind(&absolute) != DriveKind::Local && !force {
-        bail!(
-            "{} liegt auf einem Netzlaufwerk bzw. UNC-Pfad. Das wird in Phase 1 nicht unterstützt; \
-             mit --force trotzdem scannen",
-            paths::display(&absolute)
-        );
-    }
-    Ok(absolute)
 }
 
 fn history_command(args: &HistoryArgs) -> Result<i32> {
@@ -829,59 +698,6 @@ fn index_command(cmd: &IndexCommand) -> Result<i32> {
                 bail!("{} ist nicht im Index", paths::display(&path))
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn root(status: RootStatus, scanned_at: Option<&str>) -> report::ReportRoot {
-        report::ReportRoot {
-            path: r"D:\Daten".into(),
-            dir_key: r"d:\daten\".into(),
-            scanned_at: scanned_at.map(String::from),
-            status,
-        }
-    }
-
-    fn at(text: &str) -> chrono::DateTime<chrono::Utc> {
-        chrono::DateTime::parse_from_rfc3339(text)
-            .unwrap()
-            .with_timezone(&chrono::Utc)
-    }
-
-    #[test]
-    fn onedrive_warnung_nur_unterhalb_der_onedrive_wurzel() {
-        let roots = [PathBuf::from(r"C:\Users\me\OneDrive")];
-        assert!(onedrive_warning(Path::new(r"C:\Users\me\onedrive\Doku"), &roots).is_some());
-        assert!(onedrive_warning(Path::new(r"C:\Users\me\OneDrive"), &roots).is_some());
-        assert!(onedrive_warning(Path::new(r"C:\Users\me\OneDrive2\x"), &roots).is_none());
-        assert!(onedrive_warning(Path::new(r"D:\Daten"), &roots).is_none());
-        assert!(onedrive_warning(Path::new(r"D:\Daten"), &[]).is_none());
-    }
-
-    #[test]
-    fn unvollstaendiger_scan_wird_gemeldet() {
-        let r = root(RootStatus::Aborted, Some("2026-10-03T10:00:00Z"));
-        assert!(index_age_note(&r, at("2026-10-03T12:00:00Z"))
-            .unwrap()
-            .contains("nicht vollständig"));
-    }
-
-    #[test]
-    fn alter_scan_wird_ab_sieben_tagen_gemeldet() {
-        let r = root(RootStatus::Complete, Some("2026-09-26T12:00:00Z"));
-        assert!(index_age_note(&r, at("2026-10-03T12:00:00Z")).is_some());
-        assert!(index_age_note(&r, at("2026-10-03T11:00:00Z")).is_none());
-    }
-
-    #[test]
-    fn frischer_oder_undatierter_scan_ist_still() {
-        let fresh = root(RootStatus::Complete, Some("2026-10-03T10:00:00Z"));
-        assert!(index_age_note(&fresh, at("2026-10-03T12:00:00Z")).is_none());
-        let undated = root(RootStatus::Complete, None);
-        assert!(index_age_note(&undated, at("2026-10-03T12:00:00Z")).is_none());
     }
 }
 

@@ -8,6 +8,7 @@ pub mod health;
 pub mod history;
 pub mod index;
 pub mod notify;
+pub mod ops;
 pub mod paths;
 pub mod platform;
 pub mod report;
