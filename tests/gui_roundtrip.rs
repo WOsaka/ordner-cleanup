@@ -127,7 +127,7 @@ fn gui_teilplan_laesst_sich_per_cli_anwenden_und_zurueckdrehen() {
         .plan
         .actions
         .iter()
-        .find(|a| Path::new(&a.path) == b)
+        .find(|a| Path::new(&a.path).file_name() == b.file_name())
         .unwrap()
         .id;
     let keep_ids: HashSet<u32> = [wanted].into();
