@@ -308,7 +308,10 @@ mod tests {
             Some("Hinweis: Scan ist 9 Tage alt"),
             None,
         );
-        assert!(text.contains("3 Dateien in die Quarantäne verschieben"), "{text}");
+        assert!(
+            text.contains("3 Dateien in die Quarantäne verschieben"),
+            "{text}"
+        );
         assert!(
             text.contains("2.0 KiB") && text.contains("Quarantäne"),
             "{text}"
