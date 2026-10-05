@@ -17,11 +17,11 @@ use crate::config::Config;
 use crate::index::{Index, RootStatus};
 use crate::paths::{self, index_path, registry_path};
 use crate::platform::windows::{drive_kind, DriveKind};
-use crate::report;
 use crate::scan::lock::{LockError, ScanLock};
 use crate::scan::source::TICKS_PER_SEC;
 
 pub mod classify;
+pub mod report;
 pub mod scan;
 pub mod snapshot;
 pub mod target;
@@ -169,7 +169,7 @@ pub fn onedrive_roots_from_env() -> Vec<PathBuf> {
 
 /// Hinweis zum Index-Zustand der Wurzel (kein Abbruch).
 pub fn index_age_note(
-    root: &report::ReportRoot,
+    root: &crate::report::ReportRoot,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<String> {
     if root.status != RootStatus::Complete {
@@ -302,8 +302,8 @@ pub fn resolve_root(path: &Path, force: bool) -> Result<PathBuf> {
 mod tests {
     use super::*;
 
-    fn root(status: RootStatus, scanned_at: Option<&str>) -> report::ReportRoot {
-        report::ReportRoot {
+    fn root(status: RootStatus, scanned_at: Option<&str>) -> crate::report::ReportRoot {
+        crate::report::ReportRoot {
             path: r"D:\Daten".into(),
             dir_key: r"d:\daten\".into(),
             scanned_at: scanned_at.map(String::from),

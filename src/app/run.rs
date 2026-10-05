@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use super::profile::{self, Target};
-use super::{build_report, now_rfc3339, plan, print_scan_result, resolve_root};
+use super::{now_rfc3339, plan, print_scan_result, resolve_root};
 use crate::change::dedupe::KeepStrategy;
 use crate::change::plan::Plan;
 use crate::cli::{
@@ -15,6 +15,7 @@ use crate::cli::{
     PlanVersionsArgs, RunArgs,
 };
 use crate::notify::{self, OpenTarget};
+use crate::ops::report::{build_report, missed_runs_notes};
 use crate::ops::scan::{run_scan, ScanJob};
 use crate::paths;
 use crate::platform::toast;
@@ -25,15 +26,6 @@ use crate::scan::lock::{LockError, ScanLock};
 const EXIT_PARTIAL: i32 = 2;
 const EXIT_FAILED: i32 = 1;
 const EXIT_SKIPPED: i32 = 3;
-
-/// Hinweise auf ausgefallene Läufe für den nächsten Bericht eines Profils.
-pub(super) fn missed_runs_notes(profile: &str) -> Vec<String> {
-    paths::runs_log(profile)
-        .ok()
-        .and_then(|log| runlog::missed_runs_note(&runlog::read_all(&log)))
-        .into_iter()
-        .collect()
-}
 
 pub(super) fn run_command(args: &RunArgs) -> Result<i32> {
     let name = args.profile.as_str();
@@ -220,7 +212,10 @@ fn write_report(
     stamp: &str,
 ) -> Result<PathBuf> {
     let notes = missed_runs_notes(name);
-    let (model, _) = build_report(index, &target.config, Some(root), template, notes)?;
+    let (model, _, warnings) = build_report(index, &target.config, Some(root), template, notes)?;
+    for warning in &warnings.warnings {
+        eprintln!("{warning}");
+    }
     let dir = paths::reports_dir(name)?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Berichtsordner {} nicht anlegbar", paths::display(&dir)))?;

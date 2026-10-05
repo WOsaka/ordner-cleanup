@@ -1,5 +1,5 @@
 use std::io::{BufRead, IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -8,8 +8,6 @@ use bytesize::ByteSize;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::analysis::age::parse_old_after;
-use crate::analysis::problems::ProblemCtx;
-use crate::analysis::structure::Thresholds;
 use crate::change::apply::{apply_plan, ActionResult, ActionStatus, ApplyEnv, ApplyOutcome};
 use crate::change::fsops::RealFs;
 use crate::change::limits;
@@ -25,8 +23,8 @@ use crate::cli::{
     ApplyArgs, Cli, Command, HistoryArgs, IndexCommand, PlanCommand, PurgeArgs, ReportArgs,
     RunsArgs, ScanArgs, UndoArgs,
 };
-use crate::config::Config;
 use crate::index::{Index, RootStatus};
+use crate::ops::report::{export_report, report_model, ReportRequest};
 use crate::ops::scan::{scan, ScanReport, ScanRequest};
 use crate::ops::target::TargetSpec;
 use crate::ops::{
@@ -34,7 +32,7 @@ use crate::ops::{
     now_ticks, onedrive_roots_from_env, onedrive_warning, resolve_root, status_label, OpCtx,
 };
 use crate::paths::{self, index_path, registry_path};
-use crate::report::{self, Format, ReportParams};
+use crate::report::{self, Format};
 
 mod classify;
 mod history;
@@ -495,79 +493,30 @@ fn scan_command(args: &ScanArgs) -> Result<i32> {
     Ok(if res.outcome.errors > 0 { 2 } else { 0 })
 }
 
-/// Baut das Berichtsmodell samt Abschnitt „Verlauf“ aus dem Index. `notes` landen im Verlauf.
-pub(super) fn build_report(
-    index: &Index,
-    config: &Config,
-    requested: Option<&Path>,
-    template: Option<&crate::template::Loaded>,
-    notes: Vec<String>,
-) -> Result<(report::Report, report::ReportRoot)> {
-    let old_after_days = parse_old_after(&config.old_after).map_err(anyhow::Error::msg)?;
-    let requested = requested.map(normalize);
-    let root = report::select_root(index, requested.as_deref())?;
-    let params = ReportParams {
-        generated_at: now_rfc3339(),
-        now_ticks: now_ticks(),
-        top: config.top,
-        old_after_days,
-        thresholds: Thresholds {
-            max_depth: config.max_depth_warning,
-            huge_entries: config.huge_dir_entries,
-        },
-        problem_ctx: ProblemCtx::from_env(&config.onedrive_conflict_hostnames),
-    };
-    let mut model = report::build(index, &root, &params)?;
-    if let Err(e) =
-        crate::ops::snapshot::attach_history(&mut model, index, &root, config, template, notes)
-    {
-        eprintln!("Warnung: Abschnitt Verlauf ausgelassen: {e:#}");
-    }
-    match report::content::build(index, &root.dir_key, config.classify.min_confidence as f32) {
-        Ok(section) => model.content = Some(section),
-        Err(e) => eprintln!("Warnung: Abschnitt Inhalte ausgelassen: {e:#}"),
-    }
-    Ok((model, root))
-}
-
 fn report_command(args: &ReportArgs) -> Result<i32> {
-    let (mut config, requested, notes, template) = match &args.profile {
-        Some(name) => {
-            let target = profile::target(None, Some(name))?;
-            let notes = run::missed_runs_notes(name);
-            let template = profile::load_template(args.template.as_deref(), &target)?;
-            (target.config, Some(target.root), notes, template)
-        }
-        None => {
-            let template = match args.template.as_deref() {
-                Some(spec) => Some(crate::template::resolve(spec, None)?),
-                None => None,
-            };
-            (load_config()?, args.path.clone(), Vec::new(), template)
-        }
-    };
-    config.apply_report_args(args);
     let formats = Format::parse_list(&args.format)?;
-
-    let index = Index::open(&index_path()?)?;
-    let (model, root) = build_report(
-        &index,
-        &config,
-        requested.as_deref(),
-        template.as_ref(),
-        notes,
+    let ctx = OpCtx::new(global_cancel_flag()?);
+    let view = report_model(
+        &ReportRequest {
+            path: args.path.clone(),
+            profile: args.profile.clone(),
+            template: args.template.clone(),
+            old_after: args.old_after.clone(),
+            top: args.top,
+        },
+        &ctx,
     )?;
+    for warning in &view.notes.warnings {
+        eprintln!("{warning}");
+    }
+    let written = export_report(&view, &formats, args.out.as_deref())?;
 
-    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
-    let dir = report::prepare_out_dir(args.out.as_deref(), &timestamp)?;
-    let written = report::write_all(&model, &formats, &dir)?;
-
-    print!("{}", report::terminal::render(&model));
+    print!("{}", report::terminal::render(&view.model));
     println!();
     for file in &written {
         println!("Geschrieben: {}", paths::display(file));
     }
-    Ok(if root.status == RootStatus::Complete {
+    Ok(if view.root.status == RootStatus::Complete {
         0
     } else {
         2
