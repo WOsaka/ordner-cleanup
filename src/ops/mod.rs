@@ -20,6 +20,7 @@ use crate::platform::windows::{drive_kind, DriveKind};
 use crate::scan::lock::{LockError, ScanLock};
 use crate::scan::source::TICKS_PER_SEC;
 
+pub mod admin;
 pub mod classify;
 pub mod report;
 pub mod scan;

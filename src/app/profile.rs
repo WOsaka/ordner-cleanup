@@ -1,47 +1,32 @@
 //! Profile: Wurzel und Config-Abweichungen aus der `config.toml` statt Pfad und Optionen.
 
 use std::fmt::Write;
-use std::path::Path;
 
 use anyhow::Result;
 
-use crate::config::Config;
-use crate::history::History;
-use crate::ops::{load_config, local_time, normalize};
-use crate::paths;
+use crate::ops::admin::ProfileInfo;
+use crate::ops::local_time;
 
 pub(super) use crate::ops::target::{load_template, target, Target};
 
 /// `profiles`: alle Profile mit Wurzel, letztem Verlaufseintrag und Score.
 pub(super) fn profiles_command() -> Result<i32> {
-    let config = load_config()?;
-    if config.profiles.is_empty() {
+    let infos = crate::ops::admin::profiles()?;
+    if infos.is_empty() {
         println!(
             "Keine Profile. Lege sie als [profiles.<name>] mit `root = '…'` in der config.toml an."
         );
         return Ok(0);
     }
-    let history = paths::history_path()
-        .ok()
-        .filter(|p| p.exists())
-        .and_then(|p| History::open(&p).ok());
-    let last_run = |name: &str| {
-        paths::runs_log(name)
-            .ok()
-            .and_then(|log| crate::runlog::read_all(&log).pop())
-    };
-    print!("{}", render(&config, history.as_ref(), &last_run));
+    print!("{}", render(&infos));
     Ok(0)
 }
 
-fn render(
-    config: &Config,
-    history: Option<&History>,
-    last_run: &dyn Fn(&str) -> Option<crate::runlog::RunRecord>,
-) -> String {
+fn render(infos: &[ProfileInfo]) -> String {
     let mut s = String::new();
-    for (name, p) in &config.profiles {
-        let _ = writeln!(s, "{name}");
+    for info in infos {
+        let p = &info.profile;
+        let _ = writeln!(s, "{}", info.name);
         let _ = writeln!(s, "  Wurzel:   {}", p.root);
         let plans = if p.plans.is_empty() {
             "keine".to_string()
@@ -52,7 +37,7 @@ fn render(
         if let Some(t) = &p.template {
             let _ = writeln!(s, "  Vorlage:  {t}");
         }
-        match last_run(name) {
+        match &info.last_run {
             Some(r) => {
                 let _ = writeln!(
                     s,
@@ -65,11 +50,7 @@ fn render(
                 let _ = writeln!(s, "  Letzter Lauf:  noch keiner");
             }
         }
-        let key = paths::dir_key(&normalize(Path::new(&p.root)));
-        let last = history
-            .and_then(|h| h.series(&key, "", 1).ok())
-            .and_then(|mut v| v.pop());
-        match last {
+        match &info.last_point {
             Some(point) => {
                 let _ = writeln!(
                     s,
@@ -89,6 +70,7 @@ fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
 
     const CONFIG: &str = r#"
 [profiles.downloads]
@@ -103,7 +85,17 @@ plans = ["rules", "junk"]
 
     #[test]
     fn liste_zeigt_wurzel_plaene_und_fehlenden_verlauf() {
-        let text = render(&cfg(CONFIG), None, &|_| None);
+        let infos: Vec<ProfileInfo> = cfg(CONFIG)
+            .profiles
+            .iter()
+            .map(|(name, profile)| ProfileInfo {
+                name: name.clone(),
+                profile: profile.clone(),
+                last_run: None,
+                last_point: None,
+            })
+            .collect();
+        let text = render(&infos);
         assert!(text.starts_with("downloads\n"), "{text}");
         assert!(text.contains(r"C:\Users\x\Downloads") && text.contains("rules, junk"));
         assert!(text.contains("noch kein Verlauf"));

@@ -20,10 +20,11 @@ use crate::change::undo::{
 };
 use crate::change::{ActionCounts, RunId};
 use crate::cli::{
-    ApplyArgs, Cli, Command, HistoryArgs, IndexCommand, PlanCommand, PurgeArgs, ReportArgs,
-    RunsArgs, ScanArgs, UndoArgs,
+    ApplyArgs, Cli, Command, IndexCommand, PlanCommand, PurgeArgs, ReportArgs, RunsArgs, ScanArgs,
+    UndoArgs,
 };
-use crate::index::{Index, RootStatus};
+use crate::index::RootStatus;
+use crate::ops::admin::{index_remove, index_roots};
 use crate::ops::report::{export_report, report_model, ReportRequest};
 use crate::ops::scan::{scan, ScanReport, ScanRequest};
 use crate::ops::target::TargetSpec;
@@ -48,7 +49,7 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Scan(args) => scan_command(&args),
         Command::Classify(args) => classify::classify_command(&args),
         Command::Report(args) => report_command(&args),
-        Command::History(args) => history_command(&args),
+        Command::History(args) => history::history_command(&args),
         Command::Profiles => profile::profiles_command(),
         Command::Run(args) => run::run_command(&args),
         Command::Schedule(cmd) => schedule::schedule_command(&cmd),
@@ -428,15 +429,6 @@ fn purge_command(args: &PurgeArgs) -> Result<i32> {
     Ok(if failures > 0 { 2 } else { 0 })
 }
 
-fn history_command(args: &HistoryArgs) -> Result<i32> {
-    let path = match &args.profile {
-        Some(name) => Some(profile::target(None, Some(name))?.root),
-        None => args.path.clone(),
-    };
-    history::history_command(args, path.as_deref())
-}
-
-/// Zusammenfassung eines Scans; `true`, wenn er vollständig war.
 fn print_scan_result(res: &ScanReport) -> bool {
     let outcome = &res.outcome;
     println!(
@@ -524,10 +516,9 @@ fn report_command(args: &ReportArgs) -> Result<i32> {
 }
 
 fn index_command(cmd: &IndexCommand) -> Result<i32> {
-    let mut index = Index::open(&index_path()?)?;
     match cmd {
         IndexCommand::List => {
-            let roots = index.roots()?;
+            let roots = index_roots()?;
             if roots.is_empty() {
                 println!("Keine gescannten Wurzeln im Index.");
             }
@@ -544,7 +535,7 @@ fn index_command(cmd: &IndexCommand) -> Result<i32> {
         }
         IndexCommand::Remove { path } => {
             let path = normalize(path);
-            if index.remove_root(&paths::dir_key(&path))? {
+            if index_remove(&path)? {
                 println!("Entfernt: {}", paths::display(&path));
                 Ok(0)
             } else {
