@@ -133,13 +133,22 @@ fn gui_teilplan_laesst_sich_per_cli_anwenden_und_zurueckdrehen() {
     let keep_ids: HashSet<u32> = [wanted].into();
     let subset_file = save_subset(&file, &outcome.plan, &keep_ids, &Default::default()).unwrap();
 
-    assert_eq!(std::fs::read(&file).unwrap(), original_bytes, "Original bleibt bytegleich");
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        original_bytes,
+        "Original bleibt bytegleich"
+    );
     let subset = Plan::load(&subset_file).unwrap();
     assert_eq!(subset.actions.len(), 1);
     assert_eq!(subset.params["auswahl"], "1/2");
 
     // Die CLI wendet den Teilplan an: nur die gewählte Kopie verschwindet
-    env.bin().arg("apply").arg(&subset_file).arg("--yes").assert().success();
+    env.bin()
+        .arg("apply")
+        .arg(&subset_file)
+        .arg("--yes")
+        .assert()
+        .success();
     assert!(!b.exists() && c.exists() && keep.exists());
 
     // ... und dreht den Lauf zurück
@@ -179,7 +188,9 @@ fn cli_plan_laesst_sich_ueber_ops_anwenden_und_zurueckdrehen() {
 
     // Der Lauf steht im Register und in `runs`
     let listing = runs(None).unwrap();
-    assert!(listing.iter().any(|(_, r)| r.iter().any(|s| s.run == result.outcome.run)));
+    assert!(listing
+        .iter()
+        .any(|(_, r)| r.iter().any(|s| s.run == result.outcome.run)));
 
     // Undo über die CLI wie bei einem reinen CLI-Lauf
     env.bin()
@@ -202,7 +213,12 @@ fn undo_ueber_ops_funktioniert_fuer_einen_cli_lauf() {
         .arg(&plan_file)
         .assert()
         .success();
-    env.bin().arg("apply").arg(&plan_file).arg("--yes").assert().success();
+    env.bin()
+        .arg("apply")
+        .arg(&plan_file)
+        .arg("--yes")
+        .assert()
+        .success();
     assert!(!b.exists() && !c.exists());
 
     let run = runs(Some(env.root())).unwrap()[0].1[0].run.clone();

@@ -17,7 +17,10 @@ fn files() -> Vec<(&'static str, Option<PathBuf>)> {
     let dir = paths::config_dir();
     let at = |name: &str| dir.as_ref().map(|d| d.join(name));
     vec![
-        ("Konfiguration (Profile, Schutz, Defaults)", at("config.toml")),
+        (
+            "Konfiguration (Profile, Schutz, Defaults)",
+            at("config.toml"),
+        ),
         ("Regeln für „Nach Regeln“", at("rules.toml")),
         ("Eigene Kategorien", at("categories.toml")),
     ]
@@ -32,7 +35,11 @@ impl SettingsView {
             let Some(path) = path else { continue };
             ui.horizontal(|ui| {
                 ui.label(label);
-                ui.label(egui::RichText::new(paths::display(&path)).monospace().weak());
+                ui.label(
+                    egui::RichText::new(paths::display(&path))
+                        .monospace()
+                        .weak(),
+                );
                 if ui.button("Im Editor öffnen").clicked() {
                     if let Err(e) = crate::platform::shell::edit(&path) {
                         shell.message("Einstellungen", &format!("{e:#}"));
