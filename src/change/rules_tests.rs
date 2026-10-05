@@ -1459,6 +1459,21 @@ fn text_regex_liest_nur_dateien_die_alle_anderen_bedingungen_erfuellen() {
 }
 
 #[test]
+fn text_regex_trifft_auch_nach_select_auf_eine_spaetere_regel() {
+    let text = "[[rules]]\nname = \"bilder\"\next = [\"jpg\"]\ntarget = \"Bilder/\"\n\n[[rules]]\nname = \"telekom\"\next = [\"pdf\"]\ntext_regex = 'Telekom'\ntarget = \"Telekom/\"\n";
+    let content = r"Z:\Root\rechnung.pdf";
+    let run_with = |rules: &RuleSet| {
+        let mut index = seed(&[file(content)], &[]);
+        let fake = FakeText::default().with(content, "Rechnung der Telekom");
+        run_content(&mut index, rules, &FakeLookup::default(), &fake)
+    };
+    let all = run_with(&parse(text));
+    let only = run_with(&parse(text).select(&["telekom".to_string()]).unwrap());
+    assert_eq!(moves(&all), [mv("rechnung.pdf", r"Telekom\rechnung.pdf")]);
+    assert_eq!(moves(&only), moves(&all));
+}
+
+#[test]
 fn text_regex_ohne_lesbaren_text_trifft_nie() {
     let rules =
         parse("[[rules]]\nname = \"t\"\next = [\"pdf\"]\ntext_regex = 'x'\ntarget = \"T/\"\n");
