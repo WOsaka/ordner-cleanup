@@ -128,6 +128,10 @@ pub fn parse_document(text: &str) -> Result<DocumentMut, ValidationError> {
     })
 }
 
+/// Tabellenlisten, die die Formulare bearbeiten (`[[rules]]` in der Regeldatei, `[[junk_rules]]` in
+/// der Config).
+const TABLE_LISTS: [&str; 2] = ["rules", "junk_rules"];
+
 /// Eine TOML-Datei im Editor: Dokument mit Kommentaren, Fingerabdruck zum Zeitpunkt des Ladens.
 pub struct EditableFile {
     pub path: PathBuf,
@@ -149,11 +153,21 @@ impl EditableFile {
                 )))
             }
         };
-        Ok(Self {
+        let mut file = Self {
             path: path.to_path_buf(),
             doc: parse_document(&text)?,
             fingerprint: fingerprint_of(path),
-        })
+        };
+        file.normalize_lists();
+        Ok(file)
+    }
+
+    /// Wandelt Tabellenlisten in Inline-Schreibweise in `[[…]]`-Blöcke um, damit die Formulare sie
+    /// anzeigen und bearbeiten können. Inhaltlich ändert sich nichts.
+    pub fn normalize_lists(&mut self) {
+        for key in TABLE_LISTS {
+            tables::normalize(&mut self.doc, key);
+        }
     }
 
     pub fn doc(&self) -> &DocumentMut {
@@ -312,6 +326,42 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "top = 7\n");
         file.save(&ok, true).unwrap();
         assert!(std::fs::read_to_string(&path).unwrap().contains("top = 99"));
+    }
+
+    #[test]
+    fn laden_wandelt_inline_listen_in_tabellenbloecke_um() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rules.toml");
+        std::fs::write(
+            &path,
+            "rules = [ { name = \"A\", target = \"x/\" } ]
+junk_rules = [ { name = \"J\" } ]
+",
+        )
+        .unwrap();
+        let file = EditableFile::load_or_empty(&path).unwrap();
+        assert_eq!(tables::names(file.doc(), "rules"), ["A"]);
+        assert_eq!(tables::names(file.doc(), "junk_rules"), ["J"]);
+        assert!(file.text().contains("[[rules]]"), "{}", file.text());
+    }
+
+    #[test]
+    fn normalisieren_nach_set_text_ist_ausdruecklich_und_set_text_selbst_aendert_nichts() {
+        let mut file = EditableFile::load_or_empty(Path::new(
+            r"Z:\gibt\es
+icht.toml",
+        ))
+        .unwrap();
+        let inline = "rules = [ { name = \"A\" } ]
+";
+        file.set_text(inline).unwrap();
+        assert_eq!(
+            file.text(),
+            inline,
+            "Roh-Text bleibt, wie der Nutzer ihn schrieb"
+        );
+        file.normalize_lists();
+        assert_eq!(tables::names(file.doc(), "rules"), ["A"]);
     }
 
     #[test]

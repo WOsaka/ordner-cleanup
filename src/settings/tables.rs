@@ -27,8 +27,12 @@ fn array_mut<'a>(doc: &'a mut DocumentMut, key: &str) -> Option<&'a mut ArrayOfT
                 return None;
             }
         };
+        // Der Schlüssel trug das Leerzeichen vor dem `=`; im Tabellenkopf wäre es `[[key ]]`.
+        if let Some(mut k) = doc.as_table_mut().key_mut(key) {
+            k.leaf_decor_mut().clear();
+        }
     }
-    item.as_array_of_tables_mut()
+    doc.get_mut(key)?.as_array_of_tables_mut()
 }
 
 /// Wie [`array_mut`], legt die Liste aber nicht an.
@@ -38,6 +42,13 @@ fn existing_array_mut<'a>(doc: &'a mut DocumentMut, key: &str) -> Option<&'a mut
     } else {
         None
     }
+}
+
+/// Wandelt eine Liste in Inline-Schreibweise (`key = [ { ... } ]`) in `[[key]]`-Blöcke um, damit
+/// die lesenden Funktionen sie sehen. Fehlt der Schlüssel oder hat er eine andere Form, bleibt
+/// das Dokument unverändert.
+pub fn normalize(doc: &mut DocumentMut, key: &str) {
+    existing_array_mut(doc, key);
 }
 
 pub fn len(doc: &DocumentMut, key: &str) -> usize {
@@ -326,6 +337,58 @@ mod tests {
             get_field(&d, "rules", 0, "target"),
             Some(Value::Text("A/".into()))
         );
+    }
+
+    const INLINE: &str = "rules = [ { name = \"A\", ext = [\"jpg\"], target = \"x/\" }, { name = \"B\", target = \"y/\" } ]
+";
+
+    #[test]
+    fn inline_liste_wird_nach_normalize_angezeigt_und_bearbeitet() {
+        let mut d: DocumentMut = INLINE.parse().unwrap();
+        assert_eq!(len(&d, "rules"), 0, "ohne normalize unsichtbar");
+        normalize(&mut d, "rules");
+        assert_eq!(len(&d, "rules"), 2);
+        assert_eq!(names(&d, "rules"), ["A", "B"]);
+        assert!(d.to_string().contains("[[rules]]"), "{d}");
+        // Name bleibt eindeutig, Duplizieren, Verschieben und Löschen wirken.
+        assert_eq!(add(&mut d, "rules", "a", &[]), Some(2));
+        assert_eq!(names(&d, "rules"), ["A", "B", "a 2"]);
+        assert_eq!(duplicate(&mut d, "rules", 0), Some(1));
+        assert_eq!(names(&d, "rules"), ["A", "A Kopie", "B", "a 2"]);
+        assert_eq!(move_by(&mut d, "rules", 1, 1), Some(2));
+        assert_eq!(names(&d, "rules"), ["A", "B", "A Kopie", "a 2"]);
+        assert!(remove(&mut d, "rules", 0));
+        assert_eq!(names(&d, "rules"), ["B", "A Kopie", "a 2"]);
+    }
+
+    #[test]
+    fn normalize_legt_nichts_an_und_fasst_andere_formen_nicht_an() {
+        let mut empty: DocumentMut = "top = 1
+"
+        .parse()
+        .unwrap();
+        normalize(&mut empty, "rules");
+        assert_eq!(
+            empty.to_string(),
+            "top = 1
+"
+        );
+        let mut wrong: DocumentMut = "rules = 5
+"
+        .parse()
+        .unwrap();
+        normalize(&mut wrong, "rules");
+        assert_eq!(
+            wrong.to_string(),
+            "rules = 5
+"
+        );
+        let text = "[[rules]]
+name = \"A\"
+";
+        let mut blocks: DocumentMut = text.parse().unwrap();
+        normalize(&mut blocks, "rules");
+        assert_eq!(blocks.to_string(), text);
     }
 
     #[test]

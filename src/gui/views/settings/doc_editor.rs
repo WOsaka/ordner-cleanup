@@ -99,6 +99,9 @@ impl DocEditor {
             let text = self.raw.text.clone();
             match self.file.as_mut().map(|f| f.set_text(&text)) {
                 Some(Ok(())) | None => {
+                    if let Some(file) = self.file.as_mut() {
+                        file.normalize_lists();
+                    }
                     self.raw_mode = false;
                     self.form.reset();
                 }
@@ -258,6 +261,28 @@ mod tests {
         ed.save(&ok, true);
         assert!(!ed.conflict);
         assert!(std::fs::read_to_string(&path).unwrap().contains("top = 9"));
+    }
+
+    #[test]
+    fn roh_text_mit_inline_liste_zeigt_im_formular_alle_eintraege() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rules.toml");
+        std::fs::write(
+            &path, "top = 5
+",
+        )
+        .unwrap();
+        let mut ed = DocEditor::new("Regeln", path);
+        ed.toggle_raw();
+        ed.raw.text = "rules = [ { name = \"A\" }, { name = \"B\" } ]
+"
+        .into();
+        ed.toggle_raw();
+        assert!(!ed.raw_mode);
+        assert_eq!(
+            crate::settings::tables::names(ed.doc_ref().unwrap(), "rules"),
+            ["A", "B"]
+        );
     }
 
     #[test]
