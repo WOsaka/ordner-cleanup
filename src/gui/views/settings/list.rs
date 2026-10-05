@@ -28,8 +28,10 @@ pub fn ui(
     }
     ui.horizontal_wrapped(|ui| {
         if ui.button("Neu").clicked() {
-            state.selected = tables::add(doc, key, new_name, initial);
-            changed = true;
+            if let Some(i) = tables::add(doc, key, new_name, initial) {
+                state.selected = i;
+                changed = true;
+            }
         }
         let has = !names.is_empty();
         if ui

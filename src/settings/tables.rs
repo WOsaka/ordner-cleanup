@@ -10,13 +10,34 @@ fn array<'a>(doc: &'a DocumentMut, key: &str) -> Option<&'a ArrayOfTables> {
     doc.get(key)?.as_array_of_tables()
 }
 
-fn array_mut<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut ArrayOfTables {
+/// Die Tabellenliste unter `key`; fehlt sie, wird sie angelegt. Eine Liste in Inline-Schreibweise
+/// (`key = [ { ... } ]`) wird umgewandelt; hat der Schlüssel eine andere Form, bleibt das
+/// Dokument unangetastet und es gibt `None`.
+fn array_mut<'a>(doc: &'a mut DocumentMut, key: &str) -> Option<&'a mut ArrayOfTables> {
     if !doc.contains_key(key) {
         doc.insert(key, Item::ArrayOfTables(ArrayOfTables::new()));
     }
-    doc[key]
-        .as_array_of_tables_mut()
-        .expect("Schlüssel ist eine Liste von Tabellen")
+    let item = doc.get_mut(key)?;
+    if item.is_array() {
+        let inline = std::mem::take(item);
+        *item = match inline.into_array_of_tables() {
+            Ok(a) => Item::ArrayOfTables(a),
+            Err(back) => {
+                *item = back;
+                return None;
+            }
+        };
+    }
+    item.as_array_of_tables_mut()
+}
+
+/// Wie [`array_mut`], legt die Liste aber nicht an.
+fn existing_array_mut<'a>(doc: &'a mut DocumentMut, key: &str) -> Option<&'a mut ArrayOfTables> {
+    if doc.contains_key(key) {
+        array_mut(doc, key)
+    } else {
+        None
+    }
 }
 
 pub fn len(doc: &DocumentMut, key: &str) -> usize {
@@ -53,16 +74,21 @@ fn unique_name(existing: &[String], wanted: &str) -> String {
 
 /// Hängt einen Eintrag mit diesen Anfangswerten an; der Name wird eindeutig gemacht. Liefert den
 /// Index.
-pub fn add(doc: &mut DocumentMut, key: &str, name: &str, initial: &[(&str, Value)]) -> usize {
+pub fn add(
+    doc: &mut DocumentMut,
+    key: &str,
+    name: &str,
+    initial: &[(&str, Value)],
+) -> Option<usize> {
     let existing = names(doc, key);
     let mut table = Table::new();
     table.insert("name", toml_edit::value(unique_name(&existing, name)));
     for (field, value) in initial {
         fields::set_in_table(&mut table, field, value);
     }
-    let array = array_mut(doc, key);
+    let array = array_mut(doc, key)?;
     array.push(table);
-    array.len() - 1
+    Some(array.len() - 1)
 }
 
 /// Kopiert einen Eintrag direkt hinter das Original („<Name> Kopie“). Liefert den neuen Index.
@@ -81,7 +107,9 @@ pub fn duplicate(doc: &mut DocumentMut, key: &str, index: usize) -> Option<usize
 }
 
 fn replace_all(doc: &mut DocumentMut, key: &str, tables: Vec<Table>) {
-    let array = array_mut(doc, key);
+    let Some(array) = array_mut(doc, key) else {
+        return;
+    };
     array.clear();
     for t in tables {
         array.push(t);
@@ -119,21 +147,13 @@ pub fn get_field(doc: &DocumentMut, key: &str, index: usize, field: &str) -> Opt
 }
 
 pub fn set_field(doc: &mut DocumentMut, key: &str, index: usize, field: &str, value: &Value) {
-    if let Some(table) = doc
-        .get_mut(key)
-        .and_then(Item::as_array_of_tables_mut)
-        .and_then(|a| a.get_mut(index))
-    {
+    if let Some(table) = existing_array_mut(doc, key).and_then(|a| a.get_mut(index)) {
         fields::set_in_table(table, field, value);
     }
 }
 
 pub fn unset_field(doc: &mut DocumentMut, key: &str, index: usize, field: &str) {
-    if let Some(table) = doc
-        .get_mut(key)
-        .and_then(Item::as_array_of_tables_mut)
-        .and_then(|a| a.get_mut(index))
-    {
+    if let Some(table) = existing_array_mut(doc, key).and_then(|a| a.get_mut(index)) {
         table.remove(field);
     }
 }
@@ -213,14 +233,14 @@ mod tests {
             "PDF",
             &[("target", Value::Text("X/".into()))],
         );
-        assert_eq!(i, 2);
+        assert_eq!(i, Some(2));
         assert_eq!(names(&d, "rules")[2], "PDF 2");
         assert_eq!(
             get_field(&d, "rules", 2, "target"),
             Some(Value::Text("X/".into()))
         );
         let mut empty: DocumentMut = "".parse().unwrap();
-        assert_eq!(add(&mut empty, "rules", "neu", &[]), 0);
+        assert_eq!(add(&mut empty, "rules", "neu", &[]), Some(0));
         assert!(empty.to_string().contains("[[rules]]"));
     }
 
@@ -292,5 +312,29 @@ mod tests {
         );
         set_map(&mut d, "rules", 0, "fields", &[]).unwrap();
         assert!(get_map(&d, "rules", 0, "fields").is_empty());
+    }
+
+    #[test]
+    fn inline_liste_wird_beim_hinzufuegen_umgewandelt_statt_zu_paniken() {
+        let mut d: DocumentMut = "rules = [ { name = \"alt\", target = \"A/\" } ]
+"
+        .parse()
+        .unwrap();
+        assert_eq!(add(&mut d, "rules", "neu", &[]), Some(1));
+        assert_eq!(names(&d, "rules"), ["alt", "neu"]);
+        assert_eq!(
+            get_field(&d, "rules", 0, "target"),
+            Some(Value::Text("A/".into()))
+        );
+    }
+
+    #[test]
+    fn falsche_form_laesst_das_dokument_unveraendert() {
+        let text = "rules = 5
+";
+        let mut d: DocumentMut = text.parse().unwrap();
+        assert_eq!(add(&mut d, "rules", "neu", &[]), None);
+        set_field(&mut d, "rules", 0, "x", &Value::Bool(true));
+        assert_eq!(d.to_string(), text);
     }
 }

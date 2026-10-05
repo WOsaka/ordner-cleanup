@@ -626,8 +626,10 @@ fn table_at<'a>(doc: &'a DocumentMut, base: &[&str]) -> Option<&'a Table> {
 }
 
 /// Die Tabelle unter `base`; fehlende Ebenen werden angelegt (implizit, ohne eigene Kopfzeile,
-/// solange sie leer bleiben).
-fn table_at_mut<'a>(doc: &'a mut DocumentMut, base: &[&str]) -> &'a mut Table {
+/// solange sie leer bleiben). Inline-Tabellen (`a = { b = 1 }`) werden in normale Tabellen
+/// umgewandelt; hat eine Ebene eine andere Form (z. B. eine Zahl), bleibt das Dokument
+/// unangetastet und es gibt `None`.
+fn table_at_mut<'a>(doc: &'a mut DocumentMut, base: &[&str]) -> Option<&'a mut Table> {
     let mut table = doc.as_table_mut();
     for key in base {
         if !table.contains_key(key) {
@@ -635,12 +637,14 @@ fn table_at_mut<'a>(doc: &'a mut DocumentMut, base: &[&str]) -> &'a mut Table {
             t.set_implicit(true);
             table.insert(key, Item::Table(t));
         }
-        table = table
-            .get_mut(key)
-            .and_then(Item::as_table_mut)
-            .expect("Ebene ist eine Tabelle");
+        let item = table.get_mut(key)?;
+        if item.is_inline_table() {
+            let inline = std::mem::take(item);
+            *item = Item::Table(inline.into_table().ok()?);
+        }
+        table = item.as_table_mut()?;
     }
-    table
+    Some(table)
 }
 
 /// Wert eines Schlüssels in einer Tabelle, falls gesetzt.
@@ -666,7 +670,9 @@ pub fn get(doc: &DocumentMut, base: &[&str], key: &str) -> Option<Value> {
 
 /// Setzt einen Wert; Kommentare am Wert und Reihenfolge bleiben erhalten.
 pub fn set(doc: &mut DocumentMut, base: &[&str], key: &str, value: &Value) {
-    set_in_table(table_at_mut(doc, base), key, value);
+    if let Some(table) = table_at_mut(doc, base) {
+        set_in_table(table, key, value);
+    }
 }
 
 /// Wo ein Feld liegt: unter einem Tabellenpfad oder in einem Eintrag einer Tabellenliste.
@@ -744,8 +750,8 @@ pub fn apply_text_at(
 
 /// Entfernt den Schlüssel („zurücksetzen“ auf den Standard).
 pub fn unset(doc: &mut DocumentMut, base: &[&str], key: &str) {
-    if table_at(doc, base).is_some() {
-        table_at_mut(doc, base).remove(key);
+    if let Some(table) = table_at_mut(doc, base) {
+        table.remove(key);
     }
 }
 
@@ -940,5 +946,35 @@ node_modules",
                 );
             }
         }
+    }
+
+    #[test]
+    fn inline_tabelle_wird_beim_setzen_umgewandelt_statt_zu_paniken() {
+        let mut d: DocumentMut = "classify = { ocr = true }
+"
+        .parse()
+        .unwrap();
+        set(&mut d, &["classify"], "min_confidence", &Value::Float(0.5));
+        assert_eq!(
+            get(&d, &["classify"], "ocr"),
+            Some(Value::Bool(true)),
+            "{d}"
+        );
+        assert_eq!(
+            get(&d, &["classify"], "min_confidence"),
+            Some(Value::Float(0.5))
+        );
+        unset(&mut d, &["classify"], "ocr");
+        assert_eq!(get(&d, &["classify"], "ocr"), None);
+    }
+
+    #[test]
+    fn falsche_form_beim_setzen_laesst_das_dokument_unveraendert() {
+        let text = "classify = 5
+";
+        let mut d: DocumentMut = text.parse().unwrap();
+        set(&mut d, &["classify"], "ocr", &Value::Bool(true));
+        unset(&mut d, &["classify"], "ocr");
+        assert_eq!(d.to_string(), text);
     }
 }

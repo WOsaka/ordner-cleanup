@@ -192,7 +192,7 @@ mod tests {
                 _ => Value::Text("x".into()),
             };
             let mut doc: toml_edit::DocumentMut = "".parse().unwrap();
-            let i = tables::add(&mut doc, KEY, "r", &new_rule_defaults());
+            let i = tables::add(&mut doc, KEY, "r", &new_rule_defaults()).unwrap();
             tables::set_field(&mut doc, KEY, i, f.key, &sample);
             if let Err(e) = validate(&doc.to_string(), &Config::default()) {
                 assert!(!e.message.contains("unknown field"), "{}: {e}", f.key);
@@ -204,7 +204,7 @@ mod tests {
     #[test]
     fn neue_regel_mit_den_anfangswerten_ist_gueltig() {
         let mut doc: toml_edit::DocumentMut = "".parse().unwrap();
-        let i = tables::add(&mut doc, KEY, "neu", &new_rule_defaults());
+        let i = tables::add(&mut doc, KEY, "neu", &new_rule_defaults()).unwrap();
         tables::set_field(&mut doc, KEY, i, "ext", &Value::List(vec!["pdf".into()]));
         assert!(validate(&doc.to_string(), &Config::default()).is_ok());
     }
