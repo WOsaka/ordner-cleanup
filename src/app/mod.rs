@@ -20,9 +20,7 @@ use crate::ops::report::{export_report, report_model, ReportRequest};
 use crate::ops::runs::{purge_candidates, purge_execute, runs, undo_check, undo_execute};
 use crate::ops::scan::{scan, ScanReport, ScanRequest};
 use crate::ops::target::TargetSpec;
-use crate::ops::{
-    load_config, local_time, normalize, now_rfc3339, resolve_root, status_label, OpCtx,
-};
+use crate::ops::{local_time, normalize, now_rfc3339, resolve_root, status_label, OpCtx};
 use crate::paths::{self};
 use crate::report::{self, Format};
 

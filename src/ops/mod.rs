@@ -27,6 +27,7 @@ pub mod plan;
 pub mod report;
 pub mod runs;
 pub mod scan;
+pub mod schedule;
 pub mod snapshot;
 pub mod target;
 
