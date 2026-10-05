@@ -158,8 +158,14 @@ fn execute(name: &str, target: &Target, record: &mut RunRecord) -> Result<i32> {
         .as_ref()
         .is_some_and(|p| p.profile.classify == Some(true))
     {
-        match super::classify::classify_for_run(&mut res.index, &root, &target.config) {
-            Ok(review) => record.review = Some(review),
+        let ctx = crate::ops::OpCtx::new(super::global_cancel_flag()?);
+        match crate::ops::classify::classify_for_run(&mut res.index, &root, &target.config, &ctx) {
+            Ok(done) => {
+                for w in &done.warnings {
+                    eprintln!("Warnung: {w}");
+                }
+                record.review = Some(done.review);
+            }
             Err(e) => {
                 partial = true;
                 record.errors.push(format!("classify: {e:#}"));

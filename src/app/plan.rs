@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use bytesize::ByteSize;
 
-use super::{classify, profile};
+use super::profile;
 use super::{
     index_age_note, index_path, normalize, now_rfc3339, now_ticks, onedrive_roots_from_env,
     onedrive_warning, resolve_root,
@@ -31,6 +31,7 @@ use crate::cli::{
 use crate::config::{Config, BUILTIN_JUNK_CATEGORIES};
 use crate::content::classify::Classifier;
 use crate::index::Index;
+use crate::ops::classify;
 use crate::paths;
 use crate::platform::windows::downloads_dir;
 use crate::report;
@@ -371,12 +372,15 @@ pub(super) fn plan_rules_command(args: &PlanRulesArgs) -> Result<i32> {
     let mut p = open_prepared(root, config)?;
     let created = now_rfc3339();
     let content = LiveContent::default();
+    let ctx = crate::ops::OpCtx::new(super::global_cancel_flag()?);
     let lookup = classifier.as_ref().map(|c| classify::CachedLookup {
         root: &p.root,
         config: &p.config,
         classifier: c,
         classify: !args.no_classify,
+        ctx: &ctx,
         notes: Default::default(),
+        log: Default::default(),
     });
     let live_text = classify::LiveText { config: &p.config };
     let no_content = NoContent;
@@ -403,6 +407,11 @@ pub(super) fn plan_rules_command(args: &PlanRulesArgs) -> Result<i32> {
         result
             .notes
             .extend(l.notes.lock().map(|n| n.clone()).unwrap_or_default());
+        if let Ok(log) = l.log.lock() {
+            for line in log.hints.iter().chain(&log.warnings) {
+                eprintln!("{line}");
+            }
+        }
     }
     // Der Cache behält nur Einträge zu Dateien, die der Index noch kennt.
     let _ = p.index.exif_prune(&paths::dir_key(&p.root));

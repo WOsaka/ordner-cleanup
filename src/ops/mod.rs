@@ -21,6 +21,7 @@ use crate::report;
 use crate::scan::lock::{LockError, ScanLock};
 use crate::scan::source::TICKS_PER_SEC;
 
+pub mod classify;
 pub mod target;
 
 /// Ab diesem Alter des letzten Scans weist `plan` auf einen möglicherweise veralteten Index hin.

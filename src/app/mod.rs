@@ -44,6 +44,7 @@ mod classify;
 mod history;
 mod plan;
 mod profile;
+mod progress;
 mod run;
 mod schedule;
 mod snapshot;
