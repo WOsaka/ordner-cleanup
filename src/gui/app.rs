@@ -96,7 +96,22 @@ impl GuiApp {
                 });
             }
         }
-        if let Some(Answer { ok: true, .. }) = self.shell.take_answer(ID_CLOSE) {
+        for (id, answer) in self.shell.drain_answers() {
+            match id {
+                ID_CLOSE => {
+                    if answer.ok {
+                        self.closing = true;
+                        self.shell.runner.cancel_all();
+                    }
+                }
+                id if id.starts_with("cleanup.") => {
+                    self.cleanup.on_answer(id, answer, &mut self.shell)
+                }
+                _ => {}
+            }
+        }
+        if false {
+            let _: Option<Answer> = None;
             self.closing = true;
             self.shell.runner.cancel_all();
         }

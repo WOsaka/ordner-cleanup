@@ -30,6 +30,7 @@ pub mod scan;
 pub mod schedule;
 pub mod snapshot;
 pub mod target;
+pub mod text;
 
 /// Ab diesem Alter des letzten Scans weist `plan` auf einen möglicherweise veralteten Index hin.
 pub const STALE_SCAN_DAYS: i64 = 7;

@@ -23,7 +23,9 @@ pub enum Route {
 }
 
 /// Seiten der Seitenleiste.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Default,
+)]
 pub enum Page {
     #[default]
     Overview,
@@ -190,6 +192,11 @@ impl Shell {
     /// Entnimmt die Antwort eines Bestätigungsdialogs, falls schon gegeben.
     pub fn take_answer(&mut self, id: &'static str) -> Option<Answer> {
         self.answers.remove(id)
+    }
+
+    /// Alle noch nicht abgeholten Antworten (die App verteilt sie an die Ansichten).
+    pub fn drain_answers(&mut self) -> Vec<(&'static str, Answer)> {
+        self.answers.drain().collect()
     }
 
     /// Beendete Tasks samt Ansicht.

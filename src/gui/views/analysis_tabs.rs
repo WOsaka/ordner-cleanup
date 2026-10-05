@@ -28,10 +28,10 @@ fn plan_button(ui: &mut egui::Ui, shell: &mut Shell, label: &str, kind: &'static
 /// Größenbaum: nur aufgeklappte Knoten werden gezeichnet, Kinder nach Größe sortiert.
 pub fn size_tree(ui: &mut egui::Ui, report: &Report, shell: &mut Shell) {
     let total = report.size_tree.size.max(1);
-    node(ui, &report.size_tree, total, total, shell, true);
+    node(ui, &report.size_tree, total, shell, true);
 }
 
-fn node(ui: &mut egui::Ui, n: &TreeNode, parent: u64, total: u64, shell: &mut Shell, root: bool) {
+fn node(ui: &mut egui::Ui, n: &TreeNode, parent: u64, shell: &mut Shell, root: bool) {
     let share = n.size as f32 / parent.max(1) as f32;
     let title = format!(
         "{}  ·  {}  ·  {} Dateien{}",
@@ -50,11 +50,8 @@ fn node(ui: &mut egui::Ui, n: &TreeNode, parent: u64, total: u64, shell: &mut Sh
         return;
     }
     let id = ui.make_persistent_id(("tree", &n.path));
-    let state = egui::collapsing_header::CollapsingState::load_with_default_open(
-        ui.ctx(),
-        id,
-        root,
-    );
+    let state =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, root);
     state
         .show_header(ui, |ui| {
             let r = ui.label(title);
@@ -63,9 +60,9 @@ fn node(ui: &mut egui::Ui, n: &TreeNode, parent: u64, total: u64, shell: &mut Sh
         })
         .body(|ui| {
             let mut children: Vec<&TreeNode> = n.children.iter().collect();
-            children.sort_by(|a, b| b.size.cmp(&a.size));
+            children.sort_by_key(|a| std::cmp::Reverse(a.size));
             for child in children {
-                node(ui, child, n.size, total, shell, false);
+                node(ui, child, n.size, shell, false);
             }
         });
 }
@@ -93,7 +90,10 @@ fn file_table(ui: &mut egui::Ui, id: &str, items: &[FileItem], shell: &mut Shell
                     ui.label(texts::bytes(it.size));
                 });
                 row.col(|ui| {
-                    ui.label(format!("{} Tage", texts::grouped(it.age_days.max(0) as u64)));
+                    ui.label(format!(
+                        "{} Tage",
+                        texts::grouped(it.age_days.max(0) as u64)
+                    ));
                 });
             });
         });
@@ -127,7 +127,10 @@ pub fn types_and_age(ui: &mut egui::Ui, report: &Report, shell: &mut Shell) {
             ui.end_row();
         }
     });
-    heading(ui, &format!("Größte Dateien (Top {})", report.top_files.len()));
+    heading(
+        ui,
+        &format!("Größte Dateien (Top {})", report.top_files.len()),
+    );
     file_table(ui, "top-files", &report.top_files, shell);
     heading(
         ui,
@@ -202,7 +205,10 @@ pub fn problems(ui: &mut egui::Ui, report: &Report, shell: &mut Shell) {
             ui.label(RichText::new(p.labels.join(", ")).weak());
         });
     }
-    heading(ui, &format!("Strukturprobleme ({})", report.structure.len()));
+    heading(
+        ui,
+        &format!("Strukturprobleme ({})", report.structure.len()),
+    );
     for s in &report.structure {
         ui.horizontal(|ui| {
             path_cell(ui, &s.path, shell);
@@ -278,7 +284,11 @@ pub fn health(ui: &mut egui::Ui, report: &Report) {
                 "{} seit {}{}",
                 format_delta(c.delta),
                 crate::report::history::short_date(&c.previous_at),
-                if c.is_limited() { " (eingeschränkt vergleichbar)" } else { "" }
+                if c.is_limited() {
+                    " (eingeschränkt vergleichbar)"
+                } else {
+                    ""
+                }
             ));
         }
         None => {

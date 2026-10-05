@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 use bytesize::ByteSize;
 
-use crate::change::apply::{ActionResult, ActionStatus, ApplyOutcome};
+use crate::change::apply::ApplyOutcome;
 use crate::change::plan::Plan;
 use crate::change::undo::{RestoreStatus, RunStatus, RunSummary};
 use crate::change::{ActionCounts, RunId};
@@ -20,6 +20,7 @@ use crate::ops::report::{export_report, report_model, ReportRequest};
 use crate::ops::runs::{purge_candidates, purge_execute, runs, undo_check, undo_execute};
 use crate::ops::scan::{scan, ScanReport, ScanRequest};
 use crate::ops::target::TargetSpec;
+use crate::ops::text::{apply_headline, status_line};
 use crate::ops::{local_time, normalize, now_rfc3339, resolve_root, status_label, OpCtx};
 use crate::paths::{self};
 use crate::report::{self, Format};
@@ -115,15 +116,6 @@ fn install_cancel_flag() -> Result<Arc<AtomicBool>> {
     global_cancel_flag()
 }
 
-fn status_line(result: &ActionResult) -> Option<String> {
-    let text = match &result.status {
-        ActionStatus::Done | ActionStatus::AlreadyDone => return None,
-        ActionStatus::Skipped(reason) => reason.to_string(),
-        ActionStatus::Failed(error) => format!("Fehler: {error}"),
-    };
-    Some(format!("  {text}: {}", result.path))
-}
-
 /// Rückfrage vor `apply`: nennt die Aktionen je Typ.
 fn apply_question(plan: &Plan) -> String {
     format!("{}? [j/N] ", ActionCounts::from_plan(plan).plan_text())
@@ -143,20 +135,7 @@ fn undo_question(run: &RunId, summary: &RunSummary) -> String {
 }
 
 fn print_apply_summary(outcome: &ApplyOutcome) {
-    let moved = if outcome.moved_bytes > 0 {
-        format!(" ({})", ByteSize::b(outcome.moved_bytes))
-    } else {
-        String::new()
-    };
-    println!(
-        "Lauf {}: {}{moved}, {} bereits erledigt, {} stale, {} übersprungen, {} Fehler",
-        outcome.run,
-        outcome.counts().done_text(),
-        outcome.already_done(),
-        outcome.stale(),
-        outcome.skipped(),
-        outcome.failed()
-    );
+    println!("{}", apply_headline(outcome));
     const MAX_LINES: usize = 20;
     let lines: Vec<String> = outcome.results.iter().filter_map(status_line).collect();
     for line in lines.iter().take(MAX_LINES) {
@@ -552,30 +531,6 @@ mod confirm_tests {
         assert_eq!(
             undo_question(&run, &summary(dirs, 0)),
             "Lauf 20261003-120000-ab12 (4 leere Ordner entfernt) zurückdrehen? [j/N] "
-        );
-    }
-
-    #[test]
-    fn statuszeilen_nennen_nur_nicht_erledigtes() {
-        use crate::change::SkipReason;
-        let result = |status| ActionResult {
-            id: 1,
-            path: r"D:\x.txt".into(),
-            kind: crate::change::plan::ActionType::Quarantine,
-            sorted: false,
-            status,
-        };
-        assert!(status_line(&result(ActionStatus::Done)).is_none());
-        assert!(status_line(&result(ActionStatus::AlreadyDone)).is_none());
-        assert!(
-            status_line(&result(ActionStatus::Skipped(SkipReason::Stale)))
-                .unwrap()
-                .contains("stale")
-        );
-        assert!(
-            status_line(&result(ActionStatus::Failed("gesperrt".into())))
-                .unwrap()
-                .contains("Fehler: gesperrt")
         );
     }
 }

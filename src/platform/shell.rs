@@ -68,7 +68,8 @@ pub fn reveal(path: &Path) -> Result<()> {
         cmd.raw_arg(format!("/select,\"{shown}\""));
     }
     // Explorer meldet auch bei Erfolg oft Exit-Code 1; nur ein Startfehler zählt.
-    cmd.spawn().context("Explorer konnte nicht gestartet werden")?;
+    cmd.spawn()
+        .context("Explorer konnte nicht gestartet werden")?;
     Ok(())
 }
 

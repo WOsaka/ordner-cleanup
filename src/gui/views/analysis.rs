@@ -216,7 +216,9 @@ impl AnalysisView {
     }
 
     fn start_export(&mut self, shell: &mut Shell, formats: Vec<Format>) {
-        let Some(choice) = shell.target.clone() else { return };
+        let Some(choice) = shell.target.clone() else {
+            return;
+        };
         let req = request_for(&choice, &self.old_after, &self.top);
         let out = self.out_dir.clone();
         shell.spawn(Route::Analysis, TASK_EXPORT, TaskKind::Read, move |ctx| {

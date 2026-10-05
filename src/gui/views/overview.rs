@@ -138,7 +138,12 @@ impl OverviewView {
             for row in &data.roots {
                 let r = &row.info;
                 ui.label(&r.path);
-                ui.label(r.finished_at.as_deref().or(r.started_at.as_deref()).unwrap_or("–"));
+                ui.label(
+                    r.finished_at
+                        .as_deref()
+                        .or(r.started_at.as_deref())
+                        .unwrap_or("–"),
+                );
                 ui.label(trend(row.score, row.previous_score));
                 ui.label(format!("{:?}, {} Fehler", r.status, r.error_count));
                 ui.horizontal(|ui| {
@@ -163,7 +168,10 @@ impl OverviewView {
         ui.add_space(12.0);
         ui.heading("Profile");
         if let Some(e) = &data.profile_error {
-            ui.colored_label(egui::Color32::LIGHT_RED, format!("Config nicht lesbar: {e}"));
+            ui.colored_label(
+                egui::Color32::LIGHT_RED,
+                format!("Config nicht lesbar: {e}"),
+            );
         } else if data.profiles.is_empty() {
             ui.label("Keine Profile in der config.toml.");
         }
@@ -172,7 +180,11 @@ impl OverviewView {
                 ui.label(&p.name);
                 ui.label(&p.profile.root);
                 ui.label(match &p.last_run {
-                    Some(r) => format!("{} – {}", crate::ops::local_time(&r.started), r.status.label()),
+                    Some(r) => format!(
+                        "{} – {}",
+                        crate::ops::local_time(&r.started),
+                        r.status.label()
+                    ),
                     None => "noch kein Lauf".into(),
                 });
                 ui.label(
@@ -202,7 +214,10 @@ impl OverviewView {
             ui.label(format!(
                 "{}  {}  {}  {}  ({})",
                 run.run,
-                run.started.as_deref().map(crate::ops::local_time).unwrap_or_default(),
+                run.started
+                    .as_deref()
+                    .map(crate::ops::local_time)
+                    .unwrap_or_default(),
                 run.counts.short_text(run.bytes),
                 crate::ops::status_label(run.status),
                 paths::display(root)

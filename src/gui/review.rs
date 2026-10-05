@@ -31,7 +31,7 @@ pub struct Sort {
     pub ascending: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Filter {
     pub show: Show,
     pub action: Option<ActionType>,
@@ -443,7 +443,10 @@ mod tests {
         assert_eq!(m.len(), 3);
         assert!(m.all_selected());
         let s = m.summary();
-        assert_eq!((s.selected, s.selected_bytes, s.total, s.total_bytes), (3, 600, 3, 600));
+        assert_eq!(
+            (s.selected, s.selected_bytes, s.total, s.total_bytes),
+            (3, 600, 3, 600)
+        );
         assert_eq!(s.quarantine, 3);
         assert_eq!(m.selected_ids(), [1, 2, 3].into());
     }
@@ -490,7 +493,11 @@ mod tests {
             folder: Some(r"D:\Daten\A".into()),
             ..Filter::default()
         });
-        assert_eq!(ids(&m), [Some(1), Some(3)], "unterhalb von, ohne Groß-/Kleinschreibung");
+        assert_eq!(
+            ids(&m),
+            [Some(1), Some(3)],
+            "unterhalb von, ohne Groß-/Kleinschreibung"
+        );
         m.set_filter(Filter {
             min_size: Some(150),
             max_size: Some(250),
@@ -537,7 +544,11 @@ mod tests {
             column: Column::Source,
             ascending: true,
         }));
-        assert_eq!(ids(&m), [Some(3), Some(1), Some(2)], "a\\sub\\z, a\\x, b\\y");
+        assert_eq!(
+            ids(&m),
+            [Some(3), Some(1), Some(2)],
+            "a\\sub\\z, a\\x, b\\y"
+        );
         m.set_sort(None);
         assert_eq!(ids(&m), [Some(1), Some(2), Some(3)], "Planreihenfolge");
     }

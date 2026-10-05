@@ -125,10 +125,7 @@ impl ScanPanel {
                 {
                     self.start_classify(shell, false);
                 }
-                if self.retry.is_some()
-                    && !busy
-                    && ui.button(texts::RETRY).clicked()
-                {
+                if self.retry.is_some() && !busy && ui.button(texts::RETRY).clicked() {
                     match self.retry.take() {
                         Some(Retry::Scan) => self.start_scan(shell),
                         Some(Retry::Classify) => self.start_classify(shell, false),
@@ -166,7 +163,10 @@ impl ScanPanel {
                     ui.add(egui::TextEdit::singleline(&mut self.only).desired_width(180.0));
                 });
                 if ui
-                    .add_enabled(!busy && shell.target.is_some(), egui::Button::new("Text-Cache löschen"))
+                    .add_enabled(
+                        !busy && shell.target.is_some(),
+                        egui::Button::new("Text-Cache löschen"),
+                    )
                     .clicked()
                 {
                     self.start_classify(shell, true);
@@ -175,12 +175,18 @@ impl ScanPanel {
             if let Some((name, ctx)) = shell.running_ctx(Route::Overview) {
                 ui.separator();
                 let p = &ctx.progress;
-                let (done, total) = (p.done.load(Ordering::Relaxed), p.total.load(Ordering::Relaxed));
+                let (done, total) = (
+                    p.done.load(Ordering::Relaxed),
+                    p.total.load(Ordering::Relaxed),
+                );
                 ui.label(format!("{name}: {}", p.phase()));
                 if total > 0 {
                     ui.add(
-                        egui::ProgressBar::new(done as f32 / total as f32)
-                            .text(format!("{} / {}", texts::grouped(done), texts::grouped(total))),
+                        egui::ProgressBar::new(done as f32 / total as f32).text(format!(
+                            "{} / {}",
+                            texts::grouped(done),
+                            texts::grouped(total)
+                        )),
                     );
                 } else {
                     ui.label(format!(
@@ -211,7 +217,9 @@ impl ScanPanel {
     }
 
     fn start_scan(&mut self, shell: &mut Shell) {
-        let Some(target) = self.target_spec(shell) else { return };
+        let Some(target) = self.target_spec(shell) else {
+            return;
+        };
         let request = ScanRequest {
             target,
             exclude: lines(&self.exclude),
@@ -229,7 +237,9 @@ impl ScanPanel {
     }
 
     fn start_classify(&mut self, shell: &mut Shell, clear: bool) {
-        let Some(target) = self.target_spec(shell) else { return };
+        let Some(target) = self.target_spec(shell) else {
+            return;
+        };
         let request = ClassifyRequest {
             target,
             no_llm: self.no_llm,
@@ -245,9 +255,12 @@ impl ScanPanel {
         };
         self.result.clear();
         self.retry = Some(Retry::Classify);
-        shell.spawn(Route::Overview, TASK_CLASSIFY, TaskKind::Write, move |ctx| {
-            classify(&request, ctx)
-        });
+        shell.spawn(
+            Route::Overview,
+            TASK_CLASSIFY,
+            TaskKind::Write,
+            move |ctx| classify(&request, ctx),
+        );
     }
 
     pub fn on_finished(&mut self, name: &str, result: TaskResult, shell: &mut Shell) {
@@ -269,29 +282,31 @@ impl ScanPanel {
                 }
                 Err(e) => self.fail(name, &e, shell),
             },
-            TASK_CLASSIFY => match result {
-                Ok(boxed) => {
-                    if let Ok(outcome) = boxed.downcast::<ClassifyOutcome>() {
-                        self.result = match *outcome {
-                            ClassifyOutcome::Cleared { root, entries } => format!(
+            TASK_CLASSIFY => {
+                match result {
+                    Ok(boxed) => {
+                        if let Ok(outcome) = boxed.downcast::<ClassifyOutcome>() {
+                            self.result = match *outcome {
+                                ClassifyOutcome::Cleared { root, entries } => format!(
                                 "Inhalts- und OCR-Text-Cache von {} geleert ({entries} Einträge).",
                                 paths::display(&root)
                             ),
-                            ClassifyOutcome::Classified { root, run, summary } => {
-                                let mut text =
-                                    render_summary(&paths::display(&root), &run, &summary);
-                                if run.aborted {
-                                    text.push_str("Abgebrochen; bis dahin Analysiertes bleibt im Cache.\n");
+                                ClassifyOutcome::Classified { root, run, summary } => {
+                                    let mut text =
+                                        render_summary(&paths::display(&root), &run, &summary);
+                                    if run.aborted {
+                                        text.push_str("Abgebrochen; bis dahin Analysiertes bleibt im Cache.\n");
+                                    }
+                                    text
                                 }
-                                text
-                            }
-                        };
-                        self.retry = None;
+                            };
+                            self.retry = None;
+                        }
+                        shell.generation += 1;
                     }
-                    shell.generation += 1;
+                    Err(e) => self.fail(name, &e, shell),
                 }
-                Err(e) => self.fail(name, &e, shell),
-            },
+            }
             _ => {}
         }
     }
@@ -334,18 +349,27 @@ mod tests {
     fn scan_text_nennt_zaehler_hinweise_und_score() {
         let text = scan_text(&report(false));
         assert!(text.contains("1.234 Dateien, 7 Ordner"), "{text}");
-        assert!(text.contains("Hinweis: x") && text.contains("Health-Score 80"), "{text}");
+        assert!(
+            text.contains("Hinweis: x") && text.contains("Health-Score 80"),
+            "{text}"
+        );
     }
 
     #[test]
     fn abgebrochener_scan_zeigt_keinen_score() {
         let text = scan_text(&report(true));
-        assert!(text.contains("abgebrochen") && !text.contains("Health-Score"), "{text}");
+        assert!(
+            text.contains("abgebrochen") && !text.contains("Health-Score"),
+            "{text}"
+        );
     }
 
     #[test]
     fn zeilen_und_optionen_werden_bereinigt() {
-        assert_eq!(lines(" *.tmp \n\n  node_modules\n"), ["*.tmp", "node_modules"]);
+        assert_eq!(
+            lines(" *.tmp \n\n  node_modules\n"),
+            ["*.tmp", "node_modules"]
+        );
         assert_eq!(opt("  "), None);
         assert_eq!(opt(" para "), Some("para".into()));
     }

@@ -49,7 +49,7 @@ pub struct Finished {
 impl Finished {
     /// Das Ergebnis als `T`; ein falscher Typ ist ein Fehler, keine Panic.
     pub fn take<T: 'static>(self) -> Result<T, TaskError> {
-        match self.result? .downcast::<T>() {
+        match self.result?.downcast::<T>() {
             Ok(value) => Ok(*value),
             Err(_) => Err(TaskError::Failed(format!(
                 "Ergebnis von „{}“ hat einen unerwarteten Typ",
