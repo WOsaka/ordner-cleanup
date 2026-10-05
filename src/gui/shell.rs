@@ -95,6 +95,8 @@ pub struct Shell {
     /// Gewählter Ordner bzw. gewähltes Profil (gilt für alle Ansichten)
     pub target: Option<Choice>,
     pub goto: Option<Goto>,
+    /// Zählt Änderungen an Index oder Dateien (Scan, Classify, Apply, Undo); Ansichten laden danach neu
+    pub generation: u64,
 }
 
 /// Ordner oder Profil, mit dem gearbeitet wird.
@@ -134,6 +136,7 @@ impl Shell {
             status: String::new(),
             target: None,
             goto: None,
+            generation: 0,
         }
     }
 
