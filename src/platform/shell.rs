@@ -73,6 +73,23 @@ pub fn reveal(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Öffnet eine Textdatei im Editor (Notepad); fehlt die Datei, wird sie leer angelegt.
+pub fn edit(path: &Path) -> Result<()> {
+    if !path.exists() {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)
+                .with_context(|| format!("{} nicht anlegbar", paths::display(dir)))?;
+        }
+        std::fs::write(path, "")
+            .with_context(|| format!("{} nicht anlegbar", paths::display(path)))?;
+    }
+    std::process::Command::new("notepad.exe")
+        .arg(path)
+        .spawn()
+        .context("Editor konnte nicht gestartet werden")?;
+    Ok(())
+}
+
 /// Windows-Ordnerdialog.
 pub fn pick_folder(start: Option<&Path>) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new();
