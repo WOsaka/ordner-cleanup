@@ -62,7 +62,7 @@ pub fn parse_old_after(text: &str) -> Result<i64, String> {
     if number <= 0 {
         return Err(err());
     }
-    Ok(number * factor)
+    number.checked_mul(factor).ok_or_else(err)
 }
 
 /// Älter als der Schwellwert (in Tagen); genau am Schwellwert gilt noch nicht als alt.
@@ -131,6 +131,32 @@ mod tests {
     #[case("einjahr")]
     fn parser_ungueltig(#[case] input: &str) {
         assert!(parse_old_after(input).is_err(), "{input}");
+    }
+
+    #[rstest]
+    #[case("99999999999999999y")]
+    #[case("999999999999999999m")]
+    #[case("9223372036854775807y")]
+    #[case("99999999999999999999d")]
+    fn parser_zu_grosse_werte_sind_ein_fehler_kein_ueberlauf(#[case] input: &str) {
+        assert!(parse_old_after(input).is_err(), "{input}");
+    }
+
+    #[test]
+    fn parser_grenze_des_wertebereichs() {
+        let max_years = i64::MAX / 365;
+        assert_eq!(
+            parse_old_after(&format!("{max_years}y")),
+            Ok(max_years * 365)
+        );
+        assert!(parse_old_after(&format!("{}y", max_years + 1)).is_err());
+        let max_months = i64::MAX / 30;
+        assert_eq!(
+            parse_old_after(&format!("{max_months}m")),
+            Ok(max_months * 30)
+        );
+        assert!(parse_old_after(&format!("{}m", max_months + 1)).is_err());
+        assert_eq!(parse_old_after(&format!("{}d", i64::MAX)), Ok(i64::MAX));
     }
 
     #[test]

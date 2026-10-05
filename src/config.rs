@@ -676,6 +676,12 @@ mod tests {
     }
 
     #[test]
+    fn zu_grosse_dauer_wird_beim_laden_abgelehnt() {
+        let err = Config::parse("archive_older_than = \"99999999999999999y\"").unwrap_err();
+        assert!(err.to_string().contains("archive_older_than"), "{err}");
+    }
+
+    #[test]
     fn aufraeumaktionen_defaults() {
         let c = Config::default();
         assert_eq!(
