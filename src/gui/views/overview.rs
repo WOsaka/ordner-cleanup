@@ -43,6 +43,14 @@ pub fn pending_quarantine(runs: &[(PathBuf, Vec<RunSummary>)]) -> (usize, u64) {
         .fold((0, 0), |(n, b), r| (n + 1, b + r.bytes))
 }
 
+/// „n Dateien zum Prüfen“ aus dem letzten Lauf (nur Profile mit `classify = true`).
+fn review_text(last_run: Option<&crate::runlog::RunRecord>) -> Option<String> {
+    match last_run?.review? {
+        1 => Some("1 Datei zum Prüfen".into()),
+        n => Some(format!("{n} Dateien zum Prüfen")),
+    }
+}
+
 fn load() -> Result<OverviewData> {
     let roots = match paths::index_path() {
         Ok(file) if file.exists() => index_roots()?,
@@ -192,6 +200,7 @@ impl OverviewView {
                         .as_ref()
                         .map_or("–".to_string(), |pt| format!("Score {}", pt.score)),
                 );
+                ui.label(review_text(p.last_run.as_ref()).unwrap_or_default());
                 if ui.button("Wählen").clicked() {
                     shell.target = Some(Choice::Profile(p.name.clone()));
                 }
@@ -276,6 +285,31 @@ mod tests {
             ],
         )];
         assert_eq!(pending_quarantine(&runs), (2, 105));
+    }
+
+    #[test]
+    fn zum_pruefen_kommt_aus_dem_letzten_lauf() {
+        assert_eq!(review_text(None), None);
+        let mut r = crate::runlog::RunRecord {
+            started: "2026-10-03T12:00:00+02:00".into(),
+            ended: "2026-10-03T12:01:00+02:00".into(),
+            status: crate::runlog::RunStatus::Ok,
+            score: None,
+            score_delta: None,
+            report: None,
+            plans: Vec::new(),
+            errors: Vec::new(),
+            notified: false,
+            review: None,
+        };
+        assert_eq!(review_text(Some(&r)), None);
+        r.review = Some(1);
+        assert_eq!(review_text(Some(&r)).as_deref(), Some("1 Datei zum Prüfen"));
+        r.review = Some(19);
+        assert_eq!(
+            review_text(Some(&r)).as_deref(),
+            Some("19 Dateien zum Prüfen")
+        );
     }
 
     #[test]
