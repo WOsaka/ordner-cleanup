@@ -32,6 +32,9 @@ impl FormState {
     }
 }
 
+/// Mindestbreite der Bezeichnungsspalte, damit Label und Schlüssel nicht umbrechen.
+const LABEL_COL_WIDTH: f32 = 220.0;
+
 fn id_of(loc: Loc, key: &str) -> String {
     format!("{}.{key}", loc.id())
 }
@@ -69,6 +72,7 @@ fn field(
     let id = id_of(loc, spec.key);
     let current = fields::get_at(doc, loc, spec.key);
     ui.vertical(|ui| {
+        ui.set_min_width(LABEL_COL_WIDTH);
         ui.label(egui::RichText::new(spec.label).strong())
             .on_hover_text(spec.help);
         ui.label(egui::RichText::new(spec.key).monospace().weak().small());
