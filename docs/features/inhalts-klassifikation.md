@@ -119,7 +119,7 @@ match = ["Telekom Deutschland GmbH", "telekom.de"]
 ### Zuordnung und Konfidenz
 - Für jede Datei wird je Kategorie ein Punktwert aus gewichteten Schlüsselwort- und Mustertreffern berechnet; Ausschlusswörter setzen ihn auf 0. Konfidenz 0–1 ergibt sich aus der absoluten Stärke des besten Werts **und** dem Abstand zur zweitbesten Kategorie. Die genaue Formel legt der Implementierungsplan fest und dokumentiert sie im README.
 - Eigenschaften: deterministisch (gleicher Inhalt + gleiche Definitionen = gleiche Kategorie und Konfidenz), erklärbar (Cache und Bericht nennen die ausschlaggebenden Treffer, z. B. „rechnungsnummer, zahlbar bis, IBAN“), monoton (ein zusätzlicher Treffer für Kategorie A senkt deren Punktwert nie).
-- Trifft keine Kategorie sicher und ist das LLM eingeschaltet, schlägt das LLM eine Kategorie aus der Liste der bekannten Namen vor (oder `unbekannt`). Seine Konfidenz ist `min(LLM-Angabe, [llm] max_confidence)` (Default 0,85). Quelle wird als `llm` mit Modellname vermerkt.
+- Trifft keine Kategorie sicher und ist das LLM eingeschaltet, schlägt das LLM eine Kategorie aus der Liste der bekannten Namen vor (oder `unbekannt`). Seine Konfidenz ist `min(LLM-Angabe, [llm] max_confidence)` (Default 0,75, bewusst unter `min_confidence` 0,8: LLM-Kategorien landen in „Zum Prüfen“ und lösen keine Aktion aus, bis der Nutzer `max_confidence` anhebt; Test mit qwen2.5:3b: 2 von 10 LLM-Kategorien richtig). Quelle wird als `llm` mit Modellname vermerkt.
 - Ergebnis je Datei: Kategorie (oder keine), Konfidenz, zweitbeste Kategorie mit Konfidenz, Quelle (`rules` | `llm`), Treffer.
 
 ## Extrahierte Felder und Platzhalter
@@ -194,7 +194,7 @@ model          = "qwen2.5:7b"               # Beispiel; README empfiehlt Modelle
 timeout        = "60s"
 max_input_chars = 6000                       # Textauszug je Anfrage
 tasks          = ["category", "fields", "title"]
-max_confidence = 0.85
+max_confidence = 0.75                       # unter [classify] min_confidence (0,8): LLM-Treffer führen nie allein zu Aktionen
 ```
 Profile können `[classify]`- und `[llm]`-Werte überschreiben (Phase-5-Mechanismus).
 
@@ -297,3 +297,12 @@ Ordner: echter Downloads-Ordner, 60 Dateien (42 lesbare Dokumente, 18 nicht unte
 - OCR: 2 Dateien wurden per OCR gelesen (Windows-OCR, Sprachpaket de vorhanden).
 
 **Noch offen:** Lauf mit lokalem LLM (Ollama ist auf diesem PC nicht installiert; Modellwahl 0c), Stichprobe von 100 Dateien (der Ordner hat nur 60) und ein echter Cloud-only-Platzhalter.
+
+## Manueller Test mit LLM (2026-10-05, qwen2.5:3b)
+
+Gleicher Downloads-Ordner (60 Dateien), isolierter Index, `[llm] enabled = true`, Modell `qwen2.5:3b`. 36 LLM-Anfragen, Dauer 9:53 min (ca. 16 s je Datei auf CPU).
+
+- Kategorien: 15 statt 10, „Zum Prüfen“ 1 statt 6. Die 5 regelbasierten Treffer sind unverändert plausibel.
+- **Von 10 LLM-Kategorien (Konfidenz 0,85) waren nur 2 richtig** (Versicherungsbescheid, Vollmacht). Falsch: Wohnungsgeberbestätigung → `auftragsbestaetigung`, Fahrschein → `gehaltsabrechnung`, Abschlussarbeit-Erklärung und Medienkonzept → `medizin`, ICE-Fahrkarte → `rechnung`, zwei Gestaltungsempfehlungen → `vertrag`; die Auslandskrankenversicherung → `vertrag` ist fraglich.
+- Folge: Mit `max_confidence = 0.85` ≥ `min_confidence = 0.8` hätten diese Treffer Aktionen ausgelöst. Der Default ist jetzt **0,75**; LLM-Kategorien landen in „Zum Prüfen“, bis der Nutzer den Wert anhebt. Ein Test sichert `llm.max_confidence < classify.min_confidence`.
+- `qwen2.5:7b` ist nicht ausgewertet: der Lauf wurde wegen knappen Arbeitsspeichers abgebrochen. Die Modellwahl (Offene Frage 3) bleibt offen.

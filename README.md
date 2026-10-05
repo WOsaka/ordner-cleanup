@@ -284,7 +284,7 @@ model           = "qwen2.5:7b"
 timeout         = "60s"
 max_input_chars = 6000
 tasks           = ["category", "fields", "title"]
-max_confidence  = 0.85
+max_confidence  = 0.75                   # unter min_confidence: LLM-Kategorien landen in „Zum Prüfen“
 ```
 
 **OCR** nutzt die in Windows eingebaute Texterkennung. Fehlt das Sprachpaket, gibt es einen Hinweis (Windows-Einstellungen → Zeit und Sprache → Sprache und Region → Sprache hinzufügen, mit „Texterkennung“), die betroffenen Dateien bleiben unklassifiziert und werden beim nächsten Lauf erneut versucht. PDF-Seiten rendert ein Hilfsprozess (`ordner-cleanup ocr-worker`, versteckt), weil `Windows.Data.Pdf` den Prozess beim Beenden abstürzen lässt.

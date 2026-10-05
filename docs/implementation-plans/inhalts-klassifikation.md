@@ -215,7 +215,7 @@ model           = "qwen2.5:7b"     # Default nach Spike 0c
 timeout         = "60s"
 max_input_chars = 6000
 tasks           = ["category", "fields", "title"]
-max_confidence  = 0.85
+max_confidence  = 0.75
 ```
 Profil (Erweiterung von Phase 5): `classify = true`, `llm = true|false` (überschreibt `[llm] enabled`), `categories_file = "…"`. Das präzisiert die Spec („Profile können `[classify]`/`[llm]` überschreiben“) auf die drei Werte, die sich je Ordner sinnvoll unterscheiden. Weitere Werte kommen später, wenn Bedarf besteht.
 

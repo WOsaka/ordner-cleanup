@@ -204,7 +204,7 @@ impl Default for LlmConfig {
             timeout: "60s".into(),
             max_input_chars: 6000,
             tasks: LLM_TASKS.map(String::from).to_vec(),
-            max_confidence: 0.85,
+            max_confidence: 0.75,
         }
     }
 }
@@ -943,6 +943,10 @@ muell = 1",
         assert!(!c.llm.enabled);
         assert_eq!(c.llm.endpoint, "http://127.0.0.1:11434");
         assert_eq!(c.llm.timeout_secs(), 60);
+        assert!(
+            c.llm.max_confidence < c.classify.min_confidence,
+            "LLM-Kategorien dürfen allein keine Aktion auslösen"
+        );
         assert!(c.classify.worker_threads() >= 1);
         Config::parse("").unwrap();
     }
