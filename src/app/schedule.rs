@@ -146,6 +146,7 @@ mod tests {
     use crate::runlog::RunStatus;
     use crate::schedule::{Entry, StoredTrigger};
     use chrono::NaiveDate;
+    use std::path::PathBuf;
 
     fn row(profile: &str, state: TaskState) -> Row {
         Row {
