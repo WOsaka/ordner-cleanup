@@ -18,7 +18,7 @@ pub struct Section {
     pub title: &'static str,
 }
 
-pub const SECTIONS: [Section; 13] = [
+pub const SECTIONS: [Section; 14] = [
     Section {
         id: "overview",
         title: "Übersicht",
@@ -30,6 +30,10 @@ pub const SECTIONS: [Section; 13] = [
     Section {
         id: "template",
         title: "Soll/Ist",
+    },
+    Section {
+        id: "content",
+        title: "Inhalte",
     },
     Section {
         id: "tree",
@@ -89,7 +93,16 @@ struct Page<'a> {
 /// JSON für den Einbau in `<script type="application/json">`: `<` wird escaped,
 /// damit weder `</script>` noch `<!--` im Dokument entstehen kann.
 fn embed_json(report: &Report) -> Result<String> {
-    Ok(serde_json::to_string(report)?
+    // Im HTML nur die gekürzte Prüfliste, ohne die Zeilen je Datei (die stehen in CSV/JSON).
+    let json = match &report.content {
+        Some(content) => {
+            let mut shortened = report.clone();
+            shortened.content = Some(content.for_html());
+            serde_json::to_string(&shortened)?
+        }
+        None => serde_json::to_string(report)?,
+    };
+    Ok(json
         .replace('<', "\\u003c")
         .replace('\u{2028}', "\\u2028")
         .replace('\u{2029}', "\\u2029"))

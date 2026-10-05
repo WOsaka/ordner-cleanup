@@ -223,6 +223,7 @@ mod tests {
             plans: vec![],
             errors: vec![],
             notified: false,
+            review: None,
         }
     }
 

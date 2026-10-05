@@ -48,6 +48,7 @@ pub(super) fn run_command(args: &RunArgs) -> Result<i32> {
         plans: Vec::new(),
         errors: Vec::new(),
         notified: false,
+        review: None,
     };
     let code = match execute(name, &target, &mut record) {
         Ok(code) => code,
@@ -126,7 +127,7 @@ fn execute(name: &str, target: &Target, record: &mut RunRecord) -> Result<i32> {
             None
         }
     };
-    let res = run_scan(&ScanJob {
+    let mut res = run_scan(&ScanJob {
         root: &root,
         config: &target.config,
         reset_index: false,
@@ -150,6 +151,20 @@ fn execute(name: &str, target: &Target, record: &mut RunRecord) -> Result<i32> {
             record.errors.push(format!("Verlauf: {e:#}"));
         }
         None => {}
+    }
+
+    if target
+        .profile
+        .as_ref()
+        .is_some_and(|p| p.profile.classify == Some(true))
+    {
+        match super::classify::classify_for_run(&mut res.index, &root, &target.config) {
+            Ok(review) => record.review = Some(review),
+            Err(e) => {
+                partial = true;
+                record.errors.push(format!("classify: {e:#}"));
+            }
+        }
     }
 
     let stamp = stamp();
@@ -233,6 +248,7 @@ fn make_plan(name: &str, kind: &str, stamp: &str) -> PlanRecord {
             rules: None,
             rule: Vec::new(),
             out: out_arg,
+            no_classify: false,
         }),
         "junk" => plan::plan_junk_command(&PlanJunkArgs {
             path: None,

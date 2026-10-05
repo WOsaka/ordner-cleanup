@@ -32,6 +32,8 @@ pub struct FileRecord {
     pub size: i64,
     pub mtime: i64,
     pub ctime: Option<i64>,
+    /// Nur beim ersten Einfügen gesetzt (Schema v3); `None` = schon beim ersten Scan da.
+    pub first_seen: Option<i64>,
     pub attrs: u32,
     pub cloud_only: bool,
     pub is_link: bool,
@@ -197,8 +199,8 @@ impl Index {
             let mut stmt = tx.prepare_cached(
                 "INSERT INTO files(dir_key, path, path_key, name, ext, size, mtime, ctime, attrs,
                                    cloud_only, is_link, link_target, partial_hash, full_hash,
-                                   hash_status, generation)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
+                                   hash_status, generation, first_seen)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
                  ON CONFLICT(path_key) DO UPDATE SET
                    dir_key=excluded.dir_key, path=excluded.path, name=excluded.name,
                    ext=excluded.ext, size=excluded.size, mtime=excluded.mtime,
@@ -224,11 +226,25 @@ impl Index {
                     f.partial_hash,
                     f.full_hash,
                     f.hash_status,
-                    generation
+                    generation,
+                    f.first_seen
                 ])?;
             }
         }
         Ok(tx.commit()?)
+    }
+
+    /// War die Wurzel schon einmal vollständig gescannt? (Grundlage für `first_seen`.)
+    pub fn root_scanned_before(&self, dir_key: &str) -> Result<bool> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT 1 FROM meta WHERE key = ?1",
+                [format!("root_complete:{dir_key}")],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
     }
 
     pub fn record_error(&mut self, run: &RootRun, err: &ScanErrorRecord) -> Result<()> {
@@ -257,6 +273,11 @@ impl Index {
         let (lo, hi) = paths::prefix_range(&run.path_key);
         let tx = self.conn_mut().transaction()?;
         if status == RootStatus::Complete {
+            tx.execute(
+                "INSERT INTO meta(key, value) VALUES(?1, '1')
+                 ON CONFLICT(key) DO UPDATE SET value = '1'",
+                [format!("root_complete:{}", run.path_key)],
+            )?;
             for table in ["files", "dirs"] {
                 tx.execute(
                     &format!(
@@ -316,6 +337,10 @@ impl Index {
             )?;
         }
         tx.execute("DELETE FROM errors WHERE root_key = ?1", [dir_key])?;
+        tx.execute(
+            "DELETE FROM meta WHERE key = ?1",
+            [format!("root_complete:{dir_key}")],
+        )?;
         tx.commit()?;
         Ok(true)
     }

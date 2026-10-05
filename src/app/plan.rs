@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use bytesize::ByteSize;
 
-use super::profile;
+use super::{classify, profile};
 use super::{
     index_age_note, index_path, normalize, now_rfc3339, now_ticks, onedrive_roots_from_env,
     onedrive_warning, resolve_root,
@@ -20,18 +20,21 @@ use crate::change::junk::{plan_junk, JunkOptions};
 use crate::change::limits;
 use crate::change::plan::Plan;
 use crate::change::protect::{ProtectPaths, Protector};
-use crate::change::rules::{plan_rules, CachedExif, LiveContent, RulesEnv, RulesPlan};
+use crate::change::rules::{
+    plan_rules, CachedExif, ContentLookup, LiveContent, NoContent, RulesEnv, RulesPlan,
+};
 use crate::change::versions::{plan_versions, VersionsOptions};
 use crate::cli::{
     PlanArchiveArgs, PlanDedupeArgs, PlanEmptyDirsArgs, PlanJunkArgs, PlanRulesArgs,
     PlanVersionsArgs,
 };
 use crate::config::{Config, BUILTIN_JUNK_CATEGORIES};
+use crate::content::classify::Classifier;
 use crate::index::Index;
 use crate::paths;
 use crate::platform::windows::downloads_dir;
 use crate::report;
-use crate::rules::RuleSet;
+use crate::rules::{KnownCategories, RuleSet};
 
 /// Alles, was jeder Planer braucht.
 struct Prepared {
@@ -319,6 +322,18 @@ fn rules_headline(result: &RulesPlan) -> String {
             result.unmatched
         ));
     }
+    if result.review > 0 {
+        lines.push(format!(
+            "  zum Prüfen (Kategorie zu unsicher, keine Aktion): {} Dateien",
+            result.review
+        ));
+    }
+    if result.not_classified > 0 {
+        lines.push(format!(
+            "  nicht klassifiziert (keine Aktion): {} Dateien",
+            result.not_classified
+        ));
+    }
     lines.join("\n")
 }
 
@@ -333,13 +348,42 @@ pub(super) fn plan_rules_command(args: &PlanRulesArgs) -> Result<i32> {
     if !rules_path.is_file() {
         bail!("{}", missing_rules_message(&rules_path));
     }
-    let mut rules = RuleSet::load(&rules_path)?;
+    // Kategorien zuerst: Fehler in der categories.toml brechen vor den Regeln ab, aber nur,
+    // wenn Regeln Inhalte brauchen (Regeln ohne Inhaltsbedingung kommen ohne sie aus).
+    let defs = classify::load_defs(&config);
+    let known = match &defs {
+        Ok(d) => KnownCategories::Names(d.names()),
+        Err(e) => KnownCategories::Unavailable(format!("{e:#}")),
+    };
+    let mut rules = RuleSet::load(&rules_path, &known)?;
     if !args.rule.is_empty() {
         rules = rules.select(&args.rule)?;
     }
+    let uses_content = rules
+        .rules
+        .iter()
+        .any(|r| r.needs_content() || r.needs_text());
+    let classifier = match defs {
+        Ok(d) => Some(Classifier::new(d)),
+        Err(e) if uses_content => return Err(e),
+        Err(_) => None,
+    };
     let mut p = open_prepared(root, config)?;
     let created = now_rfc3339();
     let content = LiveContent::default();
+    let lookup = classifier.as_ref().map(|c| classify::CachedLookup {
+        root: &p.root,
+        config: &p.config,
+        classifier: c,
+        classify: !args.no_classify,
+        notes: Default::default(),
+    });
+    let live_text = classify::LiveText { config: &p.config };
+    let no_content = NoContent;
+    let content_lookup: &dyn ContentLookup = match &lookup {
+        Some(l) => l,
+        None => &no_content,
+    };
     let mut result = plan_rules(
         &mut p.index,
         &p.root,
@@ -350,8 +394,16 @@ pub(super) fn plan_rules_command(args: &PlanRulesArgs) -> Result<i32> {
             content: &content,
             created: &created,
             now_ticks: now_ticks(),
+            content_lookup,
+            text: &live_text,
+            min_confidence: p.config.classify.min_confidence as f32,
         },
     )?;
+    if let Some(l) = &lookup {
+        result
+            .notes
+            .extend(l.notes.lock().map(|n| n.clone()).unwrap_or_default());
+    }
     // Der Cache behält nur Einträge zu Dateien, die der Index noch kennt.
     let _ = p.index.exif_prune(&paths::dir_key(&p.root));
     if !args.rule.is_empty() {
@@ -445,7 +497,12 @@ mod tests {
         assert!(text.contains("{exif.date:%Y}"), "{text}");
         // Das Beispiel muss selbst eine gültige Regeldatei sein.
         let example = text.split("\n\n").skip(1).collect::<Vec<_>>().join("\n\n");
-        RuleSet::parse(&example, Path::new("beispiel.toml")).unwrap();
+        RuleSet::parse(
+            &example,
+            Path::new("beispiel.toml"),
+            &KnownCategories::builtin(),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -480,6 +537,8 @@ mod tests {
             ],
             unmatched: 5,
             notes: vec![],
+            review: 0,
+            not_classified: 0,
         };
         let text = rules_headline(&result);
         assert!(

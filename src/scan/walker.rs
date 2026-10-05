@@ -35,6 +35,8 @@ pub struct WalkCtx<'a> {
     /// Vorzustand aus dem Index; unveränderte Dateien behalten ihre Hashes.
     pub prev: &'a HashMap<String, PrevFile>,
     pub tx: &'a Sender<ScanEvent>,
+    /// `first_seen` für neue Schlüssel setzen (Wurzel war schon einmal vollständig gescannt).
+    pub first_seen: Option<i64>,
 }
 
 pub fn error_kind(e: &io::Error) -> &'static str {
@@ -189,6 +191,7 @@ fn file_record(
     is_link: bool,
 ) -> FileRecord {
     let path_key = paths::path_key(path);
+    let first_seen = ctx.first_seen.filter(|_| !ctx.prev.contains_key(&path_key));
     let size = if is_link { 0 } else { entry.size as i64 };
     // Hashes nur übernehmen, wenn Größe und Änderungsdatum gleich sind und der letzte
     // Versuch nicht fehlgeschlagen ist (gesperrte Dateien werden erneut versucht).
@@ -209,6 +212,7 @@ fn file_record(
         size,
         mtime: entry.mtime,
         ctime: Some(entry.ctime),
+        first_seen,
         attrs: entry.attrs.0,
         cloud_only: !is_link && entry.attrs.is_cloud_only(),
         is_link,

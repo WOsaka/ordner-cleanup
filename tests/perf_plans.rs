@@ -10,12 +10,14 @@ use ordner_cleanup::change::archive::{plan_archive, ArchiveOptions};
 use ordner_cleanup::change::empty_dirs::plan_empty_dirs;
 use ordner_cleanup::change::junk::{plan_junk, JunkOptions};
 use ordner_cleanup::change::protect::{ProtectPaths, Protector};
-use ordner_cleanup::change::rules::{plan_rules, CachedExif, LiveContent, RulesEnv};
+use ordner_cleanup::change::rules::{
+    plan_rules, CachedExif, LiveContent, NoContent, NoText, RulesEnv,
+};
 use ordner_cleanup::change::versions::{plan_versions, VersionsOptions};
 use ordner_cleanup::config::Config;
 use ordner_cleanup::index::{DirRecord, FileRecord, Index};
 use ordner_cleanup::paths;
-use ordner_cleanup::rules::RuleSet;
+use ordner_cleanup::rules::{KnownCategories, RuleSet};
 
 const LIMIT: Duration = Duration::from_secs(10);
 const TICKS_PER_SEC: i64 = 10_000_000;
@@ -239,7 +241,12 @@ fn plan_rules_schafft_100000_dateien_mit_10_regeln_ohne_exif_in_unter_10_sekunde
     std::fs::create_dir_all(&root).unwrap();
     let mut index = timed("Index aufbauen (100.000 Dateien)", || build(&root));
     let protector = Protector::new(&root, &Config::default(), &ProtectPaths::from_env());
-    let rules = RuleSet::parse(TEN_RULES, Path::new("rules.toml")).unwrap();
+    let rules = RuleSet::parse(
+        TEN_RULES,
+        Path::new("rules.toml"),
+        &KnownCategories::builtin(),
+    )
+    .unwrap();
     let content = LiveContent::default();
 
     let result = timed("plan rules", || {
@@ -253,6 +260,9 @@ fn plan_rules_schafft_100000_dateien_mit_10_regeln_ohne_exif_in_unter_10_sekunde
                 content: &content,
                 created: "t",
                 now_ticks: NOW,
+                content_lookup: &NoContent,
+                text: &NoText,
+                min_confidence: 0.8,
             },
         )
         .unwrap()
@@ -329,6 +339,7 @@ fn plan_rules_mit_10000_jpegs_liest_beim_zweiten_lauf_aus_dem_cache() {
     let rules = RuleSet::parse(
         "[[rules]]\nname = \"fotos\"\next = [\"jpg\"]\ntarget = \"Fotos/{exif.date:%Y}/\"\n",
         Path::new("rules.toml"),
+        &KnownCategories::builtin(),
     )
     .unwrap();
     let content = LiveContent::default();
@@ -343,6 +354,9 @@ fn plan_rules_mit_10000_jpegs_liest_beim_zweiten_lauf_aus_dem_cache() {
                 content: &content,
                 created: "t",
                 now_ticks: NOW,
+                content_lookup: &NoContent,
+                text: &NoText,
+                min_confidence: 0.8,
             },
         )
         .unwrap()

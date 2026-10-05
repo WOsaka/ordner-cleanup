@@ -35,10 +35,20 @@ impl std::fmt::Display for ExifError {
 impl std::error::Error for ExifError {}
 
 /// Lesen mit fester Obergrenze: ab `limit` Bytes ein Fehler statt weiterer Daten.
-struct LimitedReader<R> {
+pub(crate) struct LimitedReader<R> {
     inner: R,
     pos: u64,
     limit: u64,
+}
+
+impl<R> LimitedReader<R> {
+    pub(crate) fn new(inner: R, limit: u64) -> Self {
+        Self {
+            inner,
+            pos: 0,
+            limit,
+        }
+    }
 }
 
 impl<R: Read + Seek> Read for LimitedReader<R> {
@@ -66,7 +76,9 @@ pub fn read_taken(path: &Path) -> Result<Option<NaiveDateTime>, ExifError> {
     read_taken_limited(path, MAX_READ)
 }
 
-fn read_taken_limited(path: &Path, limit: u64) -> Result<Option<NaiveDateTime>, ExifError> {
+/// Öffnet eine lokale Datei zum Lesen mit Obergrenze. Cloud-only-Platzhalter und Links
+/// werden live erkannt und nie geöffnet (kein Download).
+pub(crate) fn open_local(path: &Path, limit: u64) -> Result<LimitedReader<File>, ExifError> {
     let meta = std::fs::symlink_metadata(paths::extended(path)).map_err(ExifError::Io)?;
     {
         use std::os::windows::fs::MetadataExt;
@@ -79,11 +91,11 @@ fn read_taken_limited(path: &Path, limit: u64) -> Result<Option<NaiveDateTime>, 
         }
     }
     let file: File = hasher::open_read(path).map_err(ExifError::Io)?;
-    let mut reader = BufReader::new(LimitedReader {
-        inner: file,
-        pos: 0,
-        limit,
-    });
+    Ok(LimitedReader::new(file, limit))
+}
+
+fn read_taken_limited(path: &Path, limit: u64) -> Result<Option<NaiveDateTime>, ExifError> {
+    let mut reader = BufReader::new(open_local(path, limit)?);
     // Ein Panic im Parser darf nie den Lauf beenden.
     let parsed = catch_unwind(AssertUnwindSafe(|| {
         exif::Reader::new().read_from_container(&mut reader)

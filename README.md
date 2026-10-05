@@ -1,10 +1,10 @@
 # ordner-cleanup
 
-Analyse und sicheres Aufräumen von Ordnersystemen unter Windows 10/11. `scan` und `report` (Phase 1) sind rein lesend: Größenbaum, Dateitypen, Alter, exakte Duplikate, ähnliche Dateien, Strukturprobleme und Problemdateien als HTML, JSON und CSV. Phase 2 (`plan`, `apply`, `undo`, `runs`, `purge`) verschiebt exakte Duplikate nach einem prüfbaren Plan und einer Bestätigung in eine Quarantäne und kann jeden Lauf zurückdrehen. Phase 3 ergänzt die Aufräumaktionen `plan junk`, `empty-dirs`, `archive` und `versions` auf demselben Fundament. Phase 5 bringt Verlauf und Health-Score, Profile, geplante Läufe mit Benachrichtigung und Vorlagen für eine Zielstruktur. Es gibt keine Netzwerkzugriffe und keine Telemetrie.
+Analyse und sicheres Aufräumen von Ordnersystemen unter Windows 10/11. `scan` und `report` (Phase 1) sind rein lesend: Größenbaum, Dateitypen, Alter, exakte Duplikate, ähnliche Dateien, Strukturprobleme und Problemdateien als HTML, JSON und CSV. Phase 2 (`plan`, `apply`, `undo`, `runs`, `purge`) verschiebt exakte Duplikate nach einem prüfbaren Plan und einer Bestätigung in eine Quarantäne und kann jeden Lauf zurückdrehen. Phase 3 ergänzt die Aufräumaktionen `plan junk`, `empty-dirs`, `archive` und `versions` auf demselben Fundament. Phase 5 bringt Verlauf und Health-Score, Profile, geplante Läufe mit Benachrichtigung und Vorlagen für eine Zielstruktur. Phase 6a (`classify`) liest Inhalt und Metadaten (PDF, Office, EXIF, Video, OCR, optional ein lokales LLM) und macht Kategorie und Felder für Regeln und Bericht nutzbar. Es gibt keine Netzwerkzugriffe und keine Telemetrie.
 
 Ausführliche Gesamtdokumentation (Einrichtung, Bedienung, alle Features): [docs/dokumentation.md](docs/dokumentation.md).
 
-Spec Phase 1: [docs/features/scan-analyse-bericht.md](docs/features/scan-analyse-bericht.md), Plan: [docs/implementation-plans/scan-analyse-bericht.md](docs/implementation-plans/scan-analyse-bericht.md). Spec Phase 2: [docs/features/aenderungsplan-apply-undo.md](docs/features/aenderungsplan-apply-undo.md), Plan: [docs/implementation-plans/aenderungsplan-apply-undo.md](docs/implementation-plans/aenderungsplan-apply-undo.md). Spec Phase 3: [docs/features/aufraeumaktionen.md](docs/features/aufraeumaktionen.md), Plan: [docs/implementation-plans/aufraeumaktionen.md](docs/implementation-plans/aufraeumaktionen.md). Roadmap: [docs/roadmap.md](docs/roadmap.md).
+Spec Phase 1: [docs/features/scan-analyse-bericht.md](docs/features/scan-analyse-bericht.md), Plan: [docs/implementation-plans/scan-analyse-bericht.md](docs/implementation-plans/scan-analyse-bericht.md). Spec Phase 2: [docs/features/aenderungsplan-apply-undo.md](docs/features/aenderungsplan-apply-undo.md), Plan: [docs/implementation-plans/aenderungsplan-apply-undo.md](docs/implementation-plans/aenderungsplan-apply-undo.md). Spec Phase 3: [docs/features/aufraeumaktionen.md](docs/features/aufraeumaktionen.md), Plan: [docs/implementation-plans/aufraeumaktionen.md](docs/implementation-plans/aufraeumaktionen.md). Spec Phase 6a: [docs/features/inhalts-klassifikation.md](docs/features/inhalts-klassifikation.md), Plan: [docs/implementation-plans/inhalts-klassifikation.md](docs/implementation-plans/inhalts-klassifikation.md). Roadmap: [docs/roadmap.md](docs/roadmap.md).
 
 ## Verwendung
 
@@ -235,6 +235,64 @@ Abweichungen sind: fehlender Pflicht-Ordner, unerwarteter Ordner, Name passt zu 
 
 Ablageorte: `history.db`, `scan.lock`, `schedules.json`, `reports\<profil>\`, `plans\<profil>\` und `runs\<profil>.jsonl` liegen im Datenordner (`%LOCALAPPDATA%\ordner-cleanup`). Der Verlauf enthält nur Wurzel, Namen der Ordner der ersten Ebene und Zahlen; alles bleibt lokal.
 
+## Inhalte klassifizieren (Phase 6a)
+
+Dateien wie `scan0012.pdf` oder `IMG_4711.HEIC` bekommen eine Kategorie und Felder aus ihrem Inhalt, die Regeln und Bericht nutzen. Alles läuft lokal; es wird nie Volltext gespeichert.
+
+```
+ordner-cleanup classify <pfad> | --profile <name> [--no-llm] [--force] [--ext pdf,jpg] [--only <glob>] [--clear]
+ordner-cleanup plan rules <pfad> [--no-classify] …
+```
+
+- `classify` braucht einen vorherigen `scan` (ohne Index: Fehler mit Hinweis). Es liest nur, ist inkrementell (Cache-Schlüssel: Pfad, Größe, mtime, Extraktor-Version), parallel, mit niedriger Priorität und mit Strg+C abbrechbar; bis dahin Analysiertes bleibt im Cache. Ändern sich `categories.toml` oder das LLM-Modell, werden die betroffenen Dateien neu zugeordnet (OCR-Text kommt aus dem Cache). `--clear` löscht Inhalts- und OCR-Text-Cache der Wurzel, `--only` wählt per Glob eine Auswahl zum Abstimmen der Kategorien.
+- Quellen: PDF (Textlayer, Metadaten), Office (docx/xlsx/pptx), Bilder (EXIF: Kamera, GPS, Ort offline über eingebettete GeoNames-Daten), Videos (MP4/MOV `mvhd`-Datum), OCR (Windows-OCR) für gescannte PDFs und Bilder ohne Kamera-EXIF bzw. auf `ocr_image_globs`. Cloud-only-Dateien werden nie geöffnet. Verschlüsselte oder beschädigte Dateien gelten als `unreadable` und werden gecacht.
+- Kategorien: eingebaut `rechnung`, `mahnung`, `angebot`, `auftragsbestaetigung`, `quittung`, `vertrag`, `kontoauszug`, `gehaltsabrechnung`, `steuer`, `versicherung`, `medizin`, `bescheinigung`, `foto`, `screenshot`. Eigene Kategorien in `categories.toml` neben der `config.toml` (gleicher Name ersetzt die eingebaute vollständig, `disable_builtin` schaltet ab, `[[senders]]` benennt bekannte Absender); Fehler nennen Datei, Zeile und Kategorie.
+- Konfidenz: je Kategorie die Summe der Gewichte aller verschiedenen Treffer (Schlüsselwörter, Muster, auch im Dateinamen; Ausschlusswörter setzen auf 0). `konfidenz = min(1, best/8) · (1 − (second/best)²)`, auf 2 Stellen gerundet; Standardschwelle `[classify] min_confidence = 0.8`. Unsichere Dateien erzeugen nie eine Aktion: Sie stehen im Plan als `skipped: low-confidence` (mit den Top-2-Kategorien) und im Bericht unter „Zum Prüfen“.
+- Regeln (`rules.toml`): neue Bedingungen `category` (Name oder Liste), `min_confidence`, `category_source = "rules"`, `fields`, `fields_regex`, `text_regex` (Text wird nur für Kandidaten gelesen, nie gespeichert), `min_dwell` (Zeit seit Ankunft im Ordner: das spätere von Erstellzeit und `first_seen`). Neue Platzhalter `{category}`, `{doc.date:%Y-%m-%d}`, `{doc.sender}`, `{doc.number}`, `{doc.amount}`, `{doc.title}`, `{doc.author}`, `{doc.pages}`, `{exif.camera}`, `{exif.city}`, `{exif.country}`, `{exif.lat}`, `{exif.lon}`, `{video.date:%Y}` mit Ersatzwert `{doc.sender|Unbekannt}` (auch `{doc.number|{name}}`). Fehlt ein Feld ohne Ersatz: `skipped: missing-field`. Die Regex-Engine kennt kein Look-around; „nicht DE“ schreibt man als `'^(?:[^D].|D[^E])$'`.
+
+```toml
+[[rules]]
+name           = "rechnungen"
+glob           = "Downloads/**"
+category       = ["rechnung", "mahnung"]
+min_confidence = 0.85
+min_dwell      = "14d"
+target         = "Finanzen/Rechnungen/{doc.date:%Y}/{doc.date:%Y-%m-%d}_{doc.sender|Unbekannt}_{doc.number|{name}}.{ext}"
+```
+
+- `plan rules` klassifiziert fehlende oder veraltete Einträge selbst (Hinweis in der Ausgabe); `--no-classify` schaltet das ab, betroffene Dateien erscheinen als `skipped: not-classified`.
+- Profile: `classify = true` führt `run` nach dem Scan `classify` aus (Fehler machen den Lauf nur `partial`); `llm = true|false` überschreibt `[llm] enabled`, `categories_file` setzt eine eigene Kategorie-Datei. Die Benachrichtigung nennt „N Dateien zum Prüfen“, wenn es mehr sind als beim letzten Lauf.
+- Bericht: Abschnitt „Inhalte“ (Kategorien, Quellen, nicht lesbar, Zum Prüfen mit höchstens 200 Einträgen im HTML, Fotos nach Ort und Kamera), `content.csv` und JSON mit allen Dateien.
+
+```toml
+[classify]
+categories_file = "categories.toml"
+min_confidence  = 0.8
+max_file_size   = "100MB"
+ocr             = true
+ocr_languages   = ["de", "en"]
+ocr_max_pages   = 5
+ocr_image_globs = ["**/Scans/**", "**/*scan*", "**/*dokument*"]
+cache_ocr_text  = true
+max_text_chars  = 200000
+threads         = 0          # 0 = halbe Kernanzahl
+
+[llm]
+enabled         = false
+endpoint        = "http://127.0.0.1:11434"   # nur Loopback, sonst Config-Fehler
+model           = "qwen2.5:7b"
+timeout         = "60s"
+max_input_chars = 6000
+tasks           = ["category", "fields", "title"]
+max_confidence  = 0.75                   # unter min_confidence: LLM-Kategorien landen in „Zum Prüfen“
+```
+
+**OCR** nutzt die in Windows eingebaute Texterkennung. Fehlt das Sprachpaket, gibt es einen Hinweis (Windows-Einstellungen → Zeit und Sprache → Sprache und Region → Sprache hinzufügen, mit „Texterkennung“), die betroffenen Dateien bleiben unklassifiziert und werden beim nächsten Lauf erneut versucht. PDF-Seiten rendert ein Hilfsprozess (`ordner-cleanup ocr-worker`, versteckt), weil `Windows.Data.Pdf` den Prozess beim Beenden abstürzen lässt.
+
+**Lokales LLM (optional, Ollama):** `ollama pull qwen2.5:7b`, dann `[llm] enabled = true`. Pro Datei höchstens eine Anfrage; das Modell schlägt nur Kategorie (bei zu geringer Konfidenz), fehlende Felder und einen Titel vor, die Antwort wird gegen Schema, Kategorienliste und Plausibilität geprüft. Rechnen Sie auf CPU mit 2 bis 10 s je Dokument (Ergebnisse werden gecacht; `--no-llm` schaltet ab). Der Endpoint muss auf `127.0.0.1`, `::1` oder `localhost` zeigen, Proxy-Variablen und Weiterleitungen werden ignoriert. Ist Ollama nicht erreichbar, läuft die regelbasierte Klassifikation durch und die Zusammenfassung warnt einmal.
+
+**Datenschutz:** Der Inhalts-Cache enthält nur Kategorie, Konfidenz, Treffer und Felder (Datum, Absender, Nummer, Betrag, Titel, Ort), die sensibel sein können. OCR-Text liegt nur mit Windows-DPAPI verschlüsselt (an das Benutzerkonto gebunden) im Index, abschaltbar mit `cache_ocr_text = false`. `classify --clear` löscht beides. Ortsnamen stammen offline aus GeoNames (`cities15000`, [CC BY 4.0](https://www.geonames.org/), Namensnennung: GeoNames, geonames.org).
+
 ## Entwicklung
 
 Voraussetzungen: Rust (stable, MSVC-Toolchain, wird per `rust-toolchain.toml` gewählt) und die Visual Studio Build Tools.
@@ -281,6 +339,8 @@ Kennzahlen, Score und Verlauf (Phase 5), gemessen am 2026-10-04 (Release-Build, 
 Der Anteil am Scan hängt von dessen Geschwindigkeit ab: Die Kennzahlen kosten rund 2 µs je Datei, der Scan im Messaufbau (kleine Dateien aus dem Dateicache) nur etwa 17 µs. Bei einem Scan ab etwa 40 µs je Datei, wie er auf kalter Platte, mit größeren Dateien oder im OneDrive-Ordner üblich sein dürfte (nicht gemessen), bliebe der Anteil unter 5 %; der Messaufbau erreicht das Ziel nicht.
 
 Die Messung ist als ignorierter Test abgelegt: `cargo test --release --test perf_plans -- --ignored --nocapture`. Den Testbaum erzeugt `cargo run --release --example gen-tree -- <zielordner> [anzahl]`. Der Baum besteht aus kleinen Dateien; bei großen Dateien dominiert das Hashen, das über Teil-Hash und Größengruppen begrenzt wird. Manuell geprüft am 2026-10-03: Scan von `OneDrive\Dokumente` (30 Dateien, davon 1 Cloud-only) ließ Größen, Zeitstempel und Attribute unverändert, die Cloud-only-Datei blieb Cloud-only.
+
+Inhaltsklassifikation (Phase 6a), `cargo test --release --test perf_classify -- --ignored --nocapture`: 10.000 Dateien, erster `classify` 0,23 s (nur Textdateien, nicht unterstützt), Wiederholung aus dem Cache 0,08 s. Textlayer-PDFs, OCR (ca. 1 bis 2 s je Seite) und LLM sind nicht als Zahl gemessen.
 
 ## Lizenz
 

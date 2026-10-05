@@ -62,7 +62,9 @@ pub fn decide(
                 .filter(|p| p.error.is_some())
                 .map(|p| p.kind.as_str())
                 .collect();
-            if !(dropped || low || plans > 0 || !failed_plans.is_empty()) {
+            let review = record.review.unwrap_or(0);
+            let new_review = review > previous.and_then(|p| p.review).unwrap_or(0);
+            if !(dropped || low || plans > 0 || !failed_plans.is_empty() || new_review) {
                 return None;
             }
             let mut parts = Vec::new();
@@ -79,6 +81,12 @@ pub fn decide(
             }
             if !failed_plans.is_empty() {
                 parts.push(format!("Plan fehlgeschlagen: {}", failed_plans.join(", ")));
+            }
+            if new_review {
+                parts.push(match review {
+                    1 => "1 Datei zum Prüfen".to_string(),
+                    n => format!("{n} Dateien zum Prüfen"),
+                });
             }
             Some(Notification {
                 title: profile.to_string(),
@@ -109,6 +117,7 @@ mod tests {
             plans: vec![],
             errors: vec![],
             notified: false,
+            review: None,
         }
     }
 
@@ -232,5 +241,27 @@ mod tests {
             score_below: 0,
         };
         assert_eq!(decide("p", &r, None, &off), None);
+    }
+
+    #[test]
+    fn neue_dateien_zum_pruefen_loesen_eine_meldung_aus() {
+        let mut now = record(RunStatus::Ok);
+        now.review = Some(19);
+        let n = decide_default(&now, None).unwrap();
+        assert!(n.body.contains("19 Dateien zum Prüfen"), "{}", n.body);
+        let mut prev = record(RunStatus::Ok);
+        prev.review = Some(19);
+        assert_eq!(
+            decide_default(&now, Some(&prev)),
+            None,
+            "nicht mehr als zuvor"
+        );
+        now.review = Some(20);
+        assert!(decide_default(&now, Some(&prev)).is_some());
+        now.review = Some(1);
+        assert!(decide_default(&now, None)
+            .unwrap()
+            .body
+            .contains("1 Datei zum Prüfen"));
     }
 }

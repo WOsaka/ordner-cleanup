@@ -1,6 +1,6 @@
 //! Regeldatei (TOML): Rohstrukturen mit Zeilenangaben und Umwandlung in geprüfte Regeln.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -8,18 +8,27 @@ use regex::Regex;
 use serde::Deserialize;
 use toml::Spanned;
 
-use super::condition::{compile_glob, Conditions};
+use super::condition::{compile_glob, CategorySource, Conditions};
 use super::normalize::Normalize;
 use super::template::Template;
-use super::{ExifFallback, Rule, RuleSet, RulesError};
+use super::{ExifFallback, KnownCategories, Rule, RuleSet, RulesError};
 use crate::analysis::age::parse_old_after;
 use crate::config::parse_bytes;
+use crate::content::{is_known_field, FIELD_NAMES};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawFile {
     #[serde(default)]
     rules: Vec<Spanned<RawRule>>,
+}
+
+/// `category = "rechnung"` oder `category = ["rechnung", "mahnung"]`
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum OneOrMany {
+    One(String),
+    Many(Vec<String>),
 }
 
 #[derive(Deserialize)]
@@ -40,6 +49,13 @@ struct RawRule {
     umlauts: Option<bool>,
     strip_copy_suffix: Option<bool>,
     lowercase_ext: Option<bool>,
+    category: Option<OneOrMany>,
+    min_confidence: Option<f64>,
+    category_source: Option<String>,
+    fields: Option<BTreeMap<String, String>>,
+    fields_regex: Option<BTreeMap<String, String>>,
+    text_regex: Option<String>,
+    min_dwell: Option<String>,
 }
 
 static NAME_KEY: LazyLock<Regex> =
@@ -71,7 +87,11 @@ fn rule_name_near(text: &str, offset: usize) -> Option<String> {
         .map(|m| m.as_str().to_string())
 }
 
-pub(super) fn parse(text: &str, source: &Path) -> Result<RuleSet, RulesError> {
+pub(super) fn parse(
+    text: &str,
+    source: &Path,
+    known: &KnownCategories,
+) -> Result<RuleSet, RulesError> {
     let file = source.display().to_string();
     let raw: RawFile = toml::from_str(text).map_err(|e| {
         let offset = e.span().map(|s| s.start);
@@ -79,7 +99,11 @@ pub(super) fn parse(text: &str, source: &Path) -> Result<RuleSet, RulesError> {
             file: file.clone(),
             line: offset.map(|o| line_of(text, o)),
             rule: offset.and_then(|o| rule_name_near(text, o)),
-            message: e.message().to_string(),
+            message: if e.message().contains("OneOrMany") {
+                "category: erwartet einen Namen oder eine Liste von Namen".to_string()
+            } else {
+                e.message().to_string()
+            },
         }
     })?;
     if raw.rules.is_empty() {
@@ -92,7 +116,7 @@ pub(super) fn parse(text: &str, source: &Path) -> Result<RuleSet, RulesError> {
     }
     let mut names = HashSet::new();
     let mut rules = Vec::with_capacity(raw.rules.len());
-    for spanned in raw.rules {
+    for (index, spanned) in raw.rules.into_iter().enumerate() {
         let line = line_of(text, spanned.span().start);
         let raw_rule = spanned.into_inner();
         let fail = |message: String| RulesError {
@@ -109,7 +133,7 @@ pub(super) fn parse(text: &str, source: &Path) -> Result<RuleSet, RulesError> {
                 "Name kommt doppelt vor (Groß-/Kleinschreibung zählt nicht)".into(),
             ));
         }
-        rules.push(convert(&raw_rule, line).map_err(fail)?);
+        rules.push(convert(&raw_rule, line, index, known).map_err(fail)?);
     }
     Ok(RuleSet {
         source: source.to_path_buf(),
@@ -134,7 +158,23 @@ fn size(key: &str, value: &Option<String>) -> Result<Option<u64>, String> {
         .transpose()
 }
 
-fn convert(raw: &RawRule, line: usize) -> Result<Rule, String> {
+fn known_field(key: &str, name: &str) -> Result<(), String> {
+    if is_known_field(name) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{key}: unbekanntes Feld „{name}“ (bekannt: {})",
+            FIELD_NAMES.join(", ")
+        ))
+    }
+}
+
+fn convert(
+    raw: &RawRule,
+    line: usize,
+    index: usize,
+    known: &KnownCategories,
+) -> Result<Rule, String> {
     let name_regex = raw
         .name_regex
         .as_deref()
@@ -148,6 +188,58 @@ fn convert(raw: &RawRule, line: usize) -> Result<Rule, String> {
         }
         ext.push(e);
     }
+    let mut category = Vec::new();
+    match &raw.category {
+        None => {}
+        Some(OneOrMany::One(name)) => category.push(name.clone()),
+        Some(OneOrMany::Many(names)) => category.extend(names.iter().cloned()),
+    }
+    if raw.category.is_some() && category.is_empty() {
+        return Err("category: leere Liste".into());
+    }
+    let category: Vec<String> = category.iter().map(|n| n.trim().to_lowercase()).collect();
+    for name in &category {
+        known.check(name).map_err(|e| format!("category: {e}"))?;
+    }
+    if category.is_empty() {
+        if raw.min_confidence.is_some() {
+            return Err("min_confidence braucht eine category".into());
+        }
+        if raw.category_source.is_some() {
+            return Err("category_source braucht eine category".into());
+        }
+    }
+    if let Some(c) = raw.min_confidence {
+        if !(0.0..=1.0).contains(&c) {
+            return Err(format!("min_confidence: {c} liegt nicht zwischen 0 und 1"));
+        }
+    }
+    let category_source = match raw.category_source.as_deref() {
+        None | Some("any") => CategorySource::Any,
+        Some("rules") => CategorySource::Rules,
+        Some(other) => {
+            return Err(format!(
+                "category_source: „{other}“ ist ungültig (erlaubt: any, rules)"
+            ))
+        }
+    };
+    let mut fields = BTreeMap::new();
+    for (name, value) in raw.fields.iter().flatten() {
+        known_field("fields", name)?;
+        fields.insert(name.clone(), value.to_lowercase());
+    }
+    let mut fields_regex = Vec::new();
+    for (name, pattern) in raw.fields_regex.iter().flatten() {
+        known_field("fields_regex", name)?;
+        let regex = Regex::new(pattern)
+            .map_err(|e| format!("fields_regex „{name}“: ungültige Regex ({e})"))?;
+        fields_regex.push((name.clone(), regex));
+    }
+    let text_regex = raw
+        .text_regex
+        .as_deref()
+        .map(|r| Regex::new(r).map_err(|e| format!("text_regex: ungültige Regex ({e})")))
+        .transpose()?;
     let conditions = Conditions {
         glob: raw.glob.as_deref().map(compile_glob).transpose()?,
         ext,
@@ -156,10 +248,17 @@ fn convert(raw: &RawRule, line: usize) -> Result<Rule, String> {
         max_age_days: age("max_age", &raw.max_age)?,
         min_size: size("min_size", &raw.min_size)?,
         max_size: size("max_size", &raw.max_size)?,
+        category,
+        min_confidence: raw.min_confidence.map(|c| c as f32),
+        category_source,
+        fields,
+        fields_regex,
+        text_regex,
+        min_dwell_days: age("min_dwell", &raw.min_dwell)?,
     };
     if conditions.is_empty() {
         return Err(
-            "keine Bedingung (mindestens eine von glob, ext, name_regex, min_age, max_age, min_size, max_size)"
+            "keine Bedingung (mindestens eine von glob, ext, name_regex, min_age, max_age, min_size, max_size, category, fields, fields_regex, text_regex, min_dwell)"
                 .into(),
         );
     }
@@ -195,6 +294,7 @@ fn convert(raw: &RawRule, line: usize) -> Result<Rule, String> {
     };
     Ok(Rule {
         name: raw.name.clone(),
+        index,
         line,
         conditions,
         target,

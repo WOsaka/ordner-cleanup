@@ -197,6 +197,7 @@ pub fn plan_junk(
                 Skipped {
                     path: file.path.clone(),
                     reason,
+                    detail: None,
                 },
             ));
             continue;

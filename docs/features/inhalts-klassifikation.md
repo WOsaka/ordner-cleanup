@@ -28,7 +28,7 @@ Die GUI aus Phase 6 der Roadmap ist **nicht** Teil dieser Spec und bekommt eine 
 ## Out of Scope
 - GUI und TUI (eigene Spec, Phase 6b)
 - Cloud-LLMs bzw. jede Netzwerkverbindung außer Loopback
-- Speichern von Volltext, Volltextsuche, `search`-Befehl
+- Unverschlüsseltes Speichern von Text; Volltextsuche, `search`-Befehl (gespeichert wird nur OCR-Text, verschlüsselt, als Cache, siehe „Index“)
 - Eigener Planer `plan classify` mit fester Zielstruktur (Einsortieren läuft über `plan rules`)
 - Auto-Apply in jeder Form (geplante Läufe erzeugen weiter nur Pläne)
 - Audio-Metadaten (ID3 usw.)
@@ -78,7 +78,7 @@ name   = "urlaubsfotos"
 glob   = "Eingang/**"
 ext    = ["jpg", "jpeg", "heic"]
 fields = { "exif.has_gps" = "true" }
-fields_regex = { "exif.country" = '^(?!DE$)' }  # nur Auslandsfotos
+fields_regex = { "exif.country" = '^(?:[^D].|D[^E])$' }  # nur Auslandsfotos (ohne Look-around: die Regex-Engine kennt keines)
 target = "Fotos/{exif.date:%Y}/{exif.country}-{exif.city}/{exif.date:%Y-%m-%d}_{name}.{ext}"
 
 [[rules]]
@@ -119,7 +119,7 @@ match = ["Telekom Deutschland GmbH", "telekom.de"]
 ### Zuordnung und Konfidenz
 - Für jede Datei wird je Kategorie ein Punktwert aus gewichteten Schlüsselwort- und Mustertreffern berechnet; Ausschlusswörter setzen ihn auf 0. Konfidenz 0–1 ergibt sich aus der absoluten Stärke des besten Werts **und** dem Abstand zur zweitbesten Kategorie. Die genaue Formel legt der Implementierungsplan fest und dokumentiert sie im README.
 - Eigenschaften: deterministisch (gleicher Inhalt + gleiche Definitionen = gleiche Kategorie und Konfidenz), erklärbar (Cache und Bericht nennen die ausschlaggebenden Treffer, z. B. „rechnungsnummer, zahlbar bis, IBAN“), monoton (ein zusätzlicher Treffer für Kategorie A senkt deren Punktwert nie).
-- Trifft keine Kategorie sicher und ist das LLM eingeschaltet, schlägt das LLM eine Kategorie aus der Liste der bekannten Namen vor (oder `unbekannt`). Seine Konfidenz ist `min(LLM-Angabe, [llm] max_confidence)` (Default 0,85). Quelle wird als `llm` mit Modellname vermerkt.
+- Trifft keine Kategorie sicher und ist das LLM eingeschaltet, schlägt das LLM eine Kategorie aus der Liste der bekannten Namen vor (oder `unbekannt`). Seine Konfidenz ist `min(LLM-Angabe, [llm] max_confidence)` (Default 0,75, bewusst unter `min_confidence` 0,8: LLM-Kategorien landen in „Zum Prüfen“ und lösen keine Aktion aus, bis der Nutzer `max_confidence` anhebt; Test mit qwen2.5:3b: 2 von 10 LLM-Kategorien richtig). Quelle wird als `llm` mit Modellname vermerkt.
 - Ergebnis je Datei: Kategorie (oder keine), Konfidenz, zweitbeste Kategorie mit Konfidenz, Quelle (`rules` | `llm`), Treffer.
 
 ## Extrahierte Felder und Platzhalter
@@ -156,7 +156,7 @@ Regeln:
 | `min_dwell` | Mindestzeit seit Ankunft im Ordner (`14d`, `2m` wie in der Config) |
 
 - Auswertungsreihenfolge: erst die billigen Bedingungen aus Phase 4, dann die Bedingungen aus dem Cache, zuletzt `text_regex`.
-- `text_regex` braucht den Volltext, der nicht gespeichert wird: `plan rules` extrahiert ihn für die verbleibenden Kandidaten neu (OCR inklusive, mit den Grenzen aus `[classify]`). Der Text lebt nur während des Laufs im Speicher.
+- `text_regex` braucht den Volltext: `plan rules` extrahiert ihn für die verbleibenden Kandidaten neu (Textlayer und Office sind schnell). OCR-Text kommt aus dem verschlüsselten OCR-Cache, OCR läuft nur bei fehlendem oder veraltetem Eintrag. Der Text lebt nur während des Laufs im Speicher.
 - **Ankunftszeit für `min_dwell`:** das spätere von (a) Erstelldatum der Datei (NTFS-Erstellzeit; bei Download und Kopie = Ankunft) und (b) `first_seen` im Index. `first_seen` wird gesetzt, wenn eine Datei in einem Scan einer Wurzel zum ersten Mal auftaucht; Dateien, die schon beim ersten Scan einer Wurzel da waren, haben kein `first_seen` (nur (a) zählt). Damit gelten im Ordner verschobene oder umbenannte Dateien konservativ als neu angekommen.
 
 ## Bericht: Abschnitt „Inhalte“
@@ -168,9 +168,11 @@ Regeln:
 
 ## Index (Erweiterung)
 - Neue Tabelle für den Inhalts-Cache je Datei: Größe, mtime, Extraktor-Version, Status (`ok`, `unreadable:<grund>`, `unsupported`, `too-large`), Kategorie, Konfidenz, zweitbeste Kategorie mit Konfidenz, Quelle, Treffer, Felder (JSON), LLM-Modell (falls genutzt), Fingerabdruck der Kategorie-Definitionen, Zeitpunkt. **Kein Volltext.**
+- Eigene Tabelle für den **OCR-Text-Cache** (Entscheidung nach Review, 2026-10-04): OCR kostet 1–2 s je Seite, und ohne Cache würde jede Änderung an `categories.toml` und jedes `text_regex` auf Scans erneut OCR auslösen. Gespeichert wird nur OCR-Text, verschlüsselt mit Windows-DPAPI (`CryptProtectData`, an das Benutzerkonto gebunden), mit Größe, mtime, OCR-Version und Sprachen. Gültig solange diese gleich sind. Abschaltbar mit `[classify] cache_ocr_text = false`. Text aus Textlayer und Office wird nicht gespeichert.
 - Neue Spalte `first_seen` je Datei, die Re-Scans überlebt.
-- Gültigkeit: solange Größe, mtime und Extraktor-Version gleich sind. Ändert sich der Fingerabdruck der Kategorie-Definitionen, muss neu zugeordnet werden; weil kein Text gespeichert ist, heißt das neu extrahieren (die Zusammenfassung nennt das: „Kategorien geändert: N Dateien neu analysiert“). LLM-Ergebnisse werden nur bei geändertem Modell oder `--force` neu angefragt.
-- `classify --clear [<pfad> | --profile X]` löscht den Inhalts-Cache.
+- Gültigkeit: solange Größe, mtime und Extraktor-Version gleich sind. Ändert sich der Fingerabdruck der Kategorie-Definitionen, muss neu zugeordnet werden; dazu wird der Text neu gelesen (Textlayer/Office direkt, OCR-Text aus dem OCR-Cache; die Zusammenfassung nennt das: „Kategorien geändert: N Dateien neu zugeordnet“). LLM-Ergebnisse werden nur bei geändertem Modell oder `--force` neu angefragt.
+- `classify --clear [<pfad> | --profile X]` löscht Inhalts- und OCR-Text-Cache.
+- Zum Abstimmen der Kategorien an einer Auswahl: `classify --only <glob>` (relativ zur Wurzel).
 
 ## Config (Erweiterung)
 ```toml
@@ -181,6 +183,7 @@ max_file_size   = "100MB"             # größere Dateien: skipped too-large
 ocr             = true
 ocr_languages   = ["de", "en"]        # Windows-OCR-Sprachpakete
 ocr_max_pages   = 5                   # je PDF ohne Textlayer
+cache_ocr_text  = true                # OCR-Text DPAPI-verschlüsselt cachen
 max_text_chars  = 200000              # Obergrenze je Datei für Analyse
 threads         = 0                   # 0 = halbe Kernanzahl
 
@@ -191,7 +194,7 @@ model          = "qwen2.5:7b"               # Beispiel; README empfiehlt Modelle
 timeout        = "60s"
 max_input_chars = 6000                       # Textauszug je Anfrage
 tasks          = ["category", "fields", "title"]
-max_confidence = 0.85
+max_confidence = 0.75                       # unter [classify] min_confidence (0,8): LLM-Treffer führen nie allein zu Aktionen
 ```
 Profile können `[classify]`- und `[llm]`-Werte überschreiben (Phase-5-Mechanismus).
 
@@ -199,7 +202,8 @@ Profile können `[classify]`- und `[llm]`-Werte überschreiben (Phase-5-Mechanis
 - [ ] Given ein indizierter Ordner, when `classify` läuft, then ändert sich im Ordner kein Byte und keine mtime (nur lesender Zugriff)
 - [ ] Given kein Index für den Pfad, when `classify` läuft, then bricht es mit Hinweis auf `scan` ab
 - [ ] Given ein zweiter `classify` ohne Dateiänderungen, when er läuft, then wird keine Datei erneut gelesen und der Lauf dauert bei 10.000 Dateien wenige Sekunden
-- [ ] Given eine geänderte `categories.toml`, when `classify` läuft, then werden die betroffenen Dateien neu zugeordnet und die Zusammenfassung nennt das
+- [ ] Given eine geänderte `categories.toml`, when `classify` läuft, then werden die betroffenen Dateien neu zugeordnet und die Zusammenfassung nennt das; gescannte PDFs werden dabei **nicht** erneut per OCR gelesen (OCR-Text-Cache)
+- [ ] Given der OCR-Text-Cache, when man die Index-Datei roh liest, then ist kein OCR-Text im Klartext enthalten; mit `cache_ocr_text = false` entsteht kein Eintrag
 - [ ] Given der synthetische Testkorpus (generierte PDFs mit Textlayer, gescannte PDFs ohne Textlayer, docx/xlsx/pptx, JPEG/HEIC mit und ohne EXIF/GPS, MP4/MOV), when `classify --no-llm` läuft, then stimmen Kategorie und Felder mit der erwarteten Liste überein
 - [ ] Given ein PDF ohne Textlayer und installiertes OCR-Sprachpaket, when `classify` läuft, then wird höchstens `ocr_max_pages` Seiten OCR gelesen und die Kategorie aus dem OCR-Text bestimmt
 - [ ] Given ein Foto mit GPS-Koordinaten in Lissabon, when `classify` läuft, then sind `exif.city = Lisboa` (bzw. GeoNames-Name) und `exif.country = PT` gesetzt, ohne Netzwerkzugriff
@@ -257,7 +261,7 @@ Profile können `[classify]`- und `[llm]`-Werte überschreiben (Phase-5-Mechanis
 - **Performance:** Textlayer/Office/EXIF/Video zielen auf ≥ 20 Dateien/s auf SSD; OCR ca. 1–2 s je Seite. Begrenzte Parallelität (`threads`, Default halbe Kernanzahl), Prozesspriorität „unter normal“ während `classify`, damit der Rechner bedienbar bleibt. Unveränderte Dateien kosten nur einen Cache-Abgleich. Nur der nötige Teil einer Datei wird gelesen (EXIF-/`mvhd`-Kopf, Office-ZIP-Einträge).
 - **Security / Datenschutz:**
   - Kein Netzwerkzugriff außer zum konfigurierten LLM-Endpoint, und der muss auf Loopback zeigen (`127.0.0.1`, `::1`, `localhost`); andere Hosts sind ein Config-Fehler. Keine Telemetrie, keine Online-Geocodierung.
-  - Kein Volltext auf Platte; der Cache enthält nur Felder (Datum, Absender, Betrag, Nummer, Titel, Ort). Das README weist darauf hin, dass diese Felder sensibel sein können, und nennt `classify --clear`.
+  - Kein unverschlüsselter Text auf Platte; der Inhalts-Cache enthält nur Felder (Datum, Absender, Betrag, Nummer, Titel, Ort). OCR-Text liegt nur DPAPI-verschlüsselt im OCR-Cache (nur das eigene Benutzerkonto kann ihn entschlüsseln; abschaltbar). Das README weist darauf hin, dass Felder und OCR-Cache sensibel sein können, und nennt `classify --clear`.
   - An das LLM geht nur ein gekürzter Textauszug (`max_input_chars`) plus Dateiname; Antworten werden gegen ein JSON-Schema geprüft und nie als Befehl interpretiert (Schutz gegen Prompt-Injection aus Dokumentinhalt: das LLM kann höchstens Kategorie/Felder/Titel liefern, die dieselben Prüfungen durchlaufen wie alle anderen Werte).
   - Parser laufen gegen nicht vertrauenswürdige Dateien: Panics je Datei abfangen, Größen- und Tiefengrenzen beim Entpacken von Office-ZIPs (Zip-Bomben), kein Ausführen von Makros oder eingebetteten Inhalten.
 - **Compliance:** GeoNames-Daten stehen unter CC BY 4.0 → Namensnennung im README und in `--version`/About-Ausgabe. Lizenzen aller neuen Crates müssen mit MIT/Apache-2.0 verträglich sein.
@@ -280,3 +284,25 @@ Profile können `[classify]`- und `[llm]`-Werte überschreiben (Phase-5-Mechanis
 - [ ] Welches lokale Modell empfiehlt das README als Default (Größe vs. Qualität auf typischer Hardware ohne GPU)?
 - [ ] Exakte Formel für die Konfidenz und Kalibrierung der Default-Schwelle 0,8 am Testkorpus
 - [ ] Soll ein Inhalts-Hash (aus Phase 1, falls vorhanden) als zweiter Cache-Schlüssel dienen, damit verschobene Dateien nicht neu analysiert werden? (In 6a: nein, ggf. später)
+
+## Manueller Test (2026-10-04, ohne LLM)
+
+Ordner: echter Downloads-Ordner, 60 Dateien (42 lesbare Dokumente, 18 nicht unterstützt: exe, zip, xls …), isolierter Index (`ORDNER_CLEANUP_HOME`), `classify --no-llm`, 3 s.
+
+- **Sichere Zuordnungen (Konfidenz ≥ 0,8): 4.** Zwei Studienbescheinigungen (0,99) und die Vorsorgevollmacht (`vertrag` 0,95) sind richtig. Die Mitteilung `5410291004_…` (`kontoauszug` 0,80) wurde nicht inhaltlich geprüft. **Keine erkennbar falsche sichere Zuordnung.**
+- **Unsicher: alle übrigen Treffer** (u. a. Auslandskrankenversicherung `versicherung` 0,61 gegen `medizin` 0,63, Wohnungsgeberbestätigung `bescheinigung` 0,47). Sie erzeugen im Plan `low-confidence` und keine Aktion.
+- **Fund und Korrektur:** Fachartikel (PDF) bekamen durch ein einzelnes englisches Wort („contract“, „agreement“) `vertrag` 0,38 und füllten „Zum Prüfen“ (16 von 60). Jetzt gilt `MIN_SCORE = 3` (eine Kategorie braucht mindestens ein Wort mit Gewicht 3), die beiden Wörter haben Gewicht 2; `CLASSIFIER_VERSION` ist 2. Danach: 6 Dateien zum Prüfen, 50 ohne Kategorie.
+- **Plan** (`category = bescheinigung` und `vertrag/versicherung`, Ziel mit `{doc.date:%Y}` und `{doc.title|{name}}`): 3 Aktionen, 2 übersprungen, 55 ohne Regel, 0 falsche Aktionen.
+- **apply → scan → plan → undo** auf einer Kopie der Dokumente: 3 Dateien bewegt, zweiter Plan ohne Aktion (Idempotenz), `undo` stellt alle Dateien byteidentisch her (MD5-Vergleich).
+- OCR: 2 Dateien wurden per OCR gelesen (Windows-OCR, Sprachpaket de vorhanden).
+
+**Noch offen:** Lauf mit lokalem LLM (Ollama ist auf diesem PC nicht installiert; Modellwahl 0c), Stichprobe von 100 Dateien (der Ordner hat nur 60) und ein echter Cloud-only-Platzhalter.
+
+## Manueller Test mit LLM (2026-10-05, qwen2.5:3b)
+
+Gleicher Downloads-Ordner (60 Dateien), isolierter Index, `[llm] enabled = true`, Modell `qwen2.5:3b`. 36 LLM-Anfragen, Dauer 9:53 min (ca. 16 s je Datei auf CPU).
+
+- Kategorien: 15 statt 10, „Zum Prüfen“ 1 statt 6. Die 5 regelbasierten Treffer sind unverändert plausibel.
+- **Von 10 LLM-Kategorien (Konfidenz 0,85) waren nur 2 richtig** (Versicherungsbescheid, Vollmacht). Falsch: Wohnungsgeberbestätigung → `auftragsbestaetigung`, Fahrschein → `gehaltsabrechnung`, Abschlussarbeit-Erklärung und Medienkonzept → `medizin`, ICE-Fahrkarte → `rechnung`, zwei Gestaltungsempfehlungen → `vertrag`; die Auslandskrankenversicherung → `vertrag` ist fraglich.
+- Folge: Mit `max_confidence = 0.85` ≥ `min_confidence = 0.8` hätten diese Treffer Aktionen ausgelöst. Der Default ist jetzt **0,75**; LLM-Kategorien landen in „Zum Prüfen“, bis der Nutzer den Wert anhebt. Ein Test sichert `llm.max_confidence < classify.min_confidence`.
+- `qwen2.5:7b` ist nicht ausgewertet: der Lauf wurde wegen knappen Arbeitsspeichers abgebrochen. Die Modellwahl (Offene Frage 3) bleibt offen.

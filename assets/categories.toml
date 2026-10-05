@@ -1,0 +1,84 @@
+# Eingebauter Startsatz der Inhaltskategorien (Phase 6a). Gleiches Format wie die eigene
+# categories.toml. Schlüsselwörter sind klein geschrieben; Umlaute werden zusätzlich als
+# ae/oe/ue/ss gefunden. Jedes Schlüsselwort und jedes Muster zählt höchstens einmal je Datei.
+# Gewichte: 1 (schwach) bis 10 (eindeutig).
+
+[[categories]]
+name        = "rechnung"
+description = "Rechnung, Invoice"
+keywords    = { "rechnung" = 3, "rechnungsnummer" = 4, "rechnungsnr" = 4, "rechnungsdatum" = 4, "rechnungsbetrag" = 3, "invoice" = 3, "invoice number" = 4, "invoice date" = 3, "zahlbar bis" = 2, "zahlungsziel" = 3, "zahlungsbedingungen" = 2, "gesamtbetrag" = 2, "ust-id" = 1, "mwst" = 1, "bitte überweisen sie" = 2 }
+patterns    = { '(?i)rechnungs?-?(nr|nummer)\.?\s*[:#]?\s*[\w-]+' = 4, '(?i)invoice\s*(no|number|#)\.?\s*[:#]?\s*[\w-]+' = 4 }
+
+[[categories]]
+name             = "mahnung"
+description      = "Mahnung, Zahlungserinnerung, Inkasso"
+keywords         = { "mahnung" = 5, "zahlungserinnerung" = 5, "letzte mahnung" = 6, "mahngebühr" = 4, "mahngebühren" = 4, "zahlungsaufforderung" = 4, "in verzug" = 3, "überfällig" = 3, "inkasso" = 3, "payment reminder" = 5, "final notice" = 5, "overdue" = 3 }
+
+[[categories]]
+name        = "angebot"
+description = "Angebot, Kostenvoranschlag, Offerte"
+keywords    = { "angebot" = 3, "angebotsnummer" = 4, "kostenvoranschlag" = 4, "offerte" = 3, "quotation" = 4, "unverbindliches angebot" = 4, "freibleibend" = 2, "gültig bis" = 2 }
+patterns    = { '(?i)angebots?-?(nr|nummer)\.?\s*[:#]?\s*[\w-]+' = 4 }
+exclude_keywords = ["rechnungsnummer", "invoice number"]
+
+[[categories]]
+name        = "auftragsbestaetigung"
+description = "Auftragsbestätigung, Bestellbestätigung"
+keywords    = { "auftragsbestätigung" = 6, "bestellbestätigung" = 6, "order confirmation" = 6, "auftragsnummer" = 3, "bestellnummer" = 2, "voraussichtlicher liefertermin" = 2, "vielen dank für ihre bestellung" = 3 }
+
+[[categories]]
+name        = "quittung"
+description = "Quittung, Kassenbon, Beleg"
+keywords    = { "quittung" = 5, "kassenbon" = 5, "kassenbeleg" = 5, "barzahlung" = 2, "receipt" = 4, "vielen dank für ihren einkauf" = 3, "betrag dankend erhalten" = 5, "rückgeld" = 3, "bar erhalten" = 3 }
+patterns    = { '(?i)\bbon[- ]?nr\.?' = 2 }
+
+[[categories]]
+name        = "vertrag"
+description = "Vertrag, Vereinbarung, Contract"
+keywords    = { "vertrag" = 3, "vertragsnummer" = 4, "vertragspartner" = 3, "kündigungsfrist" = 4, "vertragslaufzeit" = 4, "vertragsbeginn" = 3, "mietvertrag" = 5, "arbeitsvertrag" = 5, "kaufvertrag" = 5, "dienstleistungsvertrag" = 5, "agreement" = 2, "contract" = 2, "unterschrift" = 1 }
+patterns    = { '(?i)vertrags?-?(nr|nummer)\.?\s*[:#]?\s*[\w-]+' = 4 }
+
+[[categories]]
+name        = "kontoauszug"
+description = "Kontoauszug, Bank Statement"
+keywords    = { "kontoauszug" = 6, "kontostand" = 3, "alter kontostand" = 4, "neuer kontostand" = 4, "buchungstag" = 3, "valuta" = 3, "umsatzübersicht" = 3, "iban" = 1, "account statement" = 6, "bank statement" = 6, "closing balance" = 3, "opening balance" = 3 }
+patterns    = { '(?i)\b[a-z]{2}\d{2}(?:\s?[a-z0-9]{4}){3,7}(?:\s?[a-z0-9]{1,4})?\b' = 2 }
+
+[[categories]]
+name        = "gehaltsabrechnung"
+description = "Gehaltsabrechnung, Lohnabrechnung, Payslip"
+keywords    = { "gehaltsabrechnung" = 6, "lohnabrechnung" = 6, "entgeltabrechnung" = 6, "verdienstabrechnung" = 6, "brutto-bezüge" = 3, "netto-bezüge" = 3, "auszahlungsbetrag" = 3, "lohnsteuer" = 3, "steuerklasse" = 3, "personalnummer" = 3, "sozialversicherung" = 2, "payslip" = 6, "salary statement" = 5 }
+
+[[categories]]
+name        = "steuer"
+description = "Steuerbescheid, Steuererklärung, Finanzamt"
+keywords    = { "steuerbescheid" = 6, "einkommensteuer" = 4, "steuererklärung" = 5, "finanzamt" = 4, "steuernummer" = 3, "steuer-id" = 3, "identifikationsnummer" = 2, "elster" = 3, "tax return" = 5, "notice of assessment" = 4, "steuerjahr" = 3, "veranlagungszeitraum" = 4, "lohnsteuerbescheinigung" = 5, "umsatzsteuer" = 1 }
+
+[[categories]]
+name        = "versicherung"
+description = "Versicherungsschein, Police, Beitragsrechnung"
+keywords    = { "versicherung" = 3, "versicherungsnummer" = 4, "versicherungsschein" = 6, "police" = 3, "versicherungsnehmer" = 5, "versicherungsbeitrag" = 4, "beitragsrechnung" = 3, "insurance policy" = 6, "policy number" = 5, "haftpflicht" = 3, "hausrat" = 3, "schadenmeldung" = 4, "schadennummer" = 4, "prämie" = 2 }
+
+[[categories]]
+name        = "medizin"
+description = "Arztbrief, Befund, Rezept, Krankmeldung"
+keywords    = { "arztbrief" = 6, "befund" = 4, "diagnose" = 4, "rezept" = 3, "überweisungsschein" = 4, "krankmeldung" = 4, "arbeitsunfähigkeitsbescheinigung" = 6, "patient" = 2, "patientin" = 2, "medical report" = 5, "prescription" = 4, "krankenhaus" = 2, "entlassbrief" = 5, "impfung" = 3, "impfpass" = 4, "röntgen" = 3, "blutwerte" = 3, "therapie" = 2, "medikament" = 3 }
+patterns    = { '(?i)\bdr\.?\s*med\.?' = 3 }
+
+[[categories]]
+name        = "bescheinigung"
+description = "Bescheinigung, Bestätigung, Zeugnis, Zertifikat"
+keywords    = { "bescheinigung" = 4, "hiermit bestätigen wir" = 3, "hiermit wird bescheinigt" = 5, "zeugnis" = 3, "zertifikat" = 3, "teilnahmebescheinigung" = 5, "mitgliedsbescheinigung" = 5, "meldebescheinigung" = 5, "immatrikulationsbescheinigung" = 5, "studienbescheinigung" = 5, "arbeitsbescheinigung" = 5, "aufenthaltsbescheinigung" = 5, "certificate" = 3 }
+
+# Metadaten-Kategorien: kein Text, die Zuordnung geschieht im Programm (siehe README).
+[[categories]]
+name        = "foto"
+kind        = "meta"
+description = "Foto mit Kamera-EXIF"
+ext         = ["jpg", "jpeg", "heic", "heif", "tif", "tiff", "webp", "png"]
+
+[[categories]]
+name        = "screenshot"
+kind        = "meta"
+description = "Bildschirmfoto"
+ext         = ["png", "jpg", "jpeg", "webp"]

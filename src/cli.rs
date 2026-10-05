@@ -9,6 +9,12 @@ use crate::change::RunId;
 #[command(
     name = "ordner-cleanup",
     version,
+    long_version = concat!(
+        env!("CARGO_PKG_VERSION"),
+        "
+
+Ortsdaten: GeoNames (geonames.org), CC BY 4.0"
+    ),
     about = "Scan, Analyse-Bericht und sicheres Aufräumen für Ordnersysteme (Windows)"
 )]
 pub struct Cli {
@@ -20,6 +26,8 @@ pub struct Cli {
 pub enum Command {
     /// Ordnerbaum scannen und im Index speichern
     Scan(ScanArgs),
+    /// Inhalt und Metadaten der Dateien lesen und klassifizieren (Kategorie, Felder; nur lesend)
+    Classify(ClassifyArgs),
     /// Bericht aus dem Index erzeugen
     Report(ReportArgs),
     /// Verlauf der Kennzahlen und des Health-Scores anzeigen
@@ -45,6 +53,21 @@ pub enum Command {
     Runs(RunsArgs),
     /// Abgelaufene Quarantäne-Läufe endgültig löschen
     Purge(PurgeArgs),
+    /// Interner Hilfsprozess: liest ein PDF per OCR (nicht zum Aufruf von Hand gedacht)
+    #[command(name = "ocr-worker", hide = true)]
+    OcrWorker(OcrWorkerArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct OcrWorkerArgs {
+    /// PDF-Datei
+    pub path: PathBuf,
+    /// Höchstens so viele Seiten lesen
+    #[arg(long, default_value_t = 5)]
+    pub max_pages: usize,
+    /// OCR-Sprachen, kommagetrennt (`de,en`)
+    #[arg(long, default_value = "de,en")]
+    pub langs: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -180,6 +203,10 @@ pub struct PlanRulesArgs {
     /// Zieldatei für den Plan (Default: plan-<Zeitstempel>.json im aktuellen Ordner)
     #[arg(long)]
     pub out: Option<PathBuf>,
+    /// Veraltete oder fehlende Inhalts-Klassifikation nicht nachholen (Dateien mit Inhalts-
+    /// bedingung erscheinen dann als `not-classified`)
+    #[arg(long)]
+    pub no_classify: bool,
 }
 
 #[derive(Debug, Args)]
@@ -291,6 +318,31 @@ pub struct ScanArgs {
     /// Vorlage für den Soll/Ist-Abgleich: `para`, `johnny-decimal` oder Pfad einer Vorlagendatei
     #[arg(long)]
     pub template: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ClassifyArgs {
+    /// Bereits gescannter Ordner (oder `--profile`)
+    #[arg(required_unless_present = "profile", conflicts_with = "profile")]
+    pub path: Option<PathBuf>,
+    /// Profil aus der Config statt Pfad und Optionen
+    #[arg(long)]
+    pub profile: Option<String>,
+    /// Ohne lokales LLM klassifizieren, auch wenn `[llm] enabled` gesetzt ist
+    #[arg(long, conflicts_with = "clear")]
+    pub no_llm: bool,
+    /// Alle Dateien neu analysieren (auch das LLM neu fragen)
+    #[arg(long, conflicts_with = "clear")]
+    pub force: bool,
+    /// Nur diese Endungen, kommagetrennt (`pdf,jpg`)
+    #[arg(long, value_delimiter = ',', conflicts_with = "clear")]
+    pub ext: Vec<String>,
+    /// Nur Dateien, die auf dieses Glob passen (relativ zur Wurzel)
+    #[arg(long, conflicts_with = "clear")]
+    pub only: Option<String>,
+    /// Inhalts- und OCR-Text-Cache der Wurzel löschen
+    #[arg(long)]
+    pub clear: bool,
 }
 
 #[derive(Debug, Args)]

@@ -50,6 +50,12 @@ pub struct ScanEnv<'a> {
     pub now: &'a str,
 }
 
+fn now_ticks() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| (d.as_nanos() / 100) as i64)
+}
+
 /// Scannt `root` in den Index. Bei gesetztem `cancel` wird der Lauf sauber beendet
 /// (Status `aborted`, kein Prune).
 pub fn scan(index: &mut Index, root: &Path, env: &ScanEnv<'_>) -> Result<ScanOutcome> {
@@ -64,6 +70,9 @@ pub fn scan(index: &mut Index, root: &Path, env: &ScanEnv<'_>) -> Result<ScanOut
     } = *env;
     let classifier = Classifier::new(root, config, default_paths)?;
     let prev = index.load_previous(&paths::dir_key(root))?;
+    let first_seen = index
+        .root_scanned_before(&paths::dir_key(root))?
+        .then(now_ticks);
     let run = index.begin_root(&paths::display(root), &paths::dir_key(root), now)?;
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(config.threads)
@@ -81,6 +90,7 @@ pub fn scan(index: &mut Index, root: &Path, env: &ScanEnv<'_>) -> Result<ScanOut
                 progress,
                 prev: &prev,
                 tx: &tx,
+                first_seen,
             };
             pool.install(|| walker::walk(&ctx, root));
         }
@@ -371,6 +381,60 @@ mod tests {
         assert!(out.aborted);
         assert_eq!(index.roots().unwrap()[0].status, RootStatus::Aborted);
         assert_eq!(q::<i64>(&index, "SELECT COUNT(*) FROM files"), 2);
+    }
+
+    #[test]
+    fn first_seen_wird_nur_fuer_neue_dateien_nach_dem_ersten_scan_gesetzt() {
+        let seen = |index: &Index, name: &str| -> Option<i64> {
+            index
+                .conn()
+                .query_row(
+                    "SELECT first_seen FROM files WHERE name = ?1",
+                    [name],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        let mut index = Index::open_in_memory().unwrap();
+        let cancel = AtomicBool::new(false);
+        let first = FakeDirSource::new().dir(r"C:\R", vec![fake_file("alt.txt", 1)]);
+        run_scan(&mut index, &first, r"C:\R", &cancel);
+        assert_eq!(seen(&index, "alt.txt"), None, "erster Scan: nichts gesetzt");
+
+        let second = FakeDirSource::new().dir(
+            r"C:\R",
+            vec![fake_file("alt.txt", 1), fake_file("neu.txt", 2)],
+        );
+        run_scan(&mut index, &second, r"C:\R", &cancel);
+        assert_eq!(seen(&index, "alt.txt"), None);
+        let neu = seen(&index, "neu.txt").expect("neue Datei bekommt first_seen");
+        assert!(neu > 0);
+
+        run_scan(&mut index, &second, r"C:\R", &cancel);
+        assert_eq!(
+            seen(&index, "neu.txt"),
+            Some(neu),
+            "Upsert überschreibt nicht"
+        );
+    }
+
+    #[test]
+    fn abgebrochener_erster_scan_zaehlt_nicht_als_vollstaendig() {
+        let mut index = Index::open_in_memory().unwrap();
+        run_scan(&mut index, &basic_source(), r"C:\R", &AtomicBool::new(true));
+        run_scan(
+            &mut index,
+            &basic_source(),
+            r"C:\R",
+            &AtomicBool::new(false),
+        );
+        assert_eq!(
+            q::<i64>(
+                &index,
+                "SELECT COUNT(*) FROM files WHERE first_seen IS NOT NULL"
+            ),
+            0
+        );
     }
 
     #[test]

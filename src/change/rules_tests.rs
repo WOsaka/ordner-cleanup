@@ -8,12 +8,17 @@ use chrono::{NaiveDate, NaiveDateTime, TimeZone};
 
 use super::plan::{ActionType, PlanKind};
 use super::protect::{ProtectPaths, Protector};
-use super::rules::{plan_rules, ContentSource, ExifResult, ExifSource, RulesEnv, RulesPlan};
+use super::rules::{
+    plan_rules, ContentLookup, ContentSource, ExifResult, ExifSource, NoContent, NoText, RulesEnv,
+    RulesPlan, TextProvider,
+};
 use super::SkipReason;
 use crate::config::Config;
-use crate::index::{DirRecord, FileRecord, FileRow, Index};
+use crate::content::classify::fields::FieldSources;
+use crate::content::{ContentRecord, Fields, Source, Status, TextSource, EXTRACTOR_VERSION};
+use crate::index::{DirRecord, FileRecord, FileRow, Index, IndexError};
 use crate::paths;
-use crate::rules::RuleSet;
+use crate::rules::{KnownCategories, RuleSet};
 use crate::scan::source::TICKS_PER_SEC;
 
 const ROOT: &str = r"Z:\Root";
@@ -47,6 +52,8 @@ struct F {
     mtime: i64,
     cloud: bool,
     link: bool,
+    ctime: Option<i64>,
+    first_seen: Option<i64>,
 }
 
 fn file(path: &'static str) -> F {
@@ -56,6 +63,8 @@ fn file(path: &'static str) -> F {
         mtime: local_ticks(2026, 3, 7),
         cloud: false,
         link: false,
+        ctime: None,
+        first_seen: None,
     }
 }
 
@@ -74,6 +83,14 @@ impl F {
     }
     fn link(mut self) -> Self {
         self.link = true;
+        self
+    }
+    fn ctime(mut self, ctime: i64) -> Self {
+        self.ctime = Some(ctime);
+        self
+    }
+    fn first_seen(mut self, first_seen: i64) -> Self {
+        self.first_seen = Some(first_seen);
         self
     }
 }
@@ -130,6 +147,8 @@ fn seed(files: &[F], extra_dirs: &[&str]) -> Index {
                 attrs: if f.cloud { 0x40_0000 } else { 0x20 },
                 cloud_only: f.cloud,
                 is_link: f.link,
+                ctime: f.ctime,
+                first_seen: f.first_seen,
                 ..FileRecord::default()
             }
         })
@@ -197,7 +216,7 @@ impl ContentSource for FakeContent {
 }
 
 fn parse(text: &str) -> RuleSet {
-    RuleSet::parse(text, Path::new("rules.toml")).unwrap()
+    RuleSet::parse(text, Path::new("rules.toml"), &KnownCategories::builtin()).unwrap()
 }
 
 fn protector(config: &Config) -> Protector {
@@ -218,6 +237,9 @@ fn run_full(
         content,
         created: "t",
         now_ticks: NOW,
+        content_lookup: &NoContent,
+        text: &NoText,
+        min_confidence: 0.8,
     };
     let result = plan_rules(index, Path::new(ROOT), rules, &env).unwrap();
     result.plan.validate().unwrap();
@@ -921,6 +943,8 @@ mod cached_exif {
             name: path.file_name().unwrap().to_string_lossy().into_owned(),
             size: meta.len() as i64,
             mtime: 1234,
+            ctime: None,
+            first_seen: None,
             attrs: 0x20,
             cloud_only: false,
             is_link: false,
@@ -982,5 +1006,604 @@ mod cached_exif {
             .exif_lookup(&[(a.key.as_str(), a.size, a.mtime)])
             .unwrap()
             .is_empty());
+    }
+}
+
+// ---- Inhaltsbedingungen, Felder im Ziel und neue Skip-Gründe (Phase 6a) ----
+
+fn rec(category: Option<&str>, confidence: f32) -> ContentRecord {
+    ContentRecord {
+        path_key: String::new(),
+        size: 100,
+        mtime: 1,
+        status: Status::Ok,
+        category: category.map(String::from),
+        confidence,
+        category2: Some(("mahnung".into(), 0.41)),
+        source: Source::Rules,
+        hits: vec![],
+        fields: Fields::new(),
+        field_sources: FieldSources::new(),
+        text_source: TextSource::Layer,
+        llm_model: None,
+        defs_fingerprint: "f".into(),
+        extractor_version: EXTRACTOR_VERSION,
+        classified_at: "t".into(),
+    }
+}
+
+trait RecExt {
+    fn field(self, k: &str, v: &str) -> Self;
+    fn llm(self) -> Self;
+}
+
+impl RecExt for ContentRecord {
+    fn field(mut self, k: &str, v: &str) -> Self {
+        self.fields.insert(k.into(), v.into());
+        self
+    }
+    fn llm(mut self) -> Self {
+        self.source = Source::Llm;
+        self
+    }
+}
+
+/// Fake: Inhaltsdatensätze nach Pfad; merkt sich, wofür sie gefragt wurde.
+#[derive(Default)]
+struct FakeLookup {
+    records: HashMap<String, ContentRecord>,
+    asked: Mutex<Vec<String>>,
+}
+
+impl FakeLookup {
+    fn with(mut self, path: &str, record: ContentRecord) -> Self {
+        let key = paths::path_key(Path::new(path));
+        self.records.insert(key, record);
+        self
+    }
+    fn asked(&self) -> Vec<String> {
+        let mut v = self.asked.lock().unwrap().clone();
+        v.sort();
+        v
+    }
+}
+
+impl ContentLookup for FakeLookup {
+    fn content(
+        &self,
+        _index: &mut Index,
+        files: &[&FileRow],
+    ) -> Result<HashMap<String, ContentRecord>, IndexError> {
+        let mut asked = self.asked.lock().unwrap();
+        let mut out = HashMap::new();
+        for f in files {
+            asked.push(f.key.clone());
+            if let Some(r) = self.records.get(&f.key) {
+                out.insert(f.key.clone(), r.clone());
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// Fake: Text nach Pfad; merkt sich, welche Dateien gelesen wurden.
+#[derive(Default)]
+struct FakeText {
+    texts: HashMap<String, String>,
+    read: Mutex<Vec<String>>,
+}
+
+impl FakeText {
+    fn with(mut self, path: &str, text: &str) -> Self {
+        self.texts
+            .insert(paths::path_key(Path::new(path)), text.to_string());
+        self
+    }
+    fn read(&self) -> Vec<String> {
+        let mut v = self.read.lock().unwrap().clone();
+        v.sort();
+        v
+    }
+}
+
+impl TextProvider for FakeText {
+    fn texts(
+        &self,
+        _index: &Index,
+        items: &[(&FileRow, Option<&ContentRecord>)],
+    ) -> Vec<Option<String>> {
+        let mut read = self.read.lock().unwrap();
+        items
+            .iter()
+            .map(|(f, _)| {
+                read.push(f.key.clone());
+                self.texts.get(&f.key).cloned()
+            })
+            .collect()
+    }
+}
+
+fn run_content(
+    index: &mut Index,
+    rules: &RuleSet,
+    lookup: &dyn ContentLookup,
+    text: &dyn TextProvider,
+) -> RulesPlan {
+    let config = Config::default();
+    let protector = protector(&config);
+    let env = RulesEnv {
+        protector: &protector,
+        exif: &FakeExif::default(),
+        content: &FakeContent::default(),
+        created: "t",
+        now_ticks: NOW,
+        content_lookup: lookup,
+        text,
+        min_confidence: 0.8,
+    };
+    let result = plan_rules(index, Path::new(ROOT), rules, &env).unwrap();
+    result.plan.validate().unwrap();
+    result
+}
+
+fn skipped_detail(plan: &RulesPlan) -> Vec<(String, SkipReason, Option<String>)> {
+    plan.plan
+        .skipped
+        .iter()
+        .map(|s| {
+            (
+                s.path.trim_start_matches(&format!("{ROOT}\\")).to_string(),
+                s.reason,
+                s.detail.clone(),
+            )
+        })
+        .collect()
+}
+
+const RECHNUNG_RULE: &str = r#"
+[[rules]]
+name     = "rechnungen"
+category = "rechnung"
+target   = "Finanzen/{doc.date:%Y}/{doc.sender|Unbekannt}_{name}.{ext}"
+"#;
+
+#[test]
+fn kategorie_regel_sortiert_nach_feldern_im_ziel() {
+    let mut index = seed(
+        &[
+            file(r"Z:\Root\Downloads\scan0012.pdf"),
+            file(r"Z:\Root\Downloads\foto.jpg"),
+        ],
+        &[],
+    );
+    let lookup = FakeLookup::default()
+        .with(
+            r"Z:\Root\Downloads\scan0012.pdf",
+            rec(Some("rechnung"), 0.95)
+                .field("doc.date", "2026-09-30")
+                .field("doc.sender", "Telekom"),
+        )
+        .with(r"Z:\Root\Downloads\foto.jpg", rec(Some("foto"), 0.95));
+    let p = run_content(&mut index, &parse(RECHNUNG_RULE), &lookup, &NoText);
+    assert_eq!(
+        moves(&p),
+        [mv(
+            r"Downloads\scan0012.pdf",
+            r"Finanzen\2026\Telekom_scan0012.pdf"
+        )]
+    );
+    assert_eq!(p.unmatched, 1, "das Foto hat eine andere Kategorie");
+    assert_eq!(p.review, 0);
+}
+
+#[test]
+fn ersatzwert_und_fehlendes_feld() {
+    let mut index = seed(&[file(r"Z:\Root\a.pdf"), file(r"Z:\Root\b.pdf")], &[]);
+    let lookup = FakeLookup::default()
+        .with(
+            r"Z:\Root\a.pdf",
+            rec(Some("rechnung"), 0.9).field("doc.date", "2026-01-02"),
+        )
+        .with(r"Z:\Root\b.pdf", rec(Some("rechnung"), 0.9));
+    // a: Absender fehlt, Ersatz greift; b: Datum fehlt und hat keinen Ersatz
+    let p = run_content(&mut index, &parse(RECHNUNG_RULE), &lookup, &NoText);
+    assert_eq!(moves(&p), [mv("a.pdf", r"Finanzen\2026\Unbekannt_a.pdf")]);
+    assert_eq!(
+        skipped_detail(&p),
+        [(
+            "b.pdf".to_string(),
+            SkipReason::MissingField,
+            Some("doc.date".to_string())
+        )]
+    );
+}
+
+#[test]
+fn niedrige_konfidenz_ergibt_keine_aktion_sondern_zum_pruefen() {
+    let mut index = seed(&[file(r"Z:\Root\scan.pdf")], &[]);
+    let lookup = FakeLookup::default().with(r"Z:\Root\scan.pdf", rec(Some("rechnung"), 0.62));
+    let p = run_content(&mut index, &parse(RECHNUNG_RULE), &lookup, &NoText);
+    assert!(p.plan.actions.is_empty());
+    assert_eq!(
+        skipped_detail(&p),
+        [(
+            "scan.pdf".to_string(),
+            SkipReason::LowConfidence,
+            Some("rechnung 0.62 / mahnung 0.41".to_string())
+        )]
+    );
+    assert_eq!((p.review, p.unmatched), (1, 0));
+}
+
+#[test]
+fn eigene_schwelle_der_regel_und_spaetere_regel_gewinnt_vor_einem_nahen_treffer() {
+    let rules = parse(
+        r#"
+[[rules]]
+name           = "streng"
+category       = "rechnung"
+min_confidence = 0.95
+target         = "Streng/"
+[[rules]]
+name   = "pdfs"
+ext    = ["pdf"]
+target = "Sonst/"
+"#,
+    );
+    let mut index = seed(&[file(r"Z:\Root\a.pdf")], &[]);
+    let lookup = FakeLookup::default().with(r"Z:\Root\a.pdf", rec(Some("rechnung"), 0.9));
+    let p = run_content(&mut index, &rules, &lookup, &NoText);
+    assert_eq!(moves(&p), [mv("a.pdf", r"Sonst\a.pdf")]);
+    assert!(p.plan.skipped.is_empty(), "die spätere Regel hat gepasst");
+
+    let lookup = FakeLookup::default().with(r"Z:\Root\a.pdf", rec(Some("rechnung"), 0.97));
+    let mut index = seed(&[file(r"Z:\Root\a.pdf")], &[]);
+    let p = run_content(&mut index, &rules, &lookup, &NoText);
+    assert_eq!(moves(&p), [mv("a.pdf", r"Streng\a.pdf")]);
+}
+
+#[test]
+fn nicht_klassifiziert_ist_ein_eigener_grund() {
+    let mut index = seed(&[file(r"Z:\Root\a.pdf")], &[]);
+    let p = run_content(
+        &mut index,
+        &parse(RECHNUNG_RULE),
+        &FakeLookup::default(),
+        &NoText,
+    );
+    assert!(p.plan.actions.is_empty());
+    assert_eq!(
+        skipped(&p),
+        [("a.pdf".to_string(), SkipReason::NotClassified)]
+    );
+    assert_eq!(p.not_classified, 1);
+}
+
+#[test]
+fn category_source_rules_ignoriert_llm_kategorien() {
+    let rules = parse(
+        "[[rules]]\nname = \"v\"\ncategory = \"vertrag\"\ncategory_source = \"rules\"\ntarget = \"V/\"\n",
+    );
+    let mut index = seed(&[file(r"Z:\Root\a.pdf"), file(r"Z:\Root\b.pdf")], &[]);
+    let lookup = FakeLookup::default()
+        .with(r"Z:\Root\a.pdf", rec(Some("vertrag"), 0.85).llm())
+        .with(r"Z:\Root\b.pdf", rec(Some("vertrag"), 0.9));
+    let p = run_content(&mut index, &rules, &lookup, &NoText);
+    assert_eq!(moves(&p), [mv("b.pdf", r"V\b.pdf")]);
+    assert_eq!(p.unmatched, 1);
+}
+
+#[test]
+fn felder_und_fields_regex_als_bedingungen() {
+    let rules = parse(
+        r#"
+[[rules]]
+name   = "ausland"
+ext    = ["jpg"]
+fields = { "exif.has_gps" = "true" }
+fields_regex = { "exif.country" = '^(?:[^D].|D[^E])$' }
+target = "Fotos/{exif.country}-{exif.city|Unbekannt}/"
+"#,
+    );
+    let mut index = seed(
+        &[
+            file(r"Z:\Root\pt.jpg"),
+            file(r"Z:\Root\de.jpg"),
+            file(r"Z:\Root\ohne.jpg"),
+        ],
+        &[],
+    );
+    let lookup = FakeLookup::default()
+        .with(
+            r"Z:\Root\pt.jpg",
+            rec(Some("foto"), 0.95)
+                .field("exif.has_gps", "true")
+                .field("exif.country", "PT")
+                .field("exif.city", "Lisbon"),
+        )
+        .with(
+            r"Z:\Root\de.jpg",
+            rec(Some("foto"), 0.95)
+                .field("exif.has_gps", "true")
+                .field("exif.country", "DE"),
+        )
+        .with(
+            r"Z:\Root\ohne.jpg",
+            rec(Some("foto"), 0.95).field("exif.has_gps", "false"),
+        );
+    let p = run_content(&mut index, &rules, &lookup, &NoText);
+    assert_eq!(moves(&p), [mv("pt.jpg", r"Fotos\PT-Lisbon\pt.jpg")]);
+    assert_eq!(p.unmatched, 2);
+}
+
+#[test]
+fn inhalt_wird_nur_fuer_dateien_geladen_die_billig_passen() {
+    let rules = parse(
+        "[[rules]]\nname = \"r\"\nglob = \"Downloads/**\"\next = [\"pdf\"]\ncategory = \"rechnung\"\ntarget = \"F/\"\n",
+    );
+    let mut index = seed(
+        &[
+            file(r"Z:\Root\Downloads\a.pdf"),
+            file(r"Z:\Root\Downloads\b.txt"),
+            file(r"Z:\Root\Anderswo\c.pdf"),
+            file(r"Z:\Root\Downloads\cloud.pdf").cloud(),
+            file(r"Z:\Root\Downloads\link.pdf").link(),
+        ],
+        &[],
+    );
+    let lookup = FakeLookup::default();
+    let p = run_content(&mut index, &rules, &lookup, &NoText);
+    assert_eq!(
+        lookup.asked(),
+        [paths::path_key(Path::new(r"Z:\Root\Downloads\a.pdf"))],
+        "nur die eine passende Datei"
+    );
+    let reasons = skipped(&p);
+    assert!(reasons.contains(&(
+        r"Downloads\cloud.pdf".to_string(),
+        SkipReason::CloudPlaceholder
+    )));
+    assert!(reasons.contains(&(r"Downloads\link.pdf".to_string(), SkipReason::Link)));
+}
+
+#[test]
+fn regeln_ohne_inhaltsbedingung_fragen_den_cache_nie() {
+    let mut index = seed(&[file(r"Z:\Root\a.pdf")], &[]);
+    let lookup = FakeLookup::default();
+    let text = FakeText::default();
+    run_content(&mut index, &parse(PDF_RULE), &lookup, &text);
+    assert!(lookup.asked().is_empty());
+    assert!(text.read().is_empty());
+}
+
+#[test]
+fn eine_regel_hinter_der_entscheidenden_wird_nie_ausgewertet() {
+    // „alle“ passt für jede PDF und braucht keinen Inhalt: die Inhaltsregel dahinter ist egal.
+    let rules = parse(
+        "[[rules]]\nname = \"alle\"\next = [\"pdf\"]\ntarget = \"A/\"\n[[rules]]\nname = \"r\"\ncategory = \"rechnung\"\ntarget = \"B/\"\n",
+    );
+    let mut index = seed(&[file(r"Z:\Root\a.pdf")], &[]);
+    let lookup = FakeLookup::default();
+    let p = run_content(&mut index, &rules, &lookup, &NoText);
+    assert_eq!(moves(&p), [mv("a.pdf", r"A\a.pdf")]);
+    assert!(lookup.asked().is_empty());
+}
+
+#[test]
+fn text_regex_liest_nur_dateien_die_alle_anderen_bedingungen_erfuellen() {
+    let rules = parse(
+        "[[rules]]\nname = \"telekom\"\nglob = \"Downloads/**\"\ncategory = \"rechnung\"\ntext_regex = '(?i)telekom deutschland gmbh'\ntarget = \"Telekom/\"\n",
+    );
+    let mut index = seed(
+        &[
+            file(r"Z:\Root\Downloads\treffer.pdf"),
+            file(r"Z:\Root\Downloads\anderer-text.pdf"),
+            file(r"Z:\Root\Downloads\andere-kategorie.pdf"),
+            file(r"Z:\Root\Downloads\unsicher.pdf"),
+            file(r"Z:\Root\Anderswo\draussen.pdf"),
+        ],
+        &[],
+    );
+    let lookup = FakeLookup::default()
+        .with(r"Z:\Root\Downloads\treffer.pdf", rec(Some("rechnung"), 0.9))
+        .with(
+            r"Z:\Root\Downloads\anderer-text.pdf",
+            rec(Some("rechnung"), 0.9),
+        )
+        .with(
+            r"Z:\Root\Downloads\andere-kategorie.pdf",
+            rec(Some("vertrag"), 0.9),
+        )
+        .with(
+            r"Z:\Root\Downloads\unsicher.pdf",
+            rec(Some("rechnung"), 0.5),
+        )
+        .with(r"Z:\Root\Anderswo\draussen.pdf", rec(Some("rechnung"), 0.9));
+    let text = FakeText::default()
+        .with(
+            r"Z:\Root\Downloads\treffer.pdf",
+            "Rechnung der Telekom Deutschland GmbH",
+        )
+        .with(
+            r"Z:\Root\Downloads\anderer-text.pdf",
+            "Rechnung von Vodafone",
+        )
+        .with(
+            r"Z:\Root\Downloads\unsicher.pdf",
+            "Telekom Deutschland GmbH",
+        );
+    let p = run_content(&mut index, &rules, &lookup, &text);
+    assert_eq!(
+        moves(&p),
+        [mv(r"Downloads\treffer.pdf", r"Telekom\treffer.pdf")]
+    );
+    assert_eq!(
+        text.read(),
+        [
+            paths::path_key(Path::new(r"Z:\Root\Downloads\anderer-text.pdf")),
+            paths::path_key(Path::new(r"Z:\Root\Downloads\treffer.pdf")),
+            paths::path_key(Path::new(r"Z:\Root\Downloads\unsicher.pdf")),
+        ],
+        "Text nur für Kandidaten (auch den unsicheren: er könnte nur an der Konfidenz scheitern)"
+    );
+    assert_eq!(
+        skipped_detail(&p)
+            .into_iter()
+            .map(|(path, reason, _)| (path, reason))
+            .collect::<Vec<_>>(),
+        [(
+            r"Downloads\unsicher.pdf".to_string(),
+            SkipReason::LowConfidence
+        )]
+    );
+}
+
+#[test]
+fn text_regex_ohne_lesbaren_text_trifft_nie() {
+    let rules =
+        parse("[[rules]]\nname = \"t\"\next = [\"pdf\"]\ntext_regex = 'x'\ntarget = \"T/\"\n");
+    let mut index = seed(&[file(r"Z:\Root\a.pdf")], &[]);
+    let p = run_content(
+        &mut index,
+        &rules,
+        &FakeLookup::default(),
+        &FakeText::default(),
+    );
+    assert!(p.plan.actions.is_empty());
+    assert_eq!(p.unmatched, 1);
+}
+
+const DWELL_RULE: &str = r#"
+[[rules]]
+name      = "warten"
+glob      = "Downloads/**"
+min_dwell = "14d"
+target    = "Archiv/"
+"#;
+
+#[test]
+fn min_dwell_misst_die_zeit_seit_ankunft_nicht_den_mtime() {
+    let mut index = seed(
+        &[
+            // mtime vor Jahren, aber erst vor 3 Tagen angekommen (Erstellzeit)
+            file(r"Z:\Root\Downloads\neu.pdf")
+                .mtime(NOW - 700 * DAY)
+                .ctime(NOW - 3 * DAY),
+            // Erstellzeit alt, aber im Ordner erst vor 2 Tagen gesehen (verschoben/umbenannt)
+            file(r"Z:\Root\Downloads\umbenannt.pdf")
+                .mtime(NOW - 700 * DAY)
+                .ctime(NOW - 400 * DAY)
+                .first_seen(NOW - 2 * DAY),
+            // von Anfang an da und alt
+            file(r"Z:\Root\Downloads\alt.pdf")
+                .mtime(NOW - 700 * DAY)
+                .ctime(NOW - 400 * DAY),
+            // ohne Erstellzeit: der mtime zählt
+            file(r"Z:\Root\Downloads\ohne-ctime.pdf").mtime(NOW - 40 * DAY),
+        ],
+        &[],
+    );
+    let p = run_content(
+        &mut index,
+        &parse(DWELL_RULE),
+        &FakeLookup::default(),
+        &NoText,
+    );
+    assert_eq!(
+        moves(&p),
+        [
+            mv(r"Downloads\alt.pdf", r"Archiv\alt.pdf"),
+            mv(r"Downloads\ohne-ctime.pdf", r"Archiv\ohne-ctime.pdf"),
+        ]
+    );
+    let reasons: Vec<_> = skipped_detail(&p)
+        .into_iter()
+        .map(|(path, reason, detail)| (path, reason, detail.unwrap_or_default()))
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            (
+                r"Downloads\neu.pdf".to_string(),
+                SkipReason::TooRecentArrival,
+                "seit 3 von 14 Tagen im Ordner".to_string()
+            ),
+            (
+                r"Downloads\umbenannt.pdf".to_string(),
+                SkipReason::TooRecentArrival,
+                "seit 2 von 14 Tagen im Ordner".to_string()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn zweiter_lauf_nach_dem_einsortieren_hat_keine_aktionen() {
+    // Die Datei liegt schon dort, wo die Regel sie hinlegt.
+    let mut index = seed(&[file(r"Z:\Root\Finanzen\2026\Telekom_scan.pdf")], &[]);
+    let lookup = FakeLookup::default().with(
+        r"Z:\Root\Finanzen\2026\Telekom_scan.pdf",
+        rec(Some("rechnung"), 0.95)
+            .field("doc.date", "2026-09-30")
+            .field("doc.sender", "Telekom"),
+    );
+    let rules = parse(
+        "[[rules]]\nname = \"r\"\ncategory = \"rechnung\"\ntarget = \"Finanzen/{doc.date:%Y}/{doc.sender|Unbekannt}_scan.{ext}\"\n",
+    );
+    let p = run_content(&mut index, &rules, &lookup, &NoText);
+    assert!(p.plan.actions.is_empty(), "{:?}", moves(&p));
+    assert!(p.plan.skipped.is_empty());
+}
+
+#[test]
+fn geschuetzte_dateien_werden_nie_nach_inhalt_gefragt() {
+    let rules = parse(
+        "[[rules]]\nname = \"r\"\next = [\"pdf\"]\ncategory = \"rechnung\"\ntarget = \"F/\"\n",
+    );
+    let mut index = seed(
+        &[
+            file(r"Z:\Root\.ordner-cleanup\x.pdf"),
+            file(r"Z:\Root\_Archiv\y.pdf"),
+        ],
+        &[],
+    );
+    let lookup = FakeLookup::default();
+    run_content(&mut index, &rules, &lookup, &NoText);
+    assert!(lookup.asked().is_empty());
+}
+
+#[test]
+fn skip_detail_wird_serialisiert_und_alte_plaene_bleiben_lesbar() {
+    use super::plan::Skipped;
+    let with = Skipped {
+        path: "a".into(),
+        reason: SkipReason::LowConfidence,
+        detail: Some("rechnung 0.62".into()),
+    };
+    let json = serde_json::to_string(&with).unwrap();
+    assert!(
+        json.contains("\"reason\":\"low-confidence\"") && json.contains("detail"),
+        "{json}"
+    );
+    let plain = Skipped {
+        path: "a".into(),
+        reason: SkipReason::MissingField,
+        detail: None,
+    };
+    let json = serde_json::to_string(&plain).unwrap();
+    assert!(
+        !json.contains("detail") && json.contains("missing-field"),
+        "{json}"
+    );
+    let old: Skipped = serde_json::from_str(r#"{"path":"a","reason":"protected"}"#).unwrap();
+    assert_eq!(old.detail, None);
+    for (reason, name) in [
+        (SkipReason::NotClassified, "not-classified"),
+        (SkipReason::TooRecentArrival, "too-recent-arrival"),
+    ] {
+        assert_eq!(
+            serde_json::to_string(&reason).unwrap(),
+            format!("\"{name}\"")
+        );
     }
 }

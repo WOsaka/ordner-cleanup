@@ -53,6 +53,32 @@ pub fn render(report: &Report) -> String {
         );
     }
 
+    if let Some(c) = &report.content {
+        let _ = writeln!(s, "\nInhalte");
+        if !c.classified {
+            let _ = writeln!(
+                s,
+                "  noch nicht klassifiziert (ordner-cleanup classify <pfad>)"
+            );
+        } else {
+            let cats: Vec<String> = c
+                .categories
+                .iter()
+                .take(5)
+                .map(|k| format!("{} {}", k.name, k.count))
+                .collect();
+            let _ = writeln!(
+                s,
+                "  {} von {} Dateien klassifiziert: {} · ohne Kategorie {}",
+                c.files_classified,
+                c.files_total,
+                cats.join(" · "),
+                c.uncategorized
+            );
+            let _ = writeln!(s, "  Zum Prüfen: {}", c.review_total);
+        }
+    }
+
     if !report.top_dirs.is_empty() {
         let _ = writeln!(s, "\nGrößte Ordner");
         for d in report.top_dirs.iter().take(5) {
