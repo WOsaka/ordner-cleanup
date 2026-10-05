@@ -1,6 +1,6 @@
 ---
 title: "Grafische Oberfläche (Phase 6b)"
-status: draft          # draft | approved | implemented
+status: approved          # draft | approved | implemented
 created: 2026-10-05
 updated: 2026-10-05
 ---
