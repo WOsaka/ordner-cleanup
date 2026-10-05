@@ -398,7 +398,7 @@ fn resolve_categories(requested: &[String], config: &Config) -> Result<Vec<Strin
 }
 
 /// Pfad der Regeldatei: `--rules` vor `rules_file` der Config vor `rules.toml` im Config-Ordner.
-fn resolve_rules_path(
+pub fn resolve_rules_path(
     arg: Option<&Path>,
     config: &Config,
     config_dir: Option<&Path>,

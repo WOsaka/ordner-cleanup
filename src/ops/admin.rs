@@ -138,6 +138,12 @@ fn history_in(
     })
 }
 
+/// Prüft das lokale LLM: Endpunkt (nur Loopback), Erreichbarkeit und Modell.
+pub fn llm_check(config: &crate::config::LlmConfig) -> Result<(), String> {
+    let client = crate::content::llm::LlmClient::new(config)?;
+    client.check().map_err(|e| e.to_string())
+}
+
 /// Alle gescannten Wurzeln im Index.
 pub fn index_roots() -> Result<Vec<RootInfo>> {
     Ok(Index::open(&paths::index_path()?)?.roots()?)
@@ -152,6 +158,16 @@ pub fn index_remove(path: &Path) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn llm_pruefung_lehnt_fremde_endpunkte_ab_ohne_netzwerkzugriff() {
+        let config = crate::config::LlmConfig {
+            endpoint: "http://example.com:11434".into(),
+            ..Default::default()
+        };
+        let err = llm_check(&config).unwrap_err();
+        assert!(err.contains("Loopback"), "{err}");
+    }
 
     #[test]
     fn leerer_verlauf_nennt_den_naechsten_schritt() {

@@ -38,6 +38,9 @@ fn plan(n: u32) -> Plan {
     }
 }
 
+/// Tests, die `ORDNER_CLEANUP_HOME` setzen, laufen nacheinander.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 struct State {
     review: ReviewState,
     shell: Shell,
@@ -110,6 +113,9 @@ fn alle_seiten_lassen_sich_ohne_daten_zeichnen() {
         analysis::AnalysisView, cleanup::CleanupView, history::HistoryView, overview::OverviewView,
         settings::SettingsView,
     };
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let home = tempfile::tempdir().unwrap();
+    std::env::set_var(ordner_cleanup::paths::HOME_OVERRIDE_ENV, home.path());
     struct Pages {
         shell: Shell,
         overview: OverviewView,
@@ -136,7 +142,55 @@ fn alle_seiten_lassen_sich_ohne_daten_zeichnen() {
         },
         pages,
     );
-    harness.run();
-    harness.get_by_label("Verknüpfung im Startmenü anlegen");
+    let _ = harness.run_ok();
     harness.get_by_label("Plan erzeugen");
+}
+
+#[test]
+fn einstellungen_zeigen_alle_tabs_mit_echten_dateien() {
+    use ordner_cleanup::gui::views::settings::SettingsView;
+    use ordner_cleanup::paths::{config_dir, HOME_OVERRIDE_ENV};
+
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let home = tempfile::tempdir().unwrap();
+    std::env::set_var(HOME_OVERRIDE_ENV, home.path());
+    let dir = config_dir().unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("config.toml"),
+        "# Meine Config\ntop = 40\n\n[profiles.downloads]\nroot = 'D:\\Downloads'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("rules.toml"),
+        "[[rules]]\nname = \"pdf\"\next = [\"pdf\"]\ntarget = \"Dokumente/\"\n",
+    )
+    .unwrap();
+
+    struct State {
+        shell: Shell,
+        settings: SettingsView,
+    }
+    let mut harness = Harness::new_ui_state(
+        |ui, s: &mut State| s.settings.ui(ui, &mut s.shell),
+        State {
+            shell: Shell::new(eframe::egui::Context::default()),
+            settings: SettingsView::default(),
+        },
+    );
+    let _ = harness.run_ok();
+    harness.get_by_label("Alt ab");
+    for (tab, expected) in [
+        ("Profile & Zeitpläne", "Profil downloads"),
+        ("Regeln", "Vorschau: Treffer"),
+        ("Klassifikation & LLM", "Verbindung testen"),
+        ("Kategorien", "Eingebaute Kategorien"),
+        ("Vorlagen", "Eingebaute Vorlagen"),
+        ("Dateien", "Verknüpfung im Startmenü anlegen"),
+    ] {
+        harness.get_by_label(tab).click();
+        let _ = harness.run_ok();
+        harness.get_by_label_contains(expected);
+    }
+    std::env::remove_var(HOME_OVERRIDE_ENV);
 }

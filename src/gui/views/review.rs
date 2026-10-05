@@ -25,6 +25,8 @@ pub struct ReviewState {
     rule: Option<String>,
     show_skipped: bool,
     selected_row: Option<usize>,
+    /// Nur ansehen (Regel-Vorschau): keine Auswahl, kein Anwenden
+    pub read_only: bool,
     /// Abhängige Einträge, nach denen gerade gefragt wird
     dependents: Vec<u32>,
 }
@@ -67,6 +69,7 @@ impl ReviewState {
             rule: None,
             show_skipped: false,
             selected_row: None,
+            read_only: false,
             dependents: Vec::new(),
         }
     }
@@ -113,15 +116,18 @@ impl ReviewState {
                 texts::bytes(s.selected_bytes),
                 texts::bytes(s.total_bytes)
             ));
-            if ui
-                .add_enabled(s.selected > 0, egui::Button::new("Anwenden …"))
-                .clicked()
+            if !self.read_only
+                && ui
+                    .add_enabled(s.selected > 0, egui::Button::new("Anwenden …"))
+                    .clicked()
             {
                 apply = true;
             }
         });
         self.filter_bar(ui);
-        self.select_bar(ui);
+        if !self.read_only {
+            self.select_bar(ui);
+        }
         self.table(ui, shell);
         self.detail(ui);
         apply
@@ -195,7 +201,7 @@ impl ReviewState {
     }
 
     fn table(&mut self, ui: &mut egui::Ui, shell: &mut Shell) {
-        let skipped = self.show_skipped;
+        let skipped = self.show_skipped || self.read_only;
         let mut toggled: Option<usize> = None;
         let mut clicked: Option<usize> = None;
         let rows = self.model.len();

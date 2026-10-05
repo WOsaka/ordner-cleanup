@@ -669,6 +669,79 @@ pub fn set(doc: &mut DocumentMut, base: &[&str], key: &str, value: &Value) {
     set_in_table(table_at_mut(doc, base), key, value);
 }
 
+/// Wo ein Feld liegt: unter einem Tabellenpfad oder in einem Eintrag einer Tabellenliste.
+#[derive(Debug, Clone, Copy)]
+pub enum Loc<'a> {
+    Path(&'a [&'a str]),
+    Entry { list: &'a str, index: usize },
+}
+
+impl Loc<'_> {
+    /// Kennung für Eingabepuffer und Widget-IDs
+    pub fn id(&self) -> String {
+        match self {
+            Loc::Path(base) => base.join("."),
+            Loc::Entry { list, index } => format!("{list}[{index}]"),
+        }
+    }
+}
+
+pub fn get_at(doc: &DocumentMut, loc: Loc, key: &str) -> Option<Value> {
+    match loc {
+        Loc::Path(base) => get(doc, base, key),
+        Loc::Entry { list, index } => super::tables::get_field(doc, list, index, key),
+    }
+}
+
+pub fn set_at(doc: &mut DocumentMut, loc: Loc, key: &str, value: &Value) {
+    match loc {
+        Loc::Path(base) => set(doc, base, key, value),
+        Loc::Entry { list, index } => super::tables::set_field(doc, list, index, key, value),
+    }
+}
+
+pub fn unset_at(doc: &mut DocumentMut, loc: Loc, key: &str) {
+    match loc {
+        Loc::Path(base) => unset(doc, base, key),
+        Loc::Entry { list, index } => super::tables::unset_field(doc, list, index, key),
+    }
+}
+
+/// Schreibt die Eingabe eines Feldes: leer entfernt den Schlüssel (Standard), sonst wird sie
+/// geprüft und geschrieben. Bei einem Fehler bleibt das Dokument unverändert.
+pub fn apply_text(
+    doc: &mut DocumentMut,
+    base: &[&str],
+    spec: &FieldSpec,
+    text: &str,
+) -> Result<(), String> {
+    apply_text_at(doc, Loc::Path(base), spec, text)
+}
+
+/// Wie [`apply_text`], für einen beliebigen Ort.
+pub fn apply_text_at(
+    doc: &mut DocumentMut,
+    loc: Loc,
+    spec: &FieldSpec,
+    text: &str,
+) -> Result<(), String> {
+    let is_list = matches!(
+        spec.kind,
+        FieldKind::TextList | FieldKind::PathList | FieldKind::Multi(_)
+    );
+    if text.trim().is_empty() && !matches!(spec.kind, FieldKind::Multi(_)) {
+        unset_at(doc, loc, spec.key);
+        return Ok(());
+    }
+    let value = parse_input(&spec.kind, text)?;
+    if is_list && matches!(&value, Value::List(items) if items.is_empty()) {
+        unset_at(doc, loc, spec.key);
+    } else {
+        set_at(doc, loc, spec.key, &value);
+    }
+    Ok(())
+}
+
 /// Entfernt den Schlüssel („zurücksetzen“ auf den Standard).
 pub fn unset(doc: &mut DocumentMut, base: &[&str], key: &str) {
     if table_at(doc, base).is_some() {
@@ -728,6 +801,39 @@ mod tests {
         let cfg = Config::parse(&text).unwrap();
         assert_eq!(cfg.profiles["foto"].root, r"D:\Fotos");
         assert_eq!(cfg.profiles["foto"].plans, ["junk"]);
+    }
+
+    #[test]
+    fn eingabe_schreibt_prueft_und_leer_setzt_zurueck() {
+        let top = CONFIG_FIELDS.iter().find(|f| f.key == "top").unwrap();
+        let mut d = doc("top = 50 # Anzahl
+");
+        apply_text(&mut d, &[], top, "80").unwrap();
+        assert!(d.to_string().contains("top = 80 # Anzahl"), "{d}");
+        assert!(apply_text(&mut d, &[], top, "viele").is_err());
+        assert_eq!(
+            get(&d, &[], "top"),
+            Some(Value::Int(80)),
+            "Fehler ändert nichts"
+        );
+        apply_text(&mut d, &[], top, "  ").unwrap();
+        assert_eq!(get(&d, &[], "top"), None);
+
+        let exclude = CONFIG_FIELDS.iter().find(|f| f.key == "exclude").unwrap();
+        apply_text(
+            &mut d,
+            &[],
+            exclude,
+            "*.tmp
+node_modules",
+        )
+        .unwrap();
+        assert_eq!(
+            get(&d, &[], "exclude"),
+            Some(Value::List(vec!["*.tmp".into(), "node_modules".into()]))
+        );
+        apply_text(&mut d, &[], exclude, "").unwrap();
+        assert_eq!(get(&d, &[], "exclude"), None);
     }
 
     #[test]
