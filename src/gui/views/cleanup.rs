@@ -1,5 +1,6 @@
 //! Ansicht „Aufräumen“: Plan-Art und Optionen, Plan erzeugen oder öffnen, Review, Anwenden.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -66,6 +67,9 @@ pub fn recent_plans(dirs: &[PathBuf], limit: usize) -> Vec<PlanFile> {
             }
         }
     }
+    // Die Suchordner können sich überlappen (`plans\_gui` liegt unter `plans`).
+    let mut seen = HashSet::new();
+    found.retain(|p| seen.insert(paths::path_key(&p.path)));
     found.sort_by_key(|a| std::cmp::Reverse(a.modified));
     found.truncate(limit);
     found
@@ -499,6 +503,29 @@ mod tests {
             .collect();
         assert_eq!(names, ["neu.json", "alt.json"]);
         assert_eq!(recent_plans(&[dir.path().to_path_buf()], 1).len(), 1);
+    }
+
+    #[test]
+    fn ueberlappende_suchordner_zeigen_jeden_plan_nur_einmal() {
+        let plans = tempfile::tempdir().unwrap();
+        let gui = plans.path().join("_gui");
+        std::fs::create_dir(&gui).unwrap();
+        let in_gui = gui.join("gui.json");
+        let direct = plans.path().join("direkt.json");
+        for f in [&in_gui, &direct] {
+            std::fs::write(f, "{}").unwrap();
+        }
+        // So liefert `plan_dirs()` sie: der GUI-Ordner und sein Elternordner.
+        let dirs = [gui.clone(), plans.path().to_path_buf()];
+        let found = recent_plans(&dirs, 10);
+        let mut names: Vec<_> = found
+            .iter()
+            .map(|p| p.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["direkt.json", "gui.json"]);
+        // `limit` zählt nach dem Entdoppeln.
+        assert_eq!(recent_plans(&dirs, 2).len(), 2);
     }
 
     #[test]

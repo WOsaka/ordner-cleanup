@@ -1,6 +1,6 @@
 ---
 title: "Bug: „Zuletzt erzeugte Pläne“ zeigt Pläne aus dem GUI-Ordner doppelt"
-status: analysis
+status: fixed
 created: 2026-10-05
 updated: 2026-10-05
 ---
