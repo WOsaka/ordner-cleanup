@@ -3,7 +3,7 @@
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
-use super::shell::{Answer, Choice, Dialog, Page, Route, Shell};
+use super::shell::{Choice, Dialog, Page, Route, Shell};
 use super::texts;
 use super::views::{
     analysis::AnalysisView, cleanup::CleanupView, history::HistoryView, overview::OverviewView,
@@ -115,11 +115,6 @@ impl GuiApp {
                 }
                 _ => {}
             }
-        }
-        if false {
-            let _: Option<Answer> = None;
-            self.closing = true;
-            self.shell.runner.cancel_all();
         }
         if self.closing && self.shell.runner.is_idle() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);

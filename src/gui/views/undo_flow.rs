@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use crate::change::undo::{RestoreStatus, UndoOutcome};
 use crate::change::RunId;
 use crate::gui::shell::{Answer, Dialog, Route, Shell, TaskResult};
-use crate::gui::tasks::{TaskError, TaskKind};
+use crate::gui::tasks::TaskKind;
 use crate::ops::runs::{undo_check, undo_execute, UndoCheck};
 use crate::ops::{local_time, status_label};
 
@@ -130,9 +130,6 @@ impl UndoFlow {
         }
     }
 }
-
-#[allow(dead_code)]
-fn _unused(_: TaskError) {}
 
 #[cfg(test)]
 mod tests {

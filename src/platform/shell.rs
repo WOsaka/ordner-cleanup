@@ -38,7 +38,15 @@ pub fn open(path: &Path) -> Result<()> {
         ),
         Some(_) => {}
     }
-    let file = wide(paths::extended(path).as_os_str());
+    // ShellExecute kommt mit dem Präfix `\\?\` bei vielen Handlern nicht zurecht; er wird nur
+    // für Pfade über der Längengrenze verwendet.
+    let plain = paths::display(path);
+    let target = if plain.chars().count() < 250 {
+        PathBuf::from(plain)
+    } else {
+        paths::extended(path)
+    };
+    let file = wide(target.as_os_str());
     let verb = wide(std::ffi::OsStr::new("open"));
     // SAFETY: Zeiger auf nullterminierte Puffer, die den Aufruf überdauern.
     let result = unsafe {
