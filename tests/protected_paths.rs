@@ -117,7 +117,7 @@ fn config_geschuetzter_pfad_kommt_nicht_in_den_plan() {
 fn profil_geschuetzter_pfad_gilt_auch_beim_anwenden_eines_veraenderten_plans() {
     let env = Env::new();
     let victim = env.write("wichtig/x.txt", "gleich");
-    let keep = env.write("a/x.txt", "gleich");
+    env.write("a/x.txt", "gleich");
     env.write("b/x.txt", "gleich");
     let protected = env.tree.path().join("wichtig");
     env.config(&format!(
@@ -148,8 +148,11 @@ protected_paths = ['{}']
         "{plan}"
     );
 
-    // Von Hand um eine Aktion im geschützten Ordner ergänzt: `apply` verweigert sie.
-    plan["actions"] = json!([action(1, &victim, &keep)]);
+    // Von Hand um eine Aktion im geschützten Ordner ergänzt: `apply` verweigert sie. Die Pfade
+    // kommen aus der Wurzel des Plans, denn das Programm löst sie auf (Kurznamen auf dem CI-Runner).
+    let plan_root = PathBuf::from(plan["root"].as_str().unwrap());
+    let in_plan = |rel: &str| plan_root.join(rel.replace('/', "\\"));
+    plan["actions"] = json!([action(1, &in_plan("wichtig/x.txt"), &in_plan("a/x.txt"))]);
     let edited = env.home.path().join("edited.json");
     std::fs::write(&edited, plan.to_string()).unwrap();
     env.bin()
