@@ -247,9 +247,52 @@ impl ReviewModel {
     }
 
     fn set_rows(&mut self, indices: impl Iterator<Item = usize>, on: bool) {
+        let mut turned_off = Vec::new();
         for i in indices {
             if self.rows[i].id.is_some() {
+                if !on && self.selected[i] {
+                    turned_off.push(i);
+                }
                 self.selected[i] = on;
+            }
+        }
+        if !on {
+            self.deselect_ancestors_of(&turned_off);
+        }
+    }
+
+    /// Beim gesammelten Abwählen werden gewählte Ordner-Aktionen (`remove-dir`, Ordner
+    /// verschieben) mit abgewählt, die einen der abgewählten Einträge enthielten: Sonst nähme
+    /// das Verschieben den abgewählten Inhalt mit, und das Entfernen scheiterte.
+    fn deselect_ancestors_of(&mut self, turned_off: &[usize]) {
+        let dir_ids: HashSet<u32> = self
+            .plan
+            .actions
+            .iter()
+            .filter(|a| a.is_dir)
+            .map(|a| a.id)
+            .collect();
+        let containers: std::collections::HashMap<String, usize> = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(i, r)| self.selected[*i] && r.id.is_some())
+            .filter(|(_, r)| {
+                r.action == Some(ActionType::RemoveDir)
+                    || r.id.is_some_and(|id| dir_ids.contains(&id))
+            })
+            .map(|(i, r)| (r.key.clone(), i))
+            .collect();
+        if containers.is_empty() {
+            return;
+        }
+        for &i in turned_off {
+            let mut key = self.rows[i].key.as_str();
+            while let Some(cut) = key.rfind('\\') {
+                key = &key[..cut];
+                if let Some(&parent) = containers.get(key) {
+                    self.selected[parent] = false;
+                }
             }
         }
     }
@@ -584,6 +627,29 @@ mod tests {
         assert_eq!(m.selected_ids(), [1].into());
         m.select_all(true);
         assert_eq!(m.selected_ids().len(), 3);
+    }
+
+    #[test]
+    fn gesammeltes_abwaehlen_nimmt_enthaltende_ordner_mit() {
+        let mut dir_move = action(2, ActionType::Move, r"D:\Daten\a", 0);
+        dir_move.is_dir = true;
+        let mut m = ReviewModel::new(plan(
+            vec![
+                action(1, ActionType::Quarantine, r"D:\Daten\a\x.tmp", 5),
+                dir_move,
+                action(3, ActionType::Quarantine, r"D:\Daten\b.tmp", 5),
+            ],
+            vec![],
+        ));
+        m.select_folder(r"D:\Daten\a\x.tmp", false);
+        assert_eq!(
+            m.selected_ids(),
+            [3].into(),
+            "Ordner a würde x.tmp mitnehmen"
+        );
+        m.select_all(true);
+        m.select_filtered(false);
+        assert!(m.selected_ids().is_empty());
     }
 
     #[test]

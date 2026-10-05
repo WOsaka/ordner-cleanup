@@ -323,7 +323,8 @@ fn mit_settings_gespeicherte_regel_wird_von_der_cli_genutzt() {
         rules_doc::KEY,
         "pdfs",
         &rules_doc::new_rule_defaults(),
-    );
+    )
+    .unwrap();
     tables::set_field(
         file.doc_mut(),
         rules_doc::KEY,

@@ -326,9 +326,10 @@ impl ReviewState {
             id: ID_DEPENDENTS,
             title: "Abhängige Einträge".into(),
             text: format!(
-                "{} abhängige Einträge scheitern, wenn dieser fehlt (z. B. übergeordnete leere \
-                 Ordner). Ebenfalls abwählen?\n\nBei „Abbrechen“ bleiben sie gewählt und werden \
-                 beim Anwenden als „nicht leer“ übersprungen.",
+                "{} übergeordnete Einträge hängen von diesem ab. Ebenfalls abwählen?\n\nBei \
+                 „Abbrechen“ bleiben sie gewählt: Ein gewähltes Verschieben des ganzen Ordners \
+                 nimmt auch diesen Eintrag mit, ein gewähltes Entfernen eines Ordners wird als \
+                 „nicht leer“ übersprungen.",
                 deps.len()
             ),
             ok_label: "Ebenfalls abwählen".into(),
