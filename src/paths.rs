@@ -141,6 +141,48 @@ pub fn schedules_path() -> Result<PathBuf> {
     data_file("schedules.json")
 }
 
+/// Ablage der GUI-Pläne (`plans\_gui`), überschreibbar mit `[gui] plans_dir`. Der Unterstrich ist
+/// in Profilnamen verboten, es gibt also keine Kollision mit `plans\<profil>`.
+pub fn gui_plans_dir(override_dir: Option<&str>) -> Result<PathBuf> {
+    gui_plans_dir_in(data_dir().as_deref(), config_dir().as_deref(), override_dir)
+}
+
+fn gui_plans_dir_in(
+    data: Option<&Path>,
+    config: Option<&Path>,
+    override_dir: Option<&str>,
+) -> Result<PathBuf> {
+    match override_dir.map(str::trim).filter(|d| !d.is_empty()) {
+        Some(dir) => Ok(PathBuf::from(crate::config::resolve_in(dir, config))),
+        None => Ok(data
+            .context("Datenordner (%LOCALAPPDATA%) nicht ermittelbar")?
+            .join("plans")
+            .join("_gui")),
+    }
+}
+
+/// Zustand der GUI (Fenster, letzte Auswahl) unter `%APPDATA%\ordner-cleanup\gui`.
+pub fn gui_state_dir() -> Result<PathBuf> {
+    gui_state_dir_in(config_dir().as_deref())
+}
+
+fn gui_state_dir_in(config: Option<&Path>) -> Result<PathBuf> {
+    Ok(config
+        .context("Config-Ordner (%APPDATA%) nicht ermittelbar")?
+        .join("gui"))
+}
+
+/// Fehlerprotokoll der GUI (die GUI-exe hat keine Konsole).
+pub fn gui_error_log() -> Result<PathBuf> {
+    gui_error_log_in(data_dir().as_deref())
+}
+
+fn gui_error_log_in(data: Option<&Path>) -> Result<PathBuf> {
+    Ok(data
+        .context("Datenordner (%LOCALAPPDATA%) nicht ermittelbar")?
+        .join("gui-errors.log"))
+}
+
 /// Berichte eines Profils (`reports\<profil>`).
 pub fn reports_dir(profile: &str) -> Result<PathBuf> {
     Ok(data_file("reports")?.join(profile))
@@ -232,6 +274,44 @@ mod tests {
         assert_eq!(
             relative_to(Path::new(root), Path::new(path)),
             expected.map(PathBuf::from)
+        );
+    }
+
+    #[test]
+    fn gui_plaene_liegen_standardmaessig_unter_plans_gui() {
+        let data = Path::new(r"C:\Data");
+        assert_eq!(
+            gui_plans_dir_in(Some(data), None, None).unwrap(),
+            PathBuf::from(r"C:\Data\plans\_gui")
+        );
+        // `_` ist in Profilnamen verboten: keine Kollision mit plans\<profil>
+        assert!(!crate::config::valid_profile_name("_gui"));
+    }
+
+    #[test]
+    fn gui_plaene_override_absolut_und_relativ_zur_config() {
+        let data = Path::new(r"C:\Data");
+        let cfg = Path::new(r"C:\Cfg");
+        assert_eq!(
+            gui_plans_dir_in(Some(data), Some(cfg), Some(r"D:\Pläne")).unwrap(),
+            PathBuf::from(r"D:\Pläne")
+        );
+        assert_eq!(
+            gui_plans_dir_in(Some(data), Some(cfg), Some("pl")).unwrap(),
+            PathBuf::from(r"C:\Cfg\pl")
+        );
+        assert!(gui_plans_dir_in(None, None, None).is_err());
+    }
+
+    #[test]
+    fn gui_state_und_fehlerlog_liegen_im_richtigen_ordner() {
+        assert_eq!(
+            gui_state_dir_in(Some(Path::new(r"C:\Cfg"))).unwrap(),
+            PathBuf::from(r"C:\Cfg\gui")
+        );
+        assert_eq!(
+            gui_error_log_in(Some(Path::new(r"C:\Data"))).unwrap(),
+            PathBuf::from(r"C:\Data\gui-errors.log")
         );
     }
 

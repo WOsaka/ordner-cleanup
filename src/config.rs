@@ -271,6 +271,14 @@ pub struct HealthConfig {
     pub weights: Weights,
 }
 
+/// `[gui]` in der Config.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GuiConfig {
+    /// Ablage der in der GUI erzeugten Pläne (Default: `plans\_gui` im Datenordner)
+    pub plans_dir: Option<String>,
+}
+
 /// Inhalt der `config.toml`; alle Felder sind optional.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -301,6 +309,7 @@ pub struct Config {
     pub notify: NotifyConfig,
     pub classify: ClassifyConfig,
     pub llm: LlmConfig,
+    pub gui: GuiConfig,
     /// Wie viele Berichte und Pläne je Profil `run` aufbewahrt
     pub reports_keep: usize,
     pub profiles: BTreeMap<String, Profile>,
@@ -338,6 +347,7 @@ impl Default for Config {
             notify: NotifyConfig::default(),
             classify: ClassifyConfig::default(),
             llm: LlmConfig::default(),
+            gui: GuiConfig::default(),
             reports_keep: 12,
             profiles: BTreeMap::new(),
         }
@@ -599,6 +609,14 @@ mod tests {
             threads: None,
             template: None,
         }
+    }
+
+    #[test]
+    fn gui_abschnitt_ist_optional_und_strikt() {
+        assert_eq!(Config::parse("").unwrap().gui.plans_dir, None);
+        let c = Config::parse("[gui]\nplans_dir = 'D:\\Pläne'\n").unwrap();
+        assert_eq!(c.gui.plans_dir.as_deref(), Some(r"D:\Pläne"));
+        assert!(Config::parse("[gui]\nunbekannt = 1\n").is_err());
     }
 
     #[test]

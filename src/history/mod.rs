@@ -84,6 +84,9 @@ impl History {
         }
         let existed = path.exists();
         let conn = Connection::open(path).map_err(|e| HistoryError::Unreadable(e.to_string()))?;
+        // GUI-Worker und ein geplanter CLI-Lauf teilen sich die Datei.
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| HistoryError::Unreadable(e.to_string()))?;
         Self::init(conn, existed)
     }
 

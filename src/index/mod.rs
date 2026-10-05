@@ -70,6 +70,11 @@ impl Index {
             conn.pragma_update(None, "journal_mode", "WAL")
                 .map_err(unreadable)?;
         }
+        if file_backed {
+            // GUI-Worker und ein geplanter CLI-Lauf teilen sich die Datei.
+            conn.busy_timeout(std::time::Duration::from_secs(5))
+                .map_err(unreadable)?;
+        }
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         let has_meta: bool = conn
             .query_row(
@@ -176,6 +181,17 @@ impl Index {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dateiindex_wartet_bei_gesperrter_datenbank() {
+        let dir = tempfile::tempdir().unwrap();
+        let idx = Index::open(&dir.path().join("index.db")).unwrap();
+        let ms: i64 = idx
+            .conn()
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ms, 5000);
+    }
 
     #[test]
     fn neuer_index_hat_schema_version() {
