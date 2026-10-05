@@ -75,6 +75,8 @@ pub struct TaskRunner {
     running: Vec<RunningInfo>,
     tx: Sender<Finished>,
     rx: Receiver<Finished>,
+    /// Bereits abgeholte, aber noch nicht an `poll` übergebene Ergebnisse
+    pending: Vec<Finished>,
 }
 
 fn panic_text(payload: &(dyn Any + Send)) -> String {
@@ -104,6 +106,7 @@ impl TaskRunner {
             running: Vec::new(),
             tx,
             rx,
+            pending: Vec::new(),
         }
     }
 
@@ -144,15 +147,17 @@ impl TaskRunner {
         Ok(id)
     }
 
-    fn collect(&mut self) -> Vec<Finished> {
+    /// Holt fertige Ergebnisse aus dem Kanal in `pending` und räumt `running` auf.
+    fn collect(&mut self) {
         let done: Vec<Finished> = self.rx.try_iter().collect();
         self.running.retain(|r| !done.iter().any(|d| d.id == r.id));
-        done
+        self.pending.extend(done);
     }
 
     /// Beendete Tasks seit dem letzten Aufruf.
     pub fn poll(&mut self) -> Vec<Finished> {
-        self.collect()
+        self.collect();
+        std::mem::take(&mut self.pending)
     }
 
     pub fn running(&self) -> Vec<&RunningInfo> {
@@ -194,6 +199,22 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         all
+    }
+
+    #[test]
+    fn spawn_verwirft_kein_fertiges_ergebnis() {
+        let (mut r, wakes) = runner();
+        r.spawn("a", TaskKind::Read, |_| Ok(1u32)).unwrap();
+        // warten, bis a fertig im Kanal liegt, ohne zu pollen
+        let end = Instant::now() + Duration::from_secs(10);
+        while wakes.load(Ordering::Relaxed) == 0 {
+            assert!(Instant::now() < end);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        r.spawn("b", TaskKind::Read, |_| Ok(2u32)).unwrap();
+        let mut names: Vec<String> = wait_for(&mut r, 2).into_iter().map(|f| f.name).collect();
+        names.sort();
+        assert_eq!(names, ["a", "b"]);
     }
 
     #[test]
