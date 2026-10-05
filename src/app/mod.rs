@@ -29,10 +29,10 @@ use crate::ops::report::{export_report, report_model, ReportRequest};
 use crate::ops::scan::{scan, ScanReport, ScanRequest};
 use crate::ops::target::TargetSpec;
 use crate::ops::{
-    find_run_root, index_age_note, known_roots, load_config, local_time, normalize, now_rfc3339,
-    now_ticks, onedrive_roots_from_env, onedrive_warning, resolve_root, status_label, OpCtx,
+    find_run_root, known_roots, load_config, local_time, normalize, now_rfc3339,
+    onedrive_roots_from_env, onedrive_warning, resolve_root, status_label, OpCtx,
 };
-use crate::paths::{self, index_path, registry_path};
+use crate::paths::{self, registry_path};
 use crate::report::{self, Format};
 
 mod classify;

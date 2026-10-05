@@ -22,6 +22,7 @@ use crate::scan::source::TICKS_PER_SEC;
 
 pub mod admin;
 pub mod classify;
+pub mod plan;
 pub mod report;
 pub mod scan;
 pub mod snapshot;
