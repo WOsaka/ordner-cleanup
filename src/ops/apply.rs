@@ -27,6 +27,8 @@ pub struct ApplyCheck {
     /// OneDrive-Warnung
     pub notes: Notes,
     pub empty: bool,
+    /// Wie lange die Quarantäne Läufe vorhält (`quarantine_days` der Config), für den Dialog
+    pub quarantine_days: u32,
 }
 
 /// Ergebnis von [`apply_execute`].
@@ -58,6 +60,7 @@ fn check_with(plan: &Plan, config: &Config, onedrive_roots: &[PathBuf]) -> Resul
         limit: limits::exceeds(plan, onedrive_roots, config),
         notes,
         empty: plan.actions.is_empty(),
+        quarantine_days: config.quarantine_days,
     })
 }
 

@@ -57,12 +57,18 @@ pub struct ApplyFlow {
 }
 
 /// Ziel der Aktionen als Text für den Dialog.
-fn target_text(kind: PlanKind) -> &'static str {
+fn target_text(kind: PlanKind, quarantine_days: u32) -> String {
     match kind {
-        PlanKind::Archive | PlanKind::Versions => "den Ordner „_Archiv“ in der Wurzel",
-        PlanKind::Rules => "ihre Zielordner unter der Wurzel",
-        PlanKind::EmptyDirs => "das Entfernen (Ordner werden bei „Rückgängig“ neu angelegt)",
-        _ => "die Quarantäne (.ordner-cleanup in der Wurzel; 30 Tage, per „Rückgängig“ holbar)",
+        PlanKind::Archive | PlanKind::Versions => "den Ordner „_Archiv“ in der Wurzel".into(),
+        PlanKind::Rules => "ihre Zielordner unter der Wurzel".into(),
+        PlanKind::EmptyDirs => "das Entfernen (Ordner werden bei „Rückgängig“ neu angelegt)".into(),
+        _ => {
+            let days = if quarantine_days == 1 { "Tag" } else { "Tage" };
+            format!(
+                "die Quarantäne (.ordner-cleanup in der Wurzel; {quarantine_days} {days}, \
+                 per „Rückgängig“ holbar)"
+            )
+        }
     }
 }
 
@@ -77,7 +83,7 @@ pub fn confirm_text(
         "{}\nGröße: {}\nZiel: {}",
         check.counts.plan_text(),
         texts::bytes(check.bytes),
-        target_text(kind)
+        target_text(kind, check.quarantine_days)
     );
     if let Some((chosen, total)) = subset {
         text.push_str(&format!(
@@ -297,7 +303,25 @@ mod tests {
             limit: limit.map(String::from),
             notes,
             empty: false,
+            quarantine_days: 30,
         }
+    }
+
+    #[test]
+    fn dialogtext_nennt_die_konfigurierte_quarantaene_frist() {
+        let with_days = |days| ApplyCheck {
+            quarantine_days: days,
+            ..check(None, None)
+        };
+        let text = confirm_text(PlanKind::Junk, &with_days(7), None, None);
+        assert!(
+            text.contains("7 Tage") && !text.contains("30 Tage"),
+            "{text}"
+        );
+        let text = confirm_text(PlanKind::Junk, &with_days(1), None, None);
+        assert!(text.contains("1 Tag,"), "{text}");
+        let text = confirm_text(PlanKind::Archive, &with_days(7), None, None);
+        assert!(!text.contains("7 Tage"), "{text}");
     }
 
     #[test]
