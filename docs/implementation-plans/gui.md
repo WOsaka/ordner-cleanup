@@ -1,7 +1,7 @@
 ---
 title: "Implementation Plan: Grafische Oberfläche (Phase 6b)"
 feature_spec: docs/features/gui.md
-status: pending-approval   # pending-approval | approved | implemented
+status: approved   # pending-approval | approved | implemented
 created: 2026-10-05
 updated: 2026-10-05
 ---

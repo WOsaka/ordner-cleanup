@@ -205,6 +205,20 @@ impl Plan {
         self.actions.iter().map(|a| a.size).sum()
     }
 
+    /// Teilplan mit nur den Aktionen aus `keep`; IDs, `skipped`, Art, Wurzel, Zeitstempel und
+    /// Parameter bleiben unverändert (kein Formatwechsel).
+    pub fn subset(&self, keep: &HashSet<u32>) -> Plan {
+        Plan {
+            actions: self
+                .actions
+                .iter()
+                .filter(|a| keep.contains(&a.id))
+                .cloned()
+                .collect(),
+            ..self.clone()
+        }
+    }
+
     /// Strukturprüfung, unabhängig von den Schutzregeln (die prüft `apply` separat).
     pub fn validate(&self) -> Result<(), PlanError> {
         let invalid = |msg: String| Err(PlanError::Invalid(msg));
@@ -384,6 +398,25 @@ impl Plan {
         }
         Ok(())
     }
+}
+
+/// Aktionen, die scheitern bzw. übersprungen werden, wenn `id` aus dem Plan fehlt: `remove-dir`
+/// auf Vorfahren-Ordnern (der Ordner wäre nicht mehr leer) und das Verschieben ganzer
+/// Vorfahren-Ordner (sie nähmen die abgewählte Aktion mit).
+pub fn dependents(plan: &Plan, id: u32) -> Vec<u32> {
+    let Some(own) = plan.actions.iter().find(|a| a.id == id) else {
+        return Vec::new();
+    };
+    let own_key = paths::path_key(Path::new(&own.path));
+    plan.actions
+        .iter()
+        .filter(|a| a.id != id && (a.action == ActionType::RemoveDir || a.is_dir))
+        .filter(|a| {
+            let key = paths::path_key(Path::new(&a.path));
+            key != own_key && paths::is_under(&own_key, &key)
+        })
+        .map(|a| a.id)
+        .collect()
 }
 
 #[cfg(test)]
@@ -892,6 +925,67 @@ mod tests {
             ],
         );
         assert!(p.validate().is_err(), "gilt für alle Arten");
+    }
+
+    #[test]
+    fn subset_behaelt_alles_ausser_den_abgewaehlten_aktionen() {
+        let mut p = ok_plan();
+        p.params.insert("x".into(), "y".into());
+        let keep: HashSet<u32> = [2].into();
+        let sub = p.subset(&keep);
+        assert_eq!(sub.actions.len(), 1);
+        assert_eq!(sub.actions[0].id, 2);
+        assert_eq!(sub.skipped, p.skipped);
+        assert_eq!(sub.params, p.params);
+        assert_eq!(
+            (sub.kind, &sub.root, &sub.created, &sub.keep_strategy),
+            (p.kind, &p.root, &p.created, &p.keep_strategy)
+        );
+        assert!(sub.validate().is_ok());
+        assert_eq!(p.actions.len(), 2, "Original bleibt unverändert");
+    }
+
+    #[test]
+    fn leere_auswahl_ergibt_gueltigen_leeren_plan() {
+        let sub = ok_plan().subset(&HashSet::new());
+        assert!(sub.actions.is_empty());
+        assert!(sub.validate().is_ok());
+    }
+
+    #[test]
+    fn dependents_von_leeren_ordnern_sind_die_vorfahren() {
+        let p = plan_of(
+            PlanKind::EmptyDirs,
+            vec![
+                remove_dir(1, r"D:\Daten\a\b\c"),
+                remove_dir(2, r"D:\Daten\a\b"),
+                remove_dir(3, r"D:\Daten\a"),
+                remove_dir(4, r"D:\Daten\ab"),
+            ],
+        );
+        let mut deps = dependents(&p, 1);
+        deps.sort();
+        assert_eq!(deps, vec![2, 3]);
+        assert!(dependents(&p, 3).is_empty());
+        assert!(dependents(&p, 4).is_empty());
+    }
+
+    #[test]
+    fn dependents_bei_ordner_verschiebung_sind_die_ordner_vorfahren() {
+        let mut outer = mv(1, r"D:\Daten\alt", r"D:\Daten\_Archiv\alt");
+        outer.is_dir = true;
+        outer.files = Some(2);
+        let inner = mv(2, r"D:\Daten\alt\x.txt", r"D:\Daten\_Archiv\x.txt");
+        let p = plan_of(PlanKind::Archive, vec![outer, inner]);
+        assert_eq!(dependents(&p, 2), vec![1]);
+        assert!(dependents(&p, 1).is_empty());
+    }
+
+    #[test]
+    fn dependents_ohne_abhaengigkeiten_und_unbekannte_id() {
+        let p = ok_plan();
+        assert!(dependents(&p, 1).is_empty());
+        assert!(dependents(&p, 99).is_empty());
     }
 
     #[test]
