@@ -383,6 +383,7 @@ mod tests {
             root: r"D:\Daten".into(),
             keep_strategy: None,
             params: Default::default(),
+            protected_paths: Vec::new(),
             actions: vec![PlannedAction {
                 id: 1,
                 action: ActionType::Move,
@@ -485,6 +486,7 @@ mod tests {
             root: r"D:\Daten".into(),
             keep_strategy: None,
             params: Default::default(),
+            protected_paths: Vec::new(),
             actions: vec![
                 action(1, ActionType::Quarantine),
                 action(2, ActionType::Move),

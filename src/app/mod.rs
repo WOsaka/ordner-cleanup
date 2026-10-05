@@ -491,6 +491,7 @@ mod confirm_tests {
             root: r"D:\Daten".into(),
             keep_strategy: None,
             params: Default::default(),
+            protected_paths: Vec::new(),
             actions: vec![
                 action(1, ActionType::RemoveDir),
                 action(2, ActionType::RemoveDir),

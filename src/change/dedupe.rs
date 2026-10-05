@@ -203,6 +203,7 @@ pub fn plan_dedupe(
             root: paths::display(root),
             keep_strategy: Some(strategy.to_string()),
             params: Default::default(),
+            protected_paths: Vec::new(),
             actions,
             skipped: skipped.into_iter().map(|(_, s)| s).collect(),
         },

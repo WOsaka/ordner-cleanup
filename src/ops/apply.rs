@@ -77,7 +77,7 @@ pub fn apply_execute(
         }
     }
     let root = PathBuf::from(&plan.root);
-    let protector = Protector::new(&root, &config, &ProtectPaths::from_env());
+    let protector = protector_for(plan, &root, &config);
 
     let run = RunId::generate(chrono::Local::now());
     let now = super::now_rfc3339();
@@ -105,6 +105,18 @@ pub fn apply_execute(
         outcome,
         register_warning,
     })
+}
+
+/// Schutz aus der Config und den `protected_paths`, die der Plan beim Planen mitbekommen hat
+/// (Profil). Der Plan kann den Schutz nur erweitern, nie die Config abschwächen.
+fn protector_for(plan: &Plan, root: &Path, config: &Config) -> Protector {
+    let mut config = config.clone();
+    for path in &plan.protected_paths {
+        if !config.protected_paths.contains(path) {
+            config.protected_paths.push(path.clone());
+        }
+    }
+    Protector::new(root, &config, &ProtectPaths::from_env())
 }
 
 fn register_run(run: &RunId, root: &str, at: &str) -> Result<()> {
@@ -154,9 +166,33 @@ mod tests {
             root: root.display().to_string(),
             keep_strategy: None,
             params: Default::default(),
+            protected_paths: Vec::new(),
             actions: (1..=files as u32).map(action).collect(),
             skipped: vec![],
         }
+    }
+
+    #[test]
+    fn plan_schutz_ergaenzt_die_config_und_ersetzt_sie_nicht() {
+        let dir = tempfile::tempdir().unwrap();
+        let in_plan = dir.path().join("im-plan");
+        let in_config = dir.path().join("in-config");
+        let free = dir.path().join("frei");
+        let config = Config {
+            protected_paths: vec![in_config.display().to_string()],
+            ..Config::default()
+        };
+        let mut plan = plan_in(dir.path(), 1, 1);
+
+        let without = protector_for(&plan, dir.path(), &config);
+        assert!(without.check(&in_plan.join("x.txt")).is_none());
+        assert!(without.check(&in_config.join("x.txt")).is_some());
+
+        plan.protected_paths = vec![in_plan.display().to_string()];
+        let with = protector_for(&plan, dir.path(), &config);
+        assert!(with.check(&in_plan.join("x.txt")).is_some());
+        assert!(with.check(&in_config.join("x.txt")).is_some());
+        assert!(with.check(&free.join("x.txt")).is_none());
     }
 
     #[test]

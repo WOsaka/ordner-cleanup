@@ -153,6 +153,7 @@ pub fn plan_versions(
             root: paths::display(root),
             keep_strategy: None,
             params,
+            protected_paths: Vec::new(),
             actions,
             skipped: skipped.into_iter().map(|(_, s)| s).collect(),
         },

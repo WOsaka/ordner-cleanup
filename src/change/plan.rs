@@ -62,6 +62,10 @@ pub struct Plan {
     /// Aufrufparameter zur Nachvollziehbarkeit (z. B. `older_than=2y`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub params: BTreeMap<String, String>,
+    /// Beim Planen wirksame `protected_paths` (globale Config und Profil). `apply` schützt
+    /// zusätzlich zur eigenen Config damit; fehlt das Feld (ältere Pläne), gilt nur die Config.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protected_paths: Vec<String>,
     pub actions: Vec<PlannedAction>,
     pub skipped: Vec<Skipped>,
 }
@@ -452,6 +456,7 @@ mod tests {
             root: r"D:\Daten".into(),
             keep_strategy: Some("oldest".into()),
             params: Default::default(),
+            protected_paths: Vec::new(),
             actions,
             skipped: vec![Skipped {
                 path: r"D:\Daten\x.txt".into(),
@@ -472,6 +477,27 @@ mod tests {
     fn roundtrip_ist_verlustfrei() {
         let p = ok_plan();
         assert_eq!(Plan::from_json(&p.to_json()).unwrap(), p);
+    }
+
+    #[test]
+    fn schutzpfade_sind_optional_und_bleiben_im_teilplan() {
+        let p = ok_plan();
+        assert!(
+            !p.to_json().contains("protected_paths"),
+            "leer: nicht schreiben"
+        );
+        // Pläne ohne das Feld (ältere Versionen) bleiben lesbar.
+        assert!(Plan::from_json(&p.to_json())
+            .unwrap()
+            .protected_paths
+            .is_empty());
+
+        let mut p = p;
+        p.protected_paths = vec![r"D:\Daten\wichtig".into()];
+        let back = Plan::from_json(&p.to_json()).unwrap();
+        assert_eq!(back.protected_paths, [r"D:\Daten\wichtig"]);
+        let keep: HashSet<u32> = [1].into();
+        assert_eq!(p.subset(&keep).protected_paths, [r"D:\Daten\wichtig"]);
     }
 
     #[test]

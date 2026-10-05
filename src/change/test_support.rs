@@ -77,6 +77,7 @@ impl Fx {
             root: paths::display(&self.root),
             keep_strategy: Some("oldest".into()),
             params: Default::default(),
+            protected_paths: Vec::new(),
             actions,
             skipped: vec![],
         }
@@ -116,6 +117,7 @@ impl Fx {
             root: paths::display(&self.root),
             keep_strategy: None,
             params: Default::default(),
+            protected_paths: Vec::new(),
             actions,
             skipped: vec![],
         }
@@ -160,6 +162,7 @@ impl Fx {
             root: paths::display(&self.root),
             keep_strategy: None,
             params: Default::default(),
+            protected_paths: Vec::new(),
             actions,
             skipped: vec![],
         }
@@ -202,6 +205,7 @@ impl Fx {
             root: paths::display(&self.root),
             keep_strategy: None,
             params: Default::default(),
+            protected_paths: Vec::new(),
             actions,
             skipped: vec![],
         }
@@ -240,6 +244,7 @@ impl Fx {
             root: paths::display(&self.root),
             keep_strategy: None,
             params: Default::default(),
+            protected_paths: Vec::new(),
             actions,
             skipped: vec![],
         }
@@ -279,6 +284,7 @@ impl Fx {
             root: paths::display(&self.root),
             keep_strategy: None,
             params: Default::default(),
+            protected_paths: Vec::new(),
             actions,
             skipped: vec![],
         }

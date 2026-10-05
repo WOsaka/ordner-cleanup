@@ -16,6 +16,7 @@ fn plan(n: u32) -> Plan {
         root: r"D:\Daten".into(),
         keep_strategy: None,
         params: Default::default(),
+        protected_paths: Vec::new(),
         actions: (1..=n)
             .map(|id| PlannedAction {
                 id,

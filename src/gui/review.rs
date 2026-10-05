@@ -456,6 +456,7 @@ mod tests {
             root: r"D:\Daten".into(),
             keep_strategy: None,
             params: Default::default(),
+            protected_paths: Vec::new(),
             actions,
             skipped,
         }

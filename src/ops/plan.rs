@@ -149,7 +149,7 @@ fn open_prepared(root: PathBuf, config: Config, prep: &mut Notes) -> Result<Prep
 
 /// Speichert den Plan (je nach `out`) und fasst ihn zusammen.
 fn finish(
-    plan: Plan,
+    mut plan: Plan,
     config: &Config,
     out: &PlanOut,
     headline: String,
@@ -157,6 +157,8 @@ fn finish(
     notes: Vec<String>,
     prep: Notes,
 ) -> Result<PlanOutcome> {
+    // `apply` kennt das Profil nicht; der Plan trägt den Schutz mit.
+    plan.protected_paths = config.protected_paths.clone();
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let file = match out {
         PlanOut::Cwd => Some(PathBuf::from(format!("plan-{stamp}.json"))),
@@ -729,6 +731,7 @@ mod tests {
                 root: r"D:\Daten".into(),
                 keep_strategy: None,
                 params: Default::default(),
+                protected_paths: Vec::new(),
                 actions: vec![],
                 skipped: vec![],
             },
@@ -787,6 +790,7 @@ mod tests {
             root: root.display().to_string(),
             keep_strategy: None,
             params: Default::default(),
+            protected_paths: Vec::new(),
             actions: (1..=5).map(action).collect(),
             skipped: vec![],
         }
