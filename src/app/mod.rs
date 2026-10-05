@@ -367,12 +367,14 @@ fn undo_command(args: &UndoArgs) -> Result<i32> {
     }
 
     let now = now_rfc3339();
+    let cancel = install_cancel_flag()?;
     let outcome = undo_run(
         &root,
         &args.run_id,
         &UndoEnv {
             fs: &RealFs,
             now: &now,
+            cancel: &cancel,
         },
     )?;
     println!(
@@ -500,9 +502,11 @@ fn purge_command(args: &PurgeArgs) -> Result<i32> {
     }
 
     let stamp = now_rfc3339();
+    let cancel = install_cancel_flag()?;
     let env = UndoEnv {
         fs: &RealFs,
         now: &stamp,
+        cancel: &cancel,
     };
     let mut failures = 0;
     for (root, r) in &candidates {

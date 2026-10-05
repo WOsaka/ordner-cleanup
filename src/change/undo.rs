@@ -3,6 +3,7 @@
 
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::{DateTime, Utc};
 
@@ -27,6 +28,8 @@ pub enum UndoError {
 pub struct UndoEnv<'a> {
     pub fs: &'a dyn FsOps,
     pub now: &'a str,
+    /// Wird zwischen den Einträgen geprüft; ein Abbruch hinterlässt `PartiallyUndone`.
+    pub cancel: &'a AtomicBool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +59,8 @@ pub struct UndoOutcome {
     pub already_undone: bool,
     /// Die Quarantäne wurde per `purge` gelöscht.
     pub purged: bool,
+    /// Per Abbruch-Flag beendet; ein weiteres `undo` setzt fort.
+    pub aborted: bool,
 }
 
 impl UndoOutcome {
@@ -79,9 +84,9 @@ impl UndoOutcome {
         self.count(|s| matches!(s, RestoreStatus::Failed(_)))
     }
 
-    /// 0 alles zurück, 2 mit Kollisionen/fehlenden Dateien/Fehlern.
+    /// 0 alles zurück, 2 mit Kollisionen/fehlenden Dateien/Fehlern oder nach einem Abbruch.
     pub fn exit_code(&self) -> i32 {
-        i32::from(self.conflicts() + self.missing() + self.failed() > 0) * 2
+        i32::from(self.aborted || self.conflicts() + self.missing() + self.failed() > 0) * 2
     }
 }
 
@@ -443,11 +448,12 @@ impl Restore<'_> {
 pub fn undo_run(root: &Path, run: &RunId, env: &UndoEnv) -> Result<UndoOutcome, UndoError> {
     let entries = load(root, run)?;
     let ops = collect_ops(&entries);
-    let outcome = |results, already_undone, purged| UndoOutcome {
+    let outcome = |results, already_undone, purged, aborted| UndoOutcome {
         run: run.clone(),
         results,
         already_undone,
         purged,
+        aborted,
     };
 
     let purged = entries.iter().any(|e| matches!(e, Entry::Purged { .. }));
@@ -463,10 +469,10 @@ pub fn undo_run(root: &Path, run: &RunId, env: &UndoEnv) -> Result<UndoOutcome, 
                 status: RestoreStatus::Missing,
             })
             .collect();
-        return Ok(outcome(results, false, true));
+        return Ok(outcome(results, false, true, false));
     }
     if undo_state(&entries) == Some(Some(EndStatus::Complete)) {
-        return Ok(outcome(Vec::new(), true, false));
+        return Ok(outcome(Vec::new(), true, false, false));
     }
 
     let mut journal = JournalWriter::open_append(&quarantine::journal_path(root, run))?;
@@ -488,7 +494,12 @@ pub fn undo_run(root: &Path, run: &RunId, env: &UndoEnv) -> Result<UndoOutcome, 
     // Neu angelegte Ordner: Index ihres Ergebnisses; Zeiten und Attribute folgen unten.
     let mut created: Vec<(usize, &Op)> = Vec::new();
     // Rückwärts: zuletzt Veränderes zuerst zurück (bei Ordnern also von oben nach unten).
+    let mut aborted = false;
     for op in ops.iter().rev().filter(|o| !o.failed) {
+        if env.cancel.load(Ordering::Relaxed) {
+            aborted = true;
+            break;
+        }
         let status = if op.undone {
             RestoreStatus::NothingToDo
         } else if purged && op.lives_in_quarantine() {
@@ -519,7 +530,7 @@ pub fn undo_run(root: &Path, run: &RunId, env: &UndoEnv) -> Result<UndoOutcome, 
         });
     }
     // Vom Lauf angelegte Zielordner (`rules`) von unten nach oben, nur wenn sie leer sind.
-    for entry in entries.iter().rev() {
+    for entry in entries.iter().rev().filter(|_| !aborted) {
         if let Entry::CreatedDir { action, path, .. } = entry {
             if let Some(status) = restore.remove_created_dir(path) {
                 results.push(RestoreResult {
@@ -557,7 +568,7 @@ pub fn undo_run(root: &Path, run: &RunId, env: &UndoEnv) -> Result<UndoOutcome, 
             }
         }
     }
-    let result = outcome(results, false, false);
+    let result = outcome(results, false, false, aborted);
     journal.append(&Entry::UndoEnd {
         run: run.clone(),
         status: if result.exit_code() == 0 {
@@ -718,13 +729,17 @@ mod tests {
     use crate::change::fsops::RealFs;
     use crate::change::journal;
     use crate::change::test_support::{fx, run_with, Fx, RUN};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     const NOW: &str = "2026-10-03T11:00:00Z";
+
+    static NEVER: AtomicBool = AtomicBool::new(false);
 
     fn env() -> UndoEnv<'static> {
         UndoEnv {
             fs: &RealFs,
             now: NOW,
+            cancel: &NEVER,
         }
     }
 
@@ -1618,6 +1633,114 @@ mod tests {
             list_runs(&conflict.root, 30).unwrap()[0].status,
             RunStatus::PartiallyUndone
         );
+    }
+
+    /// Setzt nach dem n-ten Zurückverschieben das Abbruch-Flag.
+    struct CancelAfterRenames<'a> {
+        left: AtomicUsize,
+        cancel: &'a AtomicBool,
+    }
+
+    impl FsOps for CancelAfterRenames<'_> {
+        fn metadata(&self, p: &Path) -> io::Result<crate::change::fsops::FileMeta> {
+            RealFs.metadata(p)
+        }
+        fn create_dir_all(&self, p: &Path) -> io::Result<()> {
+            RealFs.create_dir_all(p)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            RealFs.rename(from, to)?;
+            if self.left.fetch_sub(1, Ordering::Relaxed) == 1 {
+                self.cancel.store(true, Ordering::Relaxed);
+            }
+            Ok(())
+        }
+        fn hash(&self, p: &Path, size: u64) -> io::Result<Vec<u8>> {
+            RealFs.hash(p, size)
+        }
+        fn volume_serial(&self, p: &Path) -> io::Result<u32> {
+            RealFs.volume_serial(p)
+        }
+        fn remove_dir_all(&self, p: &Path) -> io::Result<()> {
+            RealFs.remove_dir_all(p)
+        }
+        fn remove_dir(&self, p: &Path) -> io::Result<()> {
+            RealFs.remove_dir(p)
+        }
+        fn create_dir(&self, p: &Path) -> io::Result<()> {
+            RealFs.create_dir(p)
+        }
+        fn read_dir(
+            &self,
+            p: &Path,
+        ) -> io::Result<Vec<(std::path::PathBuf, crate::change::fsops::FileMeta)>> {
+            RealFs.read_dir(p)
+        }
+        fn set_dir_meta(&self, p: &Path, a: u32, m: i64, c: i64) -> io::Result<()> {
+            RealFs.set_dir_meta(p, a, m, c)
+        }
+    }
+
+    #[test]
+    fn abbruch_vor_dem_ersten_eintrag_aendert_nichts_und_ist_fortsetzbar() {
+        let fx = applied();
+        let cancel = AtomicBool::new(true);
+        let out = undo_run(
+            &fx.root,
+            &run_id(),
+            &UndoEnv {
+                fs: &RealFs,
+                now: NOW,
+                cancel: &cancel,
+            },
+        )
+        .unwrap();
+        assert!(out.aborted);
+        assert_eq!(out.restored(), 0);
+        assert_ne!(out.exit_code(), 0);
+        assert!(!fx.exists("b/kopie.txt") && !fx.exists("c/sub/kopie2.txt"));
+        assert_eq!(
+            list_runs(&fx.root, 30).unwrap()[0].status,
+            RunStatus::PartiallyUndone
+        );
+
+        let again = undo(&fx);
+        assert!(!again.aborted);
+        assert_eq!((again.restored(), again.exit_code()), (2, 0));
+        assert!(fx.exists("b/kopie.txt") && fx.exists("c/sub/kopie2.txt"));
+        assert_eq!(
+            list_runs(&fx.root, 30).unwrap()[0].status,
+            RunStatus::Undone
+        );
+    }
+
+    #[test]
+    fn abbruch_nach_dem_ersten_eintrag_laesst_den_rest_in_der_quarantaene() {
+        let fx = applied();
+        let cancel = AtomicBool::new(false);
+        let fs = CancelAfterRenames {
+            left: AtomicUsize::new(1),
+            cancel: &cancel,
+        };
+        let out = undo_run(
+            &fx.root,
+            &run_id(),
+            &UndoEnv {
+                fs: &fs,
+                now: NOW,
+                cancel: &cancel,
+            },
+        )
+        .unwrap();
+        assert!(out.aborted);
+        assert_eq!(out.restored(), 1, "genau ein Eintrag zurück");
+        assert_eq!(
+            list_runs(&fx.root, 30).unwrap()[0].status,
+            RunStatus::PartiallyUndone
+        );
+        let again = undo(&fx);
+        assert_eq!((again.restored(), again.exit_code()), (1, 0));
+        assert!(fx.exists("b/kopie.txt") && fx.exists("c/sub/kopie2.txt"));
     }
 
     #[test]
