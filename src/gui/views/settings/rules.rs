@@ -251,6 +251,7 @@ impl RulesTab {
                 rules_text: Some(text),
                 only: Vec::new(),
                 no_classify: self.no_classify,
+                lock_held: false,
             },
             out: PlanOut::DontSave,
         };

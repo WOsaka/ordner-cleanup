@@ -446,6 +446,8 @@ pub struct CachedLookup<'a> {
     pub classifier: &'a Classifier,
     /// `false` bei `--no-classify`
     pub classify: bool,
+    /// Der Aufrufer (`run`) hält die Scan-Sperre schon; sie darf nicht noch einmal genommen werden.
+    pub lock_held: bool,
     pub ctx: &'a OpCtx,
     /// Hinweise für die Zusammenfassung des Plans
     pub notes: Mutex<Vec<String>>,
@@ -489,7 +491,11 @@ impl ContentLookup for CachedLookup<'_> {
             }
             return Ok(records);
         }
-        let _lock = acquire_scan_lock().map_err(|e| IndexError::Other(e.to_string()))?;
+        let _lock = if self.lock_held {
+            None
+        } else {
+            Some(acquire_scan_lock().map_err(|e| IndexError::Other(e.to_string()))?)
+        };
         self.log
             .lock()
             .unwrap_or_else(|e| e.into_inner())

@@ -127,6 +127,11 @@ pub(super) fn plan_versions_command(args: &PlanVersionsArgs) -> Result<i32> {
 }
 
 pub(super) fn plan_rules_command(args: &PlanRulesArgs) -> Result<i32> {
+    plan_rules_with(args, false)
+}
+
+/// `lock_held`: nur `run`, das die Scan-Sperre für den ganzen Lauf hält.
+pub(super) fn plan_rules_with(args: &PlanRulesArgs, lock_held: bool) -> Result<i32> {
     run_plan(
         args.path.as_deref(),
         args.profile.as_deref(),
@@ -135,6 +140,7 @@ pub(super) fn plan_rules_command(args: &PlanRulesArgs) -> Result<i32> {
             rules_text: None,
             only: args.rule.clone(),
             no_classify: args.no_classify,
+            lock_held,
         },
         args.out.as_ref(),
     )

@@ -59,6 +59,8 @@ pub enum PlanKindRequest {
         only: Vec<String>,
         /// Fehlende Inhalte nicht nachklassifizieren
         no_classify: bool,
+        /// Der Aufrufer hält die Scan-Sperre schon (nur `run`); Nachklassifizieren nimmt sie nicht
+        lock_held: bool,
     },
 }
 
@@ -209,12 +211,14 @@ pub fn plan(req: &PlanRequest, ctx: &OpCtx) -> Result<PlanOutcome> {
             rules_text,
             only,
             no_classify,
+            lock_held,
         } => plan_rules_kind(
             req,
             rules_file.as_deref(),
             rules_text.as_deref(),
             only,
             *no_classify,
+            *lock_held,
             ctx,
             prep,
         ),
@@ -471,12 +475,14 @@ fn rules_headline(result: &RulesPlan) -> String {
 }
 
 /// `plan rules`: Regeldatei bzw. -entwurf, Kategorien und Nachklassifizieren.
+#[allow(clippy::too_many_arguments)]
 fn plan_rules_kind(
     req: &PlanRequest,
     rules_file: Option<&Path>,
     rules_text: Option<&str>,
     only: &[String],
     no_classify: bool,
+    lock_held: bool,
     ctx: &OpCtx,
     mut prep: Notes,
 ) -> Result<PlanOutcome> {
@@ -523,6 +529,7 @@ fn plan_rules_kind(
         config: &p.config,
         classifier: c,
         classify: !no_classify,
+        lock_held,
         ctx,
         notes: Default::default(),
         log: Default::default(),

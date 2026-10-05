@@ -374,6 +374,7 @@ fn plan_preview_with_text(env: &Env, text: &str) -> ordner_cleanup::ops::plan::P
                 rules_text: Some(text.to_string()),
                 only: vec![],
                 no_classify: true,
+                lock_held: false,
             },
             out: PlanOut::DontSave,
         },

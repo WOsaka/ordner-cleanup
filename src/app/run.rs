@@ -247,14 +247,18 @@ fn make_plan(name: &str, kind: &str, stamp: &str) -> PlanRecord {
     let profile = Some(name.to_string());
     let out_arg = Some(out.clone());
     let result = match kind {
-        "rules" => plan::plan_rules_command(&PlanRulesArgs {
-            path: None,
-            profile,
-            rules: None,
-            rule: Vec::new(),
-            out: out_arg,
-            no_classify: false,
-        }),
+        "rules" => plan::plan_rules_with(
+            &PlanRulesArgs {
+                path: None,
+                profile,
+                rules: None,
+                rule: Vec::new(),
+                out: out_arg,
+                no_classify: false,
+            },
+            // `execute` hält die Scan-Sperre bis zum Ende des Laufs.
+            true,
+        ),
         "junk" => plan::plan_junk_command(&PlanJunkArgs {
             path: None,
             profile,

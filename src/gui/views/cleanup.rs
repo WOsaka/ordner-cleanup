@@ -161,6 +161,7 @@ impl CleanupView {
                 rules_text: None,
                 only: words(&self.only),
                 no_classify: self.no_classify,
+                lock_held: false,
             },
             _ => PlanKindRequest::Dedupe {
                 keep: self.keep_strategy().unwrap_or(KeepStrategy::Oldest),
