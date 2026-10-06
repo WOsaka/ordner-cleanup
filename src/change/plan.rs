@@ -1,6 +1,6 @@
 //! Plan-Datei (JSON): Datenmodell, Laden mit Versionsprüfung und Validierung.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::Path;
 
@@ -62,6 +62,10 @@ pub struct Plan {
     /// Aufrufparameter zur Nachvollziehbarkeit (z. B. `older_than=2y`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub params: BTreeMap<String, String>,
+    /// Beim Planen wirksame `protected_paths` (globale Config und Profil). `apply` schützt
+    /// zusätzlich zur eigenen Config damit; fehlt das Feld (ältere Pläne), gilt nur die Config.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protected_paths: Vec<String>,
     pub actions: Vec<PlannedAction>,
     pub skipped: Vec<Skipped>,
 }
@@ -205,6 +209,20 @@ impl Plan {
         self.actions.iter().map(|a| a.size).sum()
     }
 
+    /// Teilplan mit nur den Aktionen aus `keep`; IDs, `skipped`, Art, Wurzel, Zeitstempel und
+    /// Parameter bleiben unverändert (kein Formatwechsel).
+    pub fn subset(&self, keep: &HashSet<u32>) -> Plan {
+        Plan {
+            actions: self
+                .actions
+                .iter()
+                .filter(|a| keep.contains(&a.id))
+                .cloned()
+                .collect(),
+            ..self.clone()
+        }
+    }
+
     /// Strukturprüfung, unabhängig von den Schutzregeln (die prüft `apply` separat).
     pub fn validate(&self) -> Result<(), PlanError> {
         let invalid = |msg: String| Err(PlanError::Invalid(msg));
@@ -251,6 +269,15 @@ impl Plan {
             }
             sources.insert(key);
         }
+        // Verschobene Ordner einmal vorab erfassen (Schlüssel → Aktions-IDs), damit die Prüfung
+        // je Ziel nur seine Vorfahren nachschlägt statt alle Aktionen zu durchlaufen.
+        let mut dir_moves: HashMap<String, Vec<u32>> = HashMap::new();
+        for o in self.actions.iter().filter(|o| o.is_dir) {
+            dir_moves
+                .entry(paths::path_key(Path::new(&o.path)))
+                .or_default()
+                .push(o.id);
+        }
         for a in &self.actions {
             if let Some(keep) = &a.keep {
                 if sources.contains(&paths::path_key(Path::new(keep))) {
@@ -269,13 +296,7 @@ impl Plan {
                         a.id
                     ));
                 }
-                let nested = self.actions.iter().any(|o| {
-                    o.is_dir && o.id != a.id && {
-                        let dir = paths::path_key(Path::new(&o.path));
-                        paths::is_under(&target_key, &dir)
-                    }
-                });
-                if nested {
+                if moved_with_dir(&dir_moves, a.id, &target_key) {
                     return invalid(format!(
                         "Aktion {}: Ziel {target} liegt in einem Ordner, der selbst verschoben wird",
                         a.id
@@ -386,6 +407,46 @@ impl Plan {
     }
 }
 
+/// `key` und seine Vorfahren (je Ebene bis vor das letzte `\`), von innen nach außen.
+fn ancestors_inclusive(key: &str) -> impl Iterator<Item = &str> {
+    let mut next = Some(key);
+    std::iter::from_fn(move || {
+        let current = next?;
+        next = current.rfind('\\').map(|i| &current[..i]);
+        Some(current)
+    })
+}
+
+/// Liegt `target_key` auf oder in einem Ordner, den eine andere Aktion als `id` verschiebt?
+/// Gleichwertig zu `paths::is_under(target_key, ordner)` für jeden Ordner der Aktionen, nur über
+/// die Vorfahren des Ziels statt über alle Aktionen.
+fn moved_with_dir(dir_moves: &HashMap<String, Vec<u32>>, id: u32, target_key: &str) -> bool {
+    ancestors_inclusive(target_key).any(|ancestor| {
+        dir_moves
+            .get(ancestor)
+            .is_some_and(|ids| ids.iter().any(|o| *o != id))
+    })
+}
+
+/// Aktionen, die scheitern bzw. übersprungen werden, wenn `id` aus dem Plan fehlt: `remove-dir`
+/// auf Vorfahren-Ordnern (der Ordner wäre nicht mehr leer) und das Verschieben ganzer
+/// Vorfahren-Ordner (sie nähmen die abgewählte Aktion mit).
+pub fn dependents(plan: &Plan, id: u32) -> Vec<u32> {
+    let Some(own) = plan.actions.iter().find(|a| a.id == id) else {
+        return Vec::new();
+    };
+    let own_key = paths::path_key(Path::new(&own.path));
+    plan.actions
+        .iter()
+        .filter(|a| a.id != id && (a.action == ActionType::RemoveDir || a.is_dir))
+        .filter(|a| {
+            let key = paths::path_key(Path::new(&a.path));
+            key != own_key && paths::is_under(&own_key, &key)
+        })
+        .map(|a| a.id)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -419,6 +480,7 @@ mod tests {
             root: r"D:\Daten".into(),
             keep_strategy: Some("oldest".into()),
             params: Default::default(),
+            protected_paths: Vec::new(),
             actions,
             skipped: vec![Skipped {
                 path: r"D:\Daten\x.txt".into(),
@@ -439,6 +501,74 @@ mod tests {
     fn roundtrip_ist_verlustfrei() {
         let p = ok_plan();
         assert_eq!(Plan::from_json(&p.to_json()).unwrap(), p);
+    }
+
+    #[test]
+    fn verschobener_ordner_wird_wie_is_under_erkannt() {
+        // (id, Pfad) der verschobenen Ordner; `\a\b` kommt doppelt vor (zwei IDs).
+        let dirs: [(u32, &str); 5] = [
+            (1, r"D:\Daten\a"),
+            (2, r"D:\Daten\a\b"),
+            (3, r"D:\Daten\a\b"),
+            (4, r"D:\Daten\x y"),
+            (5, r"D:\Daten\Gross\Klein"),
+        ];
+        let targets = [
+            r"D:\Daten\a",
+            r"D:\Daten\a\datei.txt",
+            r"D:\Daten\a\b",
+            r"D:\Daten\a\b\c\d.txt",
+            r"D:\Daten\ab",
+            r"D:\Daten\ab\datei.txt",
+            r"D:\Daten\x y\z",
+            r"D:\Daten\x",
+            r"D:\Daten\gross\klein\f.txt",
+            r"D:\Daten\GROSS",
+            r"D:\Daten",
+            r"D:\",
+            r"E:\Daten\a\f.txt",
+        ];
+        let mut dir_moves: HashMap<String, Vec<u32>> = HashMap::new();
+        for (id, path) in dirs {
+            dir_moves
+                .entry(paths::path_key(Path::new(path)))
+                .or_default()
+                .push(id);
+        }
+        for target in targets {
+            let target_key = paths::path_key(Path::new(target));
+            for id in 0..=6 {
+                let reference = dirs.iter().any(|(o, path)| {
+                    *o != id && paths::is_under(&target_key, &paths::path_key(Path::new(path)))
+                });
+                assert_eq!(
+                    moved_with_dir(&dir_moves, id, &target_key),
+                    reference,
+                    "Ziel {target}, Aktion {id}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn schutzpfade_sind_optional_und_bleiben_im_teilplan() {
+        let p = ok_plan();
+        assert!(
+            !p.to_json().contains("protected_paths"),
+            "leer: nicht schreiben"
+        );
+        // Pläne ohne das Feld (ältere Versionen) bleiben lesbar.
+        assert!(Plan::from_json(&p.to_json())
+            .unwrap()
+            .protected_paths
+            .is_empty());
+
+        let mut p = p;
+        p.protected_paths = vec![r"D:\Daten\wichtig".into()];
+        let back = Plan::from_json(&p.to_json()).unwrap();
+        assert_eq!(back.protected_paths, [r"D:\Daten\wichtig"]);
+        let keep: HashSet<u32> = [1].into();
+        assert_eq!(p.subset(&keep).protected_paths, [r"D:\Daten\wichtig"]);
     }
 
     #[test]
@@ -892,6 +1022,67 @@ mod tests {
             ],
         );
         assert!(p.validate().is_err(), "gilt für alle Arten");
+    }
+
+    #[test]
+    fn subset_behaelt_alles_ausser_den_abgewaehlten_aktionen() {
+        let mut p = ok_plan();
+        p.params.insert("x".into(), "y".into());
+        let keep: HashSet<u32> = [2].into();
+        let sub = p.subset(&keep);
+        assert_eq!(sub.actions.len(), 1);
+        assert_eq!(sub.actions[0].id, 2);
+        assert_eq!(sub.skipped, p.skipped);
+        assert_eq!(sub.params, p.params);
+        assert_eq!(
+            (sub.kind, &sub.root, &sub.created, &sub.keep_strategy),
+            (p.kind, &p.root, &p.created, &p.keep_strategy)
+        );
+        assert!(sub.validate().is_ok());
+        assert_eq!(p.actions.len(), 2, "Original bleibt unverändert");
+    }
+
+    #[test]
+    fn leere_auswahl_ergibt_gueltigen_leeren_plan() {
+        let sub = ok_plan().subset(&HashSet::new());
+        assert!(sub.actions.is_empty());
+        assert!(sub.validate().is_ok());
+    }
+
+    #[test]
+    fn dependents_von_leeren_ordnern_sind_die_vorfahren() {
+        let p = plan_of(
+            PlanKind::EmptyDirs,
+            vec![
+                remove_dir(1, r"D:\Daten\a\b\c"),
+                remove_dir(2, r"D:\Daten\a\b"),
+                remove_dir(3, r"D:\Daten\a"),
+                remove_dir(4, r"D:\Daten\ab"),
+            ],
+        );
+        let mut deps = dependents(&p, 1);
+        deps.sort();
+        assert_eq!(deps, vec![2, 3]);
+        assert!(dependents(&p, 3).is_empty());
+        assert!(dependents(&p, 4).is_empty());
+    }
+
+    #[test]
+    fn dependents_bei_ordner_verschiebung_sind_die_ordner_vorfahren() {
+        let mut outer = mv(1, r"D:\Daten\alt", r"D:\Daten\_Archiv\alt");
+        outer.is_dir = true;
+        outer.files = Some(2);
+        let inner = mv(2, r"D:\Daten\alt\x.txt", r"D:\Daten\_Archiv\x.txt");
+        let p = plan_of(PlanKind::Archive, vec![outer, inner]);
+        assert_eq!(dependents(&p, 2), vec![1]);
+        assert!(dependents(&p, 1).is_empty());
+    }
+
+    #[test]
+    fn dependents_ohne_abhaengigkeiten_und_unbekannte_id() {
+        let p = ok_plan();
+        assert!(dependents(&p, 1).is_empty());
+        assert!(dependents(&p, 99).is_empty());
     }
 
     #[test]

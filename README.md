@@ -293,6 +293,20 @@ max_confidence  = 0.75                   # unter min_confidence: LLM-Kategorien 
 
 **Datenschutz:** Der Inhalts-Cache enthält nur Kategorie, Konfidenz, Treffer und Felder (Datum, Absender, Nummer, Betrag, Titel, Ort), die sensibel sein können. OCR-Text liegt nur mit Windows-DPAPI verschlüsselt (an das Benutzerkonto gebunden) im Index, abschaltbar mit `cache_ocr_text = false`. `classify --clear` löscht beides. Ortsnamen stammen offline aus GeoNames (`cities15000`, [CC BY 4.0](https://www.geonames.org/), Namensnennung: GeoNames, geonames.org).
 
+## Grafische Oberfläche (Phase 6b)
+
+`ordner-cleanup-gui.exe` ist die Oberfläche zur selben Logik wie die Kommandozeile: portabel, ohne Konsolenfenster, ohne Administratorrechte, ohne lauschenden Port. Sie liegt neben `ordner-cleanup.exe` und `ordner-cleanup-bg.exe`.
+
+- **Übersicht:** gescannte Ordner und Profile mit Score und Trend, letzte Läufe, ausstehende Quarantäne. Hier wählen Sie einen Ordner (Windows-Dialog) oder ein Profil und **scannen** bzw. **klassifizieren** (Optionen unter „Erweitert“). Fortschritt und **Abbrechen** stehen unten in der Statuszeile.
+- **Analyse:** Größenbaum, Typen & Alter, Duplikate, Probleme & Struktur, Inhalte, Health-Score mit Verlauf, Soll/Ist; Export als HTML/JSON/CSV. Rechtsklick auf einen Pfad: im Explorer zeigen, Pfad kopieren, öffnen (nicht bei Cloud-only-Dateien).
+- **Aufräumen:** Plan erzeugen (Duplikate, Müll, leere Ordner, Archivieren, Versionen, Regeln) oder einen vorhandenen Plan öffnen, auch aus der CLI oder von geplanten Läufen. In der **Review-Liste** filtern, sortieren, einzeln oder gesammelt an- und abwählen; übersprungene Einträge stehen mit Grund in einem eigenen Filter. **Anwenden** zeigt vorher Anzahl, Größe, Ziel und Warnungen; die OneDrive-Obergrenze lässt sich nur mit einem ausdrücklichen Haken aufheben. Wurden Einträge abgewählt, entsteht vor dem Anwenden eine **neue Plan-Datei** `<original>-auswahl-<Zeitstempel>.json`, das Original bleibt unverändert.
+- **Verlauf:** Läufe mit Details aus dem Journal, **Rückgängig**, **Quarantäne leeren** (mit Vorschau) und das Entfernen gescannter Wurzeln aus dem Index.
+- **Einstellungen:** öffnet `config.toml`, `rules.toml` und `categories.toml` im Editor und legt auf Wunsch eine Startmenü-Verknüpfung an.
+
+**Speicherorte:** Pläne der GUI liegen unter `%LOCALAPPDATA%\ordner-cleanup\plans\_gui` (änderbar mit `[gui] plans_dir`), der Fensterzustand unter `%APPDATA%\ordner-cleanup\gui`, Abstürze im Hintergrund unter `%LOCALAPPDATA%\ordner-cleanup\gui-errors.log`. Die Dateien (Index, Pläne, Journal, Register, Config) sind dieselben wie bei der CLI: ein in der GUI erzeugter Plan lässt sich per `apply` anwenden und umgekehrt, ebenso `undo`.
+
+Beim Schließen während einer laufenden Aufgabe fragt die GUI nach; bei „Abbrechen und schließen“ endet die laufende Einzeloperation sauber und das Journal bleibt konsistent. Startet das Fenster nicht (VM, Remotedesktop, alte Treiber), versucht die GUI einmal einen zweiten Renderer und verweist sonst auf die Kommandozeile.
+
 ## Entwicklung
 
 Voraussetzungen: Rust (stable, MSVC-Toolchain, wird per `rust-toolchain.toml` gewählt) und die Visual Studio Build Tools.

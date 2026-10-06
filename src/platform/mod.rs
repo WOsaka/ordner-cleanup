@@ -1,6 +1,7 @@
 pub mod dpapi;
 pub mod ocr;
 pub mod priority;
+pub mod shell;
 pub mod toast;
 pub mod windows;
 

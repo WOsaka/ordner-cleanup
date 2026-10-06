@@ -1,15 +1,13 @@
 //! Befehl `history`: eine Zeile je Momentaufnahme.
 
 use std::fmt::Write;
-use std::path::Path;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use bytesize::ByteSize;
 
-use super::{local_time, normalize};
 use crate::cli::HistoryArgs;
-use crate::history::{History, Point};
-use crate::paths;
+use crate::history::Point;
+use crate::ops::local_time;
 
 /// Die Tabelle für `history`; `points` sind chronologisch (älteste zuerst).
 fn render(root_path: &str, folder: &str, points: &[Point]) -> String {
@@ -44,51 +42,14 @@ fn render(root_path: &str, folder: &str, points: &[Point]) -> String {
     s
 }
 
-/// Wurzel des Verlaufs: der angegebene Pfad oder die einzige im Verlauf bekannte Wurzel.
-fn pick_root(history: &History, path: Option<&Path>) -> Result<(String, String)> {
-    let roots = history.roots()?;
-    match path {
-        Some(path) => {
-            let key = paths::dir_key(&normalize(path));
-            match roots.into_iter().find(|(k, _)| *k == key) {
-                Some(found) => Ok(found),
-                None => bail!(
-                    "Kein Verlauf für {} – zuerst `scan` ausführen",
-                    paths::display(path)
-                ),
-            }
-        }
-        None => match roots.as_slice() {
-            [] => bail!("Noch kein Verlauf – zuerst `scan` ausführen"),
-            [one] => Ok(one.clone()),
-            many => {
-                let list: Vec<String> = many.iter().map(|(_, p)| format!("  {p}")).collect();
-                bail!(
-                    "Mehrere Wurzeln im Verlauf, bitte eine auswählen:\n{}",
-                    list.join("\n")
-                )
-            }
-        },
-    }
-}
-
-pub(super) fn history_command(args: &HistoryArgs, path: Option<&Path>) -> Result<i32> {
-    let history = History::open(&paths::history_path()?)?;
-    let (key, root_path) = pick_root(&history, path)?;
-    let folder = args.folder.clone().unwrap_or_default();
-    let points = history.series(&key, &folder, args.limit)?;
-    if points.is_empty() {
-        let known = history.folders(&key)?;
-        bail!(
-            "Kein Verlauf für den Ordner '{folder}' (bekannt: {})",
-            if known.is_empty() {
-                "keine".to_string()
-            } else {
-                known.join(", ")
-            }
-        );
-    }
-    print!("{}", render(&root_path, &folder, &points));
+pub(super) fn history_command(args: &HistoryArgs) -> Result<i32> {
+    let view = crate::ops::admin::history(
+        args.path.as_deref(),
+        args.profile.as_deref(),
+        args.folder.as_deref(),
+        args.limit,
+    )?;
+    print!("{}", render(&view.root_path, &view.folder, &view.points));
     Ok(0)
 }
 

@@ -26,4 +26,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ordner-cleanup-windows
-          path: target/release/ordner-cleanup.exe
+          path: |
+            target/release/ordner-cleanup.exe
+            target/release/ordner-cleanup-bg.exe
+            target/release/ordner-cleanup-gui.exe

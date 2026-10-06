@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use super::profile::{self, Target};
-use super::{build_report, now_rfc3339, plan, print_scan_result, resolve_root, run_scan, ScanJob};
+use super::{now_rfc3339, plan, print_scan_result, resolve_root};
 use crate::change::dedupe::KeepStrategy;
 use crate::change::plan::Plan;
 use crate::cli::{
@@ -15,6 +15,8 @@ use crate::cli::{
     PlanVersionsArgs, RunArgs,
 };
 use crate::notify::{self, OpenTarget};
+use crate::ops::report::{build_report, missed_runs_notes};
+use crate::ops::scan::{run_scan, ScanJob};
 use crate::paths;
 use crate::platform::toast;
 use crate::runlog::{self, PlanRecord, RunRecord, RunStatus};
@@ -24,15 +26,6 @@ use crate::scan::lock::{LockError, ScanLock};
 const EXIT_PARTIAL: i32 = 2;
 const EXIT_FAILED: i32 = 1;
 const EXIT_SKIPPED: i32 = 3;
-
-/// Hinweise auf ausgefallene Läufe für den nächsten Bericht eines Profils.
-pub(super) fn missed_runs_notes(profile: &str) -> Vec<String> {
-    paths::runs_log(profile)
-        .ok()
-        .and_then(|log| runlog::missed_runs_note(&runlog::read_all(&log)))
-        .into_iter()
-        .collect()
-}
 
 pub(super) fn run_command(args: &RunArgs) -> Result<i32> {
     let name = args.profile.as_str();
@@ -127,15 +120,18 @@ fn execute(name: &str, target: &Target, record: &mut RunRecord) -> Result<i32> {
             None
         }
     };
-    let mut res = run_scan(&ScanJob {
-        root: &root,
-        config: &target.config,
-        reset_index: false,
-        spinner: false,
-        profile: Some(name),
-        template: template.as_ref(),
-    })?;
-    let complete = print_scan_result(&res);
+    let ctx = crate::ops::OpCtx::new(super::global_cancel_flag()?);
+    let mut res = run_scan(
+        &ScanJob {
+            root: &root,
+            config: &target.config,
+            reset_index: false,
+            profile: Some(name),
+            template: template.as_ref(),
+        },
+        &ctx,
+    )?;
+    let complete = print_scan_result(&res.report(&root, Default::default()));
     if !complete {
         record.errors.push("Scan abgebrochen".into());
         return Ok(EXIT_FAILED);
@@ -158,8 +154,14 @@ fn execute(name: &str, target: &Target, record: &mut RunRecord) -> Result<i32> {
         .as_ref()
         .is_some_and(|p| p.profile.classify == Some(true))
     {
-        match super::classify::classify_for_run(&mut res.index, &root, &target.config) {
-            Ok(review) => record.review = Some(review),
+        let ctx = crate::ops::OpCtx::new(super::global_cancel_flag()?);
+        match crate::ops::classify::classify_for_run(&mut res.index, &root, &target.config, &ctx) {
+            Ok(done) => {
+                for w in &done.warnings {
+                    eprintln!("Warnung: {w}");
+                }
+                record.review = Some(done.review);
+            }
             Err(e) => {
                 partial = true;
                 record.errors.push(format!("classify: {e:#}"));
@@ -210,7 +212,10 @@ fn write_report(
     stamp: &str,
 ) -> Result<PathBuf> {
     let notes = missed_runs_notes(name);
-    let (model, _) = build_report(index, &target.config, Some(root), template, notes)?;
+    let (model, _, warnings) = build_report(index, &target.config, Some(root), template, notes)?;
+    for warning in &warnings.warnings {
+        eprintln!("{warning}");
+    }
     let dir = paths::reports_dir(name)?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Berichtsordner {} nicht anlegbar", paths::display(&dir)))?;
@@ -242,14 +247,18 @@ fn make_plan(name: &str, kind: &str, stamp: &str) -> PlanRecord {
     let profile = Some(name.to_string());
     let out_arg = Some(out.clone());
     let result = match kind {
-        "rules" => plan::plan_rules_command(&PlanRulesArgs {
-            path: None,
-            profile,
-            rules: None,
-            rule: Vec::new(),
-            out: out_arg,
-            no_classify: false,
-        }),
+        "rules" => plan::plan_rules_with(
+            &PlanRulesArgs {
+                path: None,
+                profile,
+                rules: None,
+                rule: Vec::new(),
+                out: out_arg,
+                no_classify: false,
+            },
+            // `execute` hält die Scan-Sperre bis zum Ende des Laufs.
+            true,
+        ),
         "junk" => plan::plan_junk_command(&PlanJunkArgs {
             path: None,
             profile,

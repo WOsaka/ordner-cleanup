@@ -1,21 +1,16 @@
 //! Befehle `schedule add|list|remove`.
 
 use std::fmt::Write;
-use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use chrono::{Local, NaiveDateTime};
 
-use super::{load_config, local_time};
 use crate::cli::{ScheduleAddArgs, ScheduleCommand, ScheduleRemoveArgs};
+use crate::ops::local_time;
+use crate::ops::schedule::{schedule_add, schedule_list, schedule_remove};
 use crate::paths;
-use crate::platform::toast;
 use crate::runlog::{self, RunRecord};
-use crate::schedule::schtasks::Schtasks;
-use crate::schedule::{self, task_name, Row, TaskState, Trigger};
-
-/// Name des Hintergrundprogramms; es liegt neben der Konsolen-exe.
-pub const BG_EXE: &str = "ordner-cleanup-bg.exe";
+use crate::schedule::{task_name, Row, TaskState, Trigger};
 
 pub(super) fn schedule_command(cmd: &ScheduleCommand) -> Result<i32> {
     match cmd {
@@ -37,45 +32,13 @@ fn trigger_of(args: &ScheduleAddArgs) -> Result<Trigger> {
     trigger.map_err(anyhow::Error::msg)
 }
 
-/// Das Hintergrundprogramm neben der laufenden exe.
-fn bg_exe() -> Result<PathBuf> {
-    let exe = std::env::current_exe().context("Pfad des Programms nicht ermittelbar")?;
-    let bg = exe.with_file_name(BG_EXE);
-    if !bg.is_file() {
-        bail!(
-            "{} fehlt neben {}. Die Aufgabe startet dieses Programm ohne Konsolenfenster.",
-            BG_EXE,
-            paths::display(&exe)
-        );
-    }
-    Ok(PathBuf::from(paths::display(&bg)))
-}
-
-fn current_user() -> Option<String> {
-    let domain = std::env::var("USERDOMAIN").ok()?;
-    let user = std::env::var("USERNAME").ok()?;
-    Some(format!("{domain}\\{user}"))
-}
-
 fn add_command(args: &ScheduleAddArgs) -> Result<i32> {
-    let config = load_config()?;
-    config.profile(&args.profile)?;
     let trigger = trigger_of(args)?;
-    let exe = bg_exe()?;
-    if let Err(e) = toast::register_aumid() {
+    let result = schedule_add(&args.profile, &trigger)?;
+    if let Some(e) = &result.aumid_warning {
         eprintln!("Hinweis: Absender für Benachrichtigungen nicht registriert: {e}");
     }
-    let now = Local::now().naive_local();
-    let added = schedule::add(
-        &Schtasks,
-        &paths::schedules_path()?,
-        &args.profile,
-        &trigger,
-        &exe,
-        current_user().as_deref(),
-        now,
-    )
-    .context("Aufgabe konnte nicht angelegt werden")?;
+    let added = result.added;
     println!(
         "Aufgabe {} {}: {}, nächster Lauf {}.",
         task_name(&args.profile),
@@ -95,9 +58,7 @@ fn add_command(args: &ScheduleAddArgs) -> Result<i32> {
 }
 
 fn remove_command(args: &ScheduleRemoveArgs) -> Result<i32> {
-    let removed = schedule::remove(&Schtasks, &paths::schedules_path()?, &args.profile)
-        .context("Aufgabe konnte nicht entfernt werden")?;
-    if removed {
+    if schedule_remove(&args.profile)? {
         println!("Aufgabe {} entfernt.", task_name(&args.profile));
         Ok(0)
     } else {
@@ -165,10 +126,7 @@ fn render_list(
 }
 
 fn list_command() -> Result<i32> {
-    let rows = schedule::list(&Schtasks, &paths::schedules_path()?, &|p: &Path| {
-        p.is_file()
-    })
-    .context("Aufgaben konnten nicht gelesen werden")?;
+    let rows = schedule_list()?;
     if rows.is_empty() {
         println!(
             "Keine geplanten Läufe. Anlegen mit `schedule add --profile <name> --weekly MO 09:00`."
@@ -188,6 +146,7 @@ mod tests {
     use crate::runlog::RunStatus;
     use crate::schedule::{Entry, StoredTrigger};
     use chrono::NaiveDate;
+    use std::path::PathBuf;
 
     fn row(profile: &str, state: TaskState) -> Row {
         Row {

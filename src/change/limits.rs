@@ -83,6 +83,7 @@ mod tests {
             root: r"C:\Users\me\OneDrive\Daten".into(),
             keep_strategy: None,
             params: Default::default(),
+            protected_paths: Vec::new(),
             actions,
             skipped: vec![],
         }

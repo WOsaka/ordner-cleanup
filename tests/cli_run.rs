@@ -423,3 +423,45 @@ fn run_mit_classify_klassifiziert_zwischen_scan_und_bericht_und_meldet_zum_pruef
         .success();
     assert_eq!(log_of(home.path())[1]["review"], 1);
 }
+
+#[test]
+fn run_mit_regel_plan_klassifiziert_nach_ohne_die_eigene_sperre_zu_blockieren() {
+    use ordner_cleanup::content::extract::pdf::testing::pdf_with_pages;
+    let home = tempfile::tempdir().unwrap();
+    let tree = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tree.path().join("sicher.pdf"),
+        pdf_with_pages(
+            &["Rechnung Rechnungsnummer: R-1 Rechnungsdatum: 30.09.2026 Zahlungsziel 14 Tage Gesamtbetrag: 5,00 EUR"],
+            None,
+            None,
+        ),
+    )
+    .unwrap();
+    write_config(
+        home.path(),
+        &format!(
+            "[classify]\nocr = false\n\n{}",
+            profile_config(
+                tree.path(),
+                "plans = [\"rules\"]\nrules_file = \"rules.toml\""
+            )
+        ),
+    );
+    std::fs::write(
+        home.path().join("config").join("rules.toml"),
+        "[[rules]]\nname = \"rechnungen\"\ncategory = \"rechnung\"\ntarget = \"Rechnungen/\"\n",
+    )
+    .unwrap();
+    // Der Cache ist leer: der Regel-Plan muss nachklassifizieren, während `run` die Sperre hält.
+    let run = bin(home.path()).args(["run", "--profile", "t"]).assert();
+    let log = log_of(home.path());
+    assert_eq!(
+        log[0]["plans"][0]["error"],
+        serde_json::Value::Null,
+        "{log:?}"
+    );
+    assert_eq!(log[0]["plans"][0]["actions"], 1, "{log:?}");
+    assert_eq!(log[0]["status"], "ok", "{log:?}");
+    run.success();
+}

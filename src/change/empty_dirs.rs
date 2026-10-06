@@ -163,6 +163,7 @@ pub fn plan_empty_dirs(
             root: paths::display(root),
             keep_strategy: None,
             params: Default::default(),
+            protected_paths: Vec::new(),
             actions,
             skipped: skipped.into_iter().map(|(_, s)| s).collect(),
         },

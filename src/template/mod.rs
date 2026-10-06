@@ -31,6 +31,14 @@ const BUILTIN: [(&str, &str); 2] = [
     ("johnny-decimal", include_str!("johnny-decimal.toml")),
 ];
 
+/// Text einer eingebauten Vorlage (zum Kopieren als eigene Vorlage).
+pub fn builtin_text(name: &str) -> Option<&'static str> {
+    BUILTIN
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(name))
+        .map(|(_, text)| *text)
+}
+
 /// Namen der eingebauten Vorlagen.
 pub fn builtin_names() -> Vec<&'static str> {
     BUILTIN.iter().map(|(n, _)| *n).collect()

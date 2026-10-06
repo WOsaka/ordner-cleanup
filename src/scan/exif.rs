@@ -76,6 +76,13 @@ pub fn read_taken(path: &Path) -> Result<Option<NaiveDateTime>, ExifError> {
     read_taken_limited(path, MAX_READ)
 }
 
+/// Dateien, die nie geöffnet werden: Links und Cloud-Platzhalter ohne lokalen Inhalt. Wie im
+/// Scanner (`is_link`, `cloud_only`) zählt ein Reparse-Point allein nicht: Lokal vorhandene
+/// OneDrive-Dateien tragen ihn auch.
+fn blocks_open(attrs: FileAttrs, is_symlink: bool) -> bool {
+    attrs.is_cloud_only() || is_symlink
+}
+
 /// Öffnet eine lokale Datei zum Lesen mit Obergrenze. Cloud-only-Platzhalter und Links
 /// werden live erkannt und nie geöffnet (kein Download).
 pub(crate) fn open_local(path: &Path, limit: u64) -> Result<LimitedReader<File>, ExifError> {
@@ -83,10 +90,7 @@ pub(crate) fn open_local(path: &Path, limit: u64) -> Result<LimitedReader<File>,
     {
         use std::os::windows::fs::MetadataExt;
         let attrs = FileAttrs(meta.file_attributes());
-        if attrs.is_cloud_only()
-            || meta.file_type().is_symlink()
-            || attrs.0 & FileAttrs::REPARSE_POINT != 0
-        {
+        if blocks_open(attrs, meta.file_type().is_symlink()) {
             return Err(ExifError::NotLocal);
         }
     }
@@ -265,6 +269,29 @@ mod tests {
         // FILE_ATTRIBUTE_OFFLINE: wie ein Cloud-Platzhalter, aber mit lesbarem Inhalt.
         assert_ne!(unsafe { SetFileAttributesW(wide.as_ptr(), 0x1000) }, 0);
         assert!(matches!(read_taken(&file), Err(ExifError::NotLocal)));
+    }
+
+    #[test]
+    fn lokale_datei_mit_reparse_point_wird_geoeffnet_links_und_platzhalter_nicht() {
+        const ARCHIVE: u32 = 0x20;
+        // OneDrive: lokal vorhanden, aber mit Cloud-Reparse-Point
+        let local_cloud = FileAttrs(ARCHIVE | FileAttrs::REPARSE_POINT);
+        assert!(!blocks_open(local_cloud, false));
+        assert!(!blocks_open(FileAttrs(ARCHIVE), false));
+        for flag in [
+            FileAttrs::RECALL_ON_DATA_ACCESS,
+            FileAttrs::RECALL_ON_OPEN,
+            FileAttrs::OFFLINE,
+        ] {
+            assert!(
+                blocks_open(FileAttrs(local_cloud.0 | flag), false),
+                "{flag:#x}"
+            );
+        }
+        assert!(blocks_open(
+            FileAttrs(ARCHIVE | FileAttrs::REPARSE_POINT),
+            true
+        ));
     }
 
     #[test]

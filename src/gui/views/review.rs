@@ -1,0 +1,417 @@
+//! Darstellung des Review-Modells: Filterleiste, Auswahl, Tabelle, Detailbereich.
+
+use eframe::egui;
+use egui_extras::{Column as TCol, TableBuilder};
+
+use crate::change::plan::ActionType;
+use crate::gui::review::{Column, Filter, ReviewModel, Show, Sort};
+use crate::gui::shell::{Dialog, Shell};
+use crate::gui::texts;
+use crate::gui::widgets::table::path_menu;
+
+pub const ID_DEPENDENTS: &str = "cleanup.dependents";
+const ROW_H: f32 = 20.0;
+
+pub struct ReviewState {
+    pub model: ReviewModel,
+    pub plan_path: Option<std::path::PathBuf>,
+    pub headline: String,
+    pub notes: Vec<String>,
+    text: String,
+    folder: String,
+    min_mb: String,
+    max_mb: String,
+    action: Option<ActionType>,
+    rule: Option<String>,
+    show_skipped: bool,
+    selected_row: Option<usize>,
+    /// Nur ansehen (Regel-Vorschau): keine Auswahl, kein Anwenden
+    pub read_only: bool,
+    /// Abhängige Einträge, nach denen gerade gefragt wird
+    dependents: Vec<u32>,
+}
+
+fn action_label(a: Option<ActionType>) -> &'static str {
+    match a {
+        None => "Alle Aktionen",
+        Some(ActionType::Quarantine) => "In Quarantäne",
+        Some(ActionType::Move) => "Verschieben",
+        Some(ActionType::RemoveDir) => "Ordner entfernen",
+    }
+}
+
+fn mb(text: &str) -> Option<u64> {
+    text.trim()
+        .replace(',', ".")
+        .parse::<f64>()
+        .ok()
+        .filter(|v| *v >= 0.0)
+        .map(|v| (v * 1_048_576.0) as u64)
+}
+
+impl ReviewState {
+    pub fn new(
+        model: ReviewModel,
+        plan_path: Option<std::path::PathBuf>,
+        headline: String,
+        notes: Vec<String>,
+    ) -> Self {
+        Self {
+            model,
+            plan_path,
+            headline,
+            notes,
+            text: String::new(),
+            folder: String::new(),
+            min_mb: String::new(),
+            max_mb: String::new(),
+            action: None,
+            rule: None,
+            show_skipped: false,
+            selected_row: None,
+            read_only: false,
+            dependents: Vec::new(),
+        }
+    }
+
+    fn current_filter(&self) -> Filter {
+        Filter {
+            show: if self.show_skipped {
+                Show::Skipped
+            } else {
+                Show::Actions
+            },
+            action: self.action,
+            rule: self.rule.clone(),
+            folder: Some(self.folder.trim().to_string()).filter(|f| !f.is_empty()),
+            min_size: mb(&self.min_mb),
+            max_size: mb(&self.max_mb),
+            text: self.text.clone(),
+        }
+    }
+
+    /// Antwort auf „abhängige Einträge ebenfalls abwählen?“.
+    pub fn on_dependents_answer(&mut self, ok: bool) {
+        if ok {
+            let ids = std::mem::take(&mut self.dependents);
+            self.model.deselect_ids(&ids);
+        } else {
+            self.dependents.clear();
+        }
+    }
+
+    /// Zeichnet die Review-Ansicht; `true`, wenn „Anwenden“ gedrückt wurde.
+    pub fn ui(&mut self, ui: &mut egui::Ui, shell: &mut Shell) -> bool {
+        let mut apply = false;
+        ui.label(egui::RichText::new(&self.headline).strong());
+        for n in &self.notes {
+            ui.label(egui::RichText::new(format!("Hinweis: {n}")).weak());
+        }
+        let s = self.model.summary();
+        ui.horizontal(|ui| {
+            ui.label(format!(
+                "Ausgewählt: {} von {} Einträgen, {} von {}",
+                texts::grouped(s.selected as u64),
+                texts::grouped(s.total as u64),
+                texts::bytes(s.selected_bytes),
+                texts::bytes(s.total_bytes)
+            ));
+            if !self.read_only
+                && ui
+                    .add_enabled(s.selected > 0, egui::Button::new("Anwenden …"))
+                    .clicked()
+            {
+                apply = true;
+            }
+        });
+        self.filter_bar(ui);
+        if !self.read_only {
+            self.select_bar(ui);
+        }
+        self.table(ui, shell);
+        self.detail(ui);
+        apply
+    }
+
+    fn filter_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Suche:");
+            ui.add(egui::TextEdit::singleline(&mut self.text).desired_width(150.0));
+            ui.label("Unterhalb von:");
+            ui.add(egui::TextEdit::singleline(&mut self.folder).desired_width(180.0));
+            ui.label("Größe (MB) von/bis:");
+            ui.add(egui::TextEdit::singleline(&mut self.min_mb).desired_width(40.0));
+            ui.add(egui::TextEdit::singleline(&mut self.max_mb).desired_width(40.0));
+            egui::ComboBox::from_id_salt("flt-action")
+                .selected_text(action_label(self.action))
+                .show_ui(ui, |ui| {
+                    for a in [
+                        None,
+                        Some(ActionType::Quarantine),
+                        Some(ActionType::Move),
+                        Some(ActionType::RemoveDir),
+                    ] {
+                        ui.selectable_value(&mut self.action, a, action_label(a));
+                    }
+                });
+            let rules = self.model.rules();
+            if !rules.is_empty() {
+                egui::ComboBox::from_id_salt("flt-rule")
+                    .selected_text(self.rule.clone().unwrap_or_else(|| "Alle Regeln".into()))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.rule, None, "Alle Regeln");
+                        for r in rules {
+                            ui.selectable_value(&mut self.rule, Some(r.clone()), r);
+                        }
+                    });
+            }
+            ui.checkbox(&mut self.show_skipped, "Übersprungene zeigen");
+        });
+        let wanted = self.current_filter();
+        if &wanted != self.model.filter() {
+            self.model.set_filter(wanted);
+            self.selected_row = None;
+        }
+    }
+
+    fn select_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Alle").clicked() {
+                self.model.select_all(true);
+            }
+            if ui.button("Keine").clicked() {
+                self.model.select_all(false);
+            }
+            if ui.button("Gefilterte wählen").clicked() {
+                self.model.select_filtered(true);
+            }
+            if ui.button("Gefilterte abwählen").clicked() {
+                self.model.select_filtered(false);
+            }
+            let folder = self.folder.trim().to_string();
+            if !folder.is_empty() {
+                if ui.button("Ordner abwählen").clicked() {
+                    self.model.select_folder(&folder, false);
+                }
+                if ui.button("Ordner wählen").clicked() {
+                    self.model.select_folder(&folder, true);
+                }
+            }
+        });
+    }
+
+    fn table(&mut self, ui: &mut egui::Ui, shell: &mut Shell) {
+        let skipped = self.show_skipped || self.read_only;
+        let mut toggled: Option<usize> = None;
+        let mut clicked: Option<usize> = None;
+        let rows = self.model.len();
+        let avail = (ui.available_height() - 140.0).max(160.0);
+        let mut header_cols: Vec<(&str, Column)> = vec![
+            ("Aktion", Column::Action),
+            ("Quelle", Column::Source),
+            ("Ziel", Column::Target),
+            ("Größe", Column::Size),
+            ("Grund / Regel", Column::Reason),
+            ("Alter", Column::Age),
+        ];
+        let mut header_click: Option<Column> = None;
+        let model = &self.model;
+        let selected_row = self.selected_row;
+        TableBuilder::new(ui)
+            .id_salt("review-table")
+            .striped(true)
+            .sense(egui::Sense::click())
+            .max_scroll_height(avail)
+            .column(TCol::exact(26.0))
+            .column(TCol::initial(110.0).resizable(true))
+            .column(TCol::initial(380.0).resizable(true).clip(true))
+            .column(TCol::initial(260.0).resizable(true).clip(true))
+            .column(TCol::initial(80.0))
+            .column(TCol::remainder().clip(true))
+            .column(TCol::initial(80.0))
+            .header(ROW_H + 4.0, |mut h| {
+                h.col(|_| {});
+                for (title, column) in header_cols.drain(..) {
+                    h.col(|ui| {
+                        let mark = match model.sort() {
+                            Some(s) if s.column == column => {
+                                if s.ascending {
+                                    " ▲"
+                                } else {
+                                    " ▼"
+                                }
+                            }
+                            _ => "",
+                        };
+                        if ui.button(format!("{title}{mark}")).clicked() {
+                            header_click = Some(column);
+                        }
+                    });
+                }
+            })
+            .body(|body| {
+                body.rows(ROW_H, rows, |mut row| {
+                    let i = row.index();
+                    let r = model.row(i);
+                    row.set_selected(selected_row == Some(i));
+                    row.col(|ui| {
+                        if !skipped {
+                            let mut on = model.is_selected(i);
+                            if ui.checkbox(&mut on, "").changed() {
+                                toggled = Some(i);
+                            }
+                        }
+                    });
+                    row.col(|ui| {
+                        ui.label(action_label(r.action));
+                    });
+                    row.col(|ui| {
+                        ui.label(egui::RichText::new(&r.path).monospace());
+                    });
+                    row.col(|ui| {
+                        ui.label(
+                            egui::RichText::new(r.target.as_deref().unwrap_or("")).monospace(),
+                        );
+                    });
+                    row.col(|ui| {
+                        ui.label(texts::bytes(r.size));
+                    });
+                    row.col(|ui| {
+                        let text = match &r.rule {
+                            Some(rule) => format!("{rule}: {}", r.reason),
+                            None => r.reason.clone(),
+                        };
+                        ui.label(text);
+                    });
+                    row.col(|ui| {
+                        ui.label(age_text(r.mtime_ticks));
+                    });
+                    let response = row.response();
+                    path_menu(&response, &r.path, shell);
+                    if response.clicked() {
+                        clicked = Some(i);
+                    }
+                });
+            });
+        if let Some(column) = header_click {
+            let next = match self.model.sort() {
+                Some(s) if s.column == column && s.ascending => Some(Sort {
+                    column,
+                    ascending: false,
+                }),
+                Some(s) if s.column == column => None,
+                _ => Some(Sort {
+                    column,
+                    ascending: true,
+                }),
+            };
+            self.model.set_sort(next);
+        }
+        if let Some(i) = clicked {
+            self.selected_row = Some(i);
+        }
+        if let Some(i) = toggled {
+            self.model.toggle(i);
+            if !self.model.is_selected(i) {
+                let deps = self.model.dependents_to_deselect(i);
+                if !deps.is_empty() {
+                    self.ask_dependents(shell, deps);
+                }
+            }
+        }
+    }
+
+    fn ask_dependents(&mut self, shell: &mut Shell, deps: Vec<u32>) {
+        shell.confirm(Dialog::Confirm {
+            id: ID_DEPENDENTS,
+            title: "Abhängige Einträge".into(),
+            text: format!(
+                "{} übergeordnete Einträge hängen von diesem ab. Ebenfalls abwählen?\n\nBei \
+                 „Abbrechen“ bleiben sie gewählt: Ein gewähltes Verschieben des ganzen Ordners \
+                 nimmt auch diesen Eintrag mit, ein gewähltes Entfernen eines Ordners wird als \
+                 „nicht leer“ übersprungen.",
+                deps.len()
+            ),
+            ok_label: "Ebenfalls abwählen".into(),
+            must_check: None,
+            checked: false,
+            danger: false,
+        });
+        self.dependents = deps;
+    }
+
+    fn detail(&self, ui: &mut egui::Ui) {
+        let Some(i) = self.selected_row.filter(|i| *i < self.model.len()) else {
+            return;
+        };
+        let r = self.model.row(i);
+        ui.separator();
+        egui::Grid::new("review-detail")
+            .num_columns(2)
+            .show(ui, |ui| {
+                let mut line = |k: &str, v: &str| {
+                    ui.label(egui::RichText::new(k).weak());
+                    ui.label(egui::RichText::new(v).monospace());
+                    ui.end_row();
+                };
+                line("Quelle", &r.path);
+                if let Some(t) = &r.target {
+                    line("Ziel", t);
+                }
+                line("Größe", &texts::bytes(r.size));
+                line("Grund", &r.reason);
+                if let Some(rule) = &r.rule {
+                    line("Regel", rule);
+                }
+                if let Some(a) =
+                    r.id.and_then(|id| self.model.plan().actions.iter().find(|a| a.id == id))
+                {
+                    if let Some(keep) = &a.keep {
+                        line("Behaltene Kopie", keep);
+                    }
+                    line("Geändert", &a.mtime);
+                    if let Some(files) = a.files {
+                        line("Dateien im Ordner", &files.to_string());
+                    }
+                }
+            });
+    }
+}
+
+fn age_text(mtime_ticks: i64) -> String {
+    if mtime_ticks <= 0 {
+        return String::new();
+    }
+    let secs = mtime_ticks / crate::scan::source::TICKS_PER_SEC;
+    let days = (chrono::Utc::now().timestamp() - secs) / 86_400;
+    match days {
+        d if d < 0 => "neu".into(),
+        d if d < 60 => format!("{d} T"),
+        d if d < 730 => format!("{} Mon", d / 30),
+        d => format!("{} J", d / 365),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn megabyte_eingaben_werden_in_bytes_umgerechnet() {
+        assert_eq!(mb("1"), Some(1_048_576));
+        assert_eq!(mb(" 0,5 "), Some(524_288));
+        assert_eq!(mb(""), None);
+        assert_eq!(mb("abc"), None);
+        assert_eq!(mb("-1"), None);
+    }
+
+    #[test]
+    fn alterstext_waehlt_passende_einheit() {
+        let now = chrono::Utc::now().timestamp();
+        let ticks = |days: i64| (now - days * 86_400) * crate::scan::source::TICKS_PER_SEC;
+        assert_eq!(age_text(0), "");
+        assert_eq!(age_text(ticks(3)), "3 T");
+        assert_eq!(age_text(ticks(120)), "4 Mon");
+        assert_eq!(age_text(ticks(800)), "2 J");
+    }
+}

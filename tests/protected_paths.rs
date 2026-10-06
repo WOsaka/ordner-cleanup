@@ -114,6 +114,59 @@ fn config_geschuetzter_pfad_kommt_nicht_in_den_plan() {
 }
 
 #[test]
+fn profil_geschuetzter_pfad_gilt_auch_beim_anwenden_eines_veraenderten_plans() {
+    let env = Env::new();
+    let victim = env.write("wichtig/x.txt", "gleich");
+    env.write("a/x.txt", "gleich");
+    env.write("b/x.txt", "gleich");
+    let protected = env.tree.path().join("wichtig");
+    env.config(&format!(
+        "[profiles.t]
+root = '{}'
+protected_paths = ['{}']
+",
+        env.tree.path().display(),
+        protected.display()
+    ));
+    env.bin()
+        .arg("scan")
+        .arg(env.tree.path())
+        .assert()
+        .success();
+    let out = env.home.path().join("out.json");
+    env.bin()
+        .args(["plan", "dedupe", "--profile", "t", "--out"])
+        .arg(&out)
+        .assert()
+        .success();
+
+    // Der Plan merkt sich den Schutz, auch wenn die globale Config ihn nicht kennt.
+    let mut plan: Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(
+        plan["protected_paths"],
+        json!([protected.to_string_lossy()]),
+        "{plan}"
+    );
+
+    // Von Hand um eine Aktion im geschützten Ordner ergänzt: `apply` verweigert sie. Die Pfade
+    // kommen aus der Wurzel des Plans, denn das Programm löst sie auf (Kurznamen auf dem CI-Runner).
+    let plan_root = PathBuf::from(plan["root"].as_str().unwrap());
+    let in_plan = |rel: &str| plan_root.join(rel.replace('/', "\\"));
+    plan["actions"] = json!([action(1, &in_plan("wichtig/x.txt"), &in_plan("a/x.txt"))]);
+    let edited = env.home.path().join("edited.json");
+    std::fs::write(&edited, plan.to_string()).unwrap();
+    env.bin()
+        .arg("apply")
+        .arg(&edited)
+        .arg("--yes")
+        .assert()
+        .code(2)
+        .stdout(contains("1 übersprungen"))
+        .stdout(contains("geschützter Pfad"));
+    assert!(victim.exists());
+}
+
+#[test]
 fn manipulierter_plan_mit_geschuetztem_ordnernamen_wird_verweigert() {
     let env = Env::new();
     let keep = env.write("a.txt", "x");

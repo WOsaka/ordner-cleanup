@@ -226,3 +226,14 @@ fn fremde_datenbank_wird_nicht_angefasst() {
         .unwrap();
     assert_eq!(tables, 1);
 }
+
+#[test]
+fn dateiverlauf_wartet_bei_gesperrter_datenbank() {
+    let dir = tempfile::tempdir().unwrap();
+    let history = History::open(&dir.path().join("history.db")).unwrap();
+    let ms: i64 = history
+        .conn
+        .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(ms, 5000);
+}

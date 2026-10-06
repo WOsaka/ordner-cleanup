@@ -82,7 +82,8 @@ impl KnownCategories {
 #[derive(Debug)]
 pub struct Rule {
     pub name: String,
-    /// Position in der Regeldatei (0-basiert), Schlüssel für die `text_regex`-Ergebnisse.
+    /// Position in der Regelmenge (0-basiert; `select` vergibt sie neu), Schlüssel für die
+    /// `text_regex`-Ergebnisse.
     pub index: usize,
     /// Zeile des `[[rules]]`-Blocks in der Regeldatei.
     pub line: usize,
@@ -147,11 +148,14 @@ impl RuleSet {
                 ),
             });
         }
-        let rules = self
+        let mut rules: Vec<Rule> = self
             .rules
             .into_iter()
             .filter(|r| names.iter().any(|n| r.name.eq_ignore_ascii_case(n)))
             .collect();
+        for (i, rule) in rules.iter_mut().enumerate() {
+            rule.index = i;
+        }
         Ok(Self {
             source: self.source,
             rules,
@@ -413,6 +417,21 @@ strip_copy_suffix = true
         let set = parse(SPEC_FILE).unwrap();
         let err = set.select(&["fotoz".to_string()]).unwrap_err();
         assert!(err.message.contains("fotoz") && err.message.contains("fotos, rechnungen"));
+    }
+
+    #[test]
+    fn select_vergibt_den_index_neu() {
+        let set = parse(SPEC_CONTENT_FILE).unwrap();
+        let only = set
+            .select(&["telekom".to_string(), "vertraege".to_string()])
+            .unwrap();
+        let names: Vec<_> = only.rules.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["vertraege", "telekom"]);
+        // Der Index ist die Position in der gefilterten Liste (Schlüssel für `text_hits`).
+        assert_eq!(
+            only.rules.iter().map(|r| r.index).collect::<Vec<_>>(),
+            [0, 1]
+        );
     }
 
     #[test]
