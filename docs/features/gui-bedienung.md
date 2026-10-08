@@ -187,5 +187,6 @@ Umsetzung in vier voneinander unabhängigen Stufen, jede einzeln baubar, testbar
 - [ ] Kann egui 0.36.2 den Windows-Hell/Dunkel-Modus zur Laufzeit zuverlässig verfolgen, oder braucht „System“ einen eigenen Aufruf über das `windows`-Crate?
 - [ ] Ist das Parsen der Regeldatei beim Wählen billig genug für die Häkchenliste, oder braucht sie ein Zwischenergebnis im Cache? (Prüfung im Implementierungsplan)
 - [ ] Reicht die Segoe-UI-Symbolschrift für alle gewünschten Icons, oder fehlt ein Symbol auf Windows 10? (Fallback: Text)
-- [ ] Wie viele „zuletzt benutzte Ordner“ sind sinnvoll (Vorschlag: 8)?
-- [ ] Soll die Score-Einordnung („72 – gut“) die Schwellen aus `health/score.rs` öffentlich machen, oder gehört die Beschriftung dorthin?
+- [x] Wie viele „zuletzt benutzte Ordner“? Entschieden: 8, dazu alle gescannten Wurzeln aus dem Index (ohne Dubletten)
+- [x] Score-Einordnung („72 – mittel“): drei feste Bänder (≥ 80 gut, 60–79 mittel, < 60 schwach) in `gui/format.rs`, reine Darstellung. `health/score.rs` bleibt unverändert
+- [x] Profile im Kopf-Dropdown: bei vielen Einträgen scrollen, kein Suchfeld

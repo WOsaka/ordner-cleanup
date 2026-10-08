@@ -191,6 +191,8 @@ Stufen 1–4 lassen sich jeweils nach den Schritten 7, 10, 15 und 20 mergen.
 - **Dunkelmodus folgt dem System:** egui 0.36 `ThemePreference::System` sollte den Windows-Modus verfolgen. Falls das zur Laufzeit nicht greift, ist der Rückfall ein Lesen der Registry `AppsUseLightTheme` über das vorhandene `windows-sys` (kein neues Crate), das beim Fensterfokus erneut geprüft wird. Wird in Schritt 2 mit einem Handtest geklärt.
 - **Symbolschrift auf Windows 10:** Einige Symbole der Segoe-UI-Symbolschrift fehlen dort evtl. Mitigation: jede Icon-Zeichenfolge hat einen Textfallback ohne Symbol, getestet in `texts`.
 - **Umfang:** Vier Stufen sind viel für einen Merge. Jede Stufe ist deshalb eigenständig lauffähig; bei Zeitdruck lässt sich nach Stufe 2 aufhören.
-- [ ] Muss die Score-Einordnung („gut/mittel/schwach“) mit den Teilwert-Schwellen aus `health/score.rs` abgestimmt sein, oder reichen feste Bänder in `format.rs` (Vorschlag: ja, reine Darstellung)?
-- [ ] Soll die Profil-Gruppe im Kopf-Dropdown bei vielen Profilen scrollen oder ein Suchfeld haben? (Vorschlag: scrollen, YAGNI)
-- [ ] Soll „Zuletzt benutzte Ordner“ auch Ordner einschließen, die nur gescannt, aber nie ausgewählt wurden? (Vorschlag: ja, alle gescannten Wurzeln aus dem Index, plus manuell gewählte)
+- [x] Score-Einordnung: drei feste Bänder in `format.rs` (≥ 80 gut, 60–79 mittel, < 60 schwach), reine Darstellung, Tooltip mit `top_deductions` (entschieden 2026-10-08)
+- [x] Profil-Gruppe im Kopf-Dropdown: höhenbegrenzt mit Scrollleiste, kein Suchfeld (entschieden 2026-10-08)
+- [x] Ordnerliste im Dropdown: zuletzt gewählte Ordner zuerst, danach alle gescannten Wurzeln aus dem Index, ohne Dubletten (entschieden 2026-10-08)
+- [x] Anzahl gemerkter Ordner: 8 als Konstante (entschieden 2026-10-08)
+- Technisch, im Schritt geklärt (keine Entscheidung nötig): Dunkelmodus zur Laufzeit (Schritt 2), Parsen der Regeldatei (Schritt 14, Worker-Task), Symbolschrift auf Windows 10 (Schritt 19, Textfallback)
