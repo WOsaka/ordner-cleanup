@@ -53,6 +53,21 @@ pub const CARDS: [Card; 6] = [
     },
 ];
 
+pub const CARD_MIN_WIDTH: f32 = 200.0;
+pub const CARD_MAX_WIDTH: f32 = 300.0;
+
+/// Spaltenzahl und Innenbreite der Karten für den verfügbaren Platz. `chrome` ist Innenrand plus
+/// Strich einer Karte, `spacing` der Abstand zwischen den Karten. Die Zeile füllt den Platz
+/// gleichmäßig und läuft nie über, außer eine einzelne Karte hat schon die Mindestbreite nicht.
+pub fn card_layout(avail_width: f32, chrome: f32, spacing: f32) -> (usize, f32) {
+    let columns = ((avail_width + spacing) / (CARD_MIN_WIDTH + chrome + spacing))
+        .floor()
+        .max(1.0);
+    let width = ((avail_width + spacing) / columns - spacing - chrome)
+        .clamp(CARD_MIN_WIDTH, CARD_MAX_WIDTH);
+    (columns as usize, width)
+}
+
 /// Zahlen des letzten Scans für die Karten. `None` = dafür liegt keine Zahl vor.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CardFacts {
@@ -217,6 +232,43 @@ pub fn rule_names(file: &Path, config: &Config) -> Result<Vec<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SPACING: f32 = 8.0;
+    const CHROME: f32 = 14.0;
+
+    #[test]
+    fn schmal_ergibt_eine_spalte_mit_mindestbreite() {
+        let (columns, width) = card_layout(150.0, CHROME, SPACING);
+        assert_eq!(columns, 1);
+        assert_eq!(width, CARD_MIN_WIDTH);
+    }
+
+    #[test]
+    fn mittel_ergibt_zwei_spalten_die_in_die_zeile_passen() {
+        let (columns, width) = card_layout(560.0, CHROME, SPACING);
+        assert_eq!(columns, 2);
+        assert!(columns as f32 * (width + CHROME) + (columns - 1) as f32 * SPACING <= 560.0);
+    }
+
+    #[test]
+    fn breit_ergibt_mehrere_spalten_und_hoechstens_maximalbreite() {
+        let (columns, width) = card_layout(1400.0, CHROME, SPACING);
+        assert!(columns >= 3, "{columns}");
+        assert!(width <= CARD_MAX_WIDTH);
+    }
+
+    #[test]
+    fn zeile_passt_fuer_jede_breite_in_den_platz() {
+        let mut avail = 100.0;
+        while avail <= 2000.0 {
+            let (columns, width) = card_layout(avail, CHROME, SPACING);
+            let row = columns as f32 * (width + CHROME) + (columns - 1) as f32 * SPACING;
+            let one_column_too_narrow = columns == 1 && avail < CARD_MIN_WIDTH + CHROME;
+            assert!(row <= avail || one_column_too_narrow, "avail {avail}: {row}");
+            assert!((CARD_MIN_WIDTH..=CARD_MAX_WIDTH).contains(&width));
+            avail += 7.0;
+        }
+    }
 
     fn row(key: &str, unit: Unit, now: u64) -> MetricRow {
         MetricRow {

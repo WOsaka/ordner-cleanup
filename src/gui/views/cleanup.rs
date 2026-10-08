@@ -9,7 +9,8 @@ use eframe::egui;
 use super::analysis::request_for;
 use super::apply::{ApplyFlow, ID_APPLY};
 use super::cleanup_cards::{
-    duration_placeholder, only_from_checks, rule_names, CardFacts, DurationField, CARDS,
+    card_layout, duration_placeholder, only_from_checks, rule_names, CardFacts, DurationField,
+    CARDS,
 };
 use super::review::{ReviewState, ID_DEPENDENTS};
 use super::undo_flow::{UndoFlow, TASK_CHECK as UNDO_CHECK, TASK_UNDO};
@@ -37,7 +38,6 @@ const TASK_FACTS: &str = "Zahlen laden";
 const TASK_RULE_NAMES: &str = "Regeln lesen";
 const ID_UNDO: &str = "cleanup.undo";
 
-const CARD_WIDTH: f32 = 230.0;
 const CARD_HEIGHT: f32 = 110.0;
 
 /// Zahlen für die Karten und die Standardwerte aus der Config (Platzhalter der Dauer-Felder).
@@ -397,8 +397,10 @@ impl CleanupView {
         let palette = theme::palette(ui.visuals().dark_mode);
         let mut chosen: Option<&'static str> = None;
         // Frames brechen in einem umbrechenden Layout nicht um; das Grid ordnet nach Breite.
-        let columns = ((ui.available_width() / (CARD_WIDTH + 24.0)) as usize).max(1);
-        egui::Grid::new("cards").spacing([8.0, 8.0]).show(ui, |ui| {
+        let spacing = 8.0;
+        let chrome = egui::Frame::group(ui.style()).total_margin().sum().x;
+        let (columns, card_width) = card_layout(ui.available_width(), chrome, spacing);
+        egui::Grid::new("cards").spacing([spacing, spacing]).show(ui, |ui| {
             for (index, card) in CARDS.iter().enumerate() {
                 let selected = self.kind == card.key;
                 let color = if selected {
@@ -412,7 +414,7 @@ impl CleanupView {
                     .show(ui, |ui| {
                         // Auswählbarer Text finge den Klick ab, der die Karte wählen soll.
                         ui.style_mut().interaction.selectable_labels = false;
-                        ui.set_width(CARD_WIDTH);
+                        ui.set_width(card_width);
                         ui.set_min_height(CARD_HEIGHT);
                         ui.label(egui::RichText::new(card.title).strong());
                         ui.add(egui::Label::new(card.text).wrap());
