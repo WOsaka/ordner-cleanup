@@ -4,20 +4,23 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use chrono::Local;
 use eframe::egui;
 
 use super::undo_flow::{UndoFlow, TASK_CHECK as UNDO_CHECK, TASK_UNDO};
 use crate::change::journal::{self, Entry};
 use crate::change::quarantine;
-use crate::change::undo::{RunStatus, RunSummary};
+use crate::change::undo::RunSummary;
 use crate::change::RunId;
+use crate::gui::format::{root_status, run_row};
 use crate::gui::shell::{Answer, Dialog, Route, Shell, TaskResult};
 use crate::gui::tasks::TaskKind;
 use crate::gui::texts;
+use crate::gui::widgets::table::{short_path_cell, status_cell};
 use crate::index::RootInfo;
 use crate::ops::admin::{index_remove, index_roots};
 use crate::ops::runs::{purge_candidates, purge_execute, runs, PurgeCandidate, PurgeCheck};
-use crate::ops::{local_time, status_label};
+use crate::ops::status_label;
 use crate::paths;
 
 const TASK_LOAD: &str = "Läufe laden";
@@ -160,16 +163,9 @@ impl HistoryView {
         let mut want_detail: Option<(PathBuf, RunId)> = None;
         let mut want_undo: Option<(PathBuf, RunId)> = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
+            let now = Local::now();
             egui::Grid::new("runs").striped(true).show(ui, |ui| {
-                for h in [
-                    "Lauf",
-                    "Wurzel",
-                    "Datum",
-                    "Inhalt",
-                    "Status",
-                    "Läuft ab",
-                    "",
-                ] {
+                for h in ["Wann", "Ordner", "Was", "Ergebnis", "Größe", "Läuft ab", ""] {
                     ui.strong(h);
                 }
                 ui.end_row();
@@ -178,29 +174,20 @@ impl HistoryView {
                         continue;
                     }
                     for r in list {
-                        ui.label(r.run.to_string());
-                        ui.label(paths::display(root));
-                        ui.label(r.started.as_deref().map(local_time).unwrap_or_default());
-                        ui.label(r.counts.short_text(r.bytes));
-                        ui.label(status_label(r.status));
-                        ui.label(
-                            r.expires
-                                .filter(|_| r.status != RunStatus::Purged)
-                                .map(|e| {
-                                    e.with_timezone(&chrono::Local)
-                                        .format("%d.%m.%Y")
-                                        .to_string()
-                                })
-                                .unwrap_or_default(),
-                        );
+                        let row = run_row(now, root, r);
+                        ui.label(&row.when)
+                            .on_hover_text(format!("{}\nLauf {}", row.when_tooltip, row.run_id));
+                        short_path_cell(ui, &row.root_full, 40, shell);
+                        ui.label(&row.kind);
+                        status_cell(ui, &row.status);
+                        ui.label(&row.size);
+                        ui.label(&row.expires);
                         ui.horizontal(|ui| {
                             if ui.button("Details").clicked() {
                                 want_detail = Some((root.clone(), r.run.clone()));
                             }
-                            let can_undo =
-                                !matches!(r.status, RunStatus::Undone | RunStatus::Purged);
                             if ui
-                                .add_enabled(can_undo, egui::Button::new("Rückgängig …"))
+                                .add_enabled(row.can_undo, egui::Button::new("Rückgängig …"))
                                 .clicked()
                             {
                                 want_undo = Some((root.clone(), r.run.clone()));
@@ -267,10 +254,8 @@ impl HistoryView {
         let mut remove: Option<PathBuf> = None;
         for r in roots {
             ui.horizontal(|ui| {
-                ui.label(format!(
-                    "{}  ({:?}, {} Fehler)",
-                    r.path, r.status, r.error_count
-                ));
+                short_path_cell(ui, &r.path, 56, shell);
+                status_cell(ui, &root_status(r.status, r.error_count));
                 if ui.button("Aus dem Index entfernen …").clicked() {
                     remove = Some(PathBuf::from(&r.path));
                 }

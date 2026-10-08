@@ -156,3 +156,26 @@ fn leere_uebersicht_stellt_den_wunsch_ordner_waehlen_und_scannen() {
     );
     std::env::remove_var(HOME_OVERRIDE_ENV);
 }
+
+#[test]
+fn profilzeile_oeffnen_setzt_das_ziel_in_der_kopfleiste() {
+    let (_guard, _home) = with_home();
+    let dir = config_dir().unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("config.toml"),
+        "[profiles.downloads]\nroot = 'D:\\Downloads'\n",
+    )
+    .unwrap();
+    let mut h = harness(State::new());
+    wait_for(&mut h, "noch kein Lauf");
+    assert!(h.query_by_label("Wählen").is_none(), "alter Knopfname");
+    assert_eq!(h.state().shell.target, None);
+    h.get_by_label("Öffnen").click();
+    h.step();
+    assert_eq!(
+        h.state().shell.target,
+        Some(Choice::Profile("downloads".into()))
+    );
+    std::env::remove_var(HOME_OVERRIDE_ENV);
+}

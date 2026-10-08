@@ -68,6 +68,19 @@ Spec: [`features/gui-bedienung.md`](features/gui-bedienung.md). Mit einem frisch
 - [ ] Zweiter Scan (Geplanter Lauf oder zweites Fenster) während ein Scan läuft: Meldung „Ein anderer Scan läuft“, „Erneut versuchen“ funktioniert.
 - [ ] Fenster mit gewähltem Ziel schließen und neu öffnen, mit einem in der Config entfernten Profil als gemerktem Ziel: kein Fehlerdialog, das Profil fehlt in der Liste.
 
+## 5b. GUI-Bedienung, Stufe 2 (lesbare Ausgaben)
+
+- [ ] Nach einem Scan zeigt die Kopfleiste Kacheln (Dateien · Ordner · Größe · Fehler · Score) statt eines Textblocks; „Score“ trägt die Einordnung („72 – mittel“) in Ampelfarbe; „Schließen“ blendet das Ergebnis aus.
+- [ ] Scan mit Fehlern (z. B. gesperrte Datei): die Kachel „Fehler“ ist anklickbar und springt in „Analyse → Probleme & Struktur“.
+- [ ] Abgebrochener Scan: Titel „Scan abgebrochen“, kein Score, Hinweis „unvollständig“.
+- [ ] Klassifizieren: Kacheln (Geprüft · Analysiert · Aus dem Cache · Zum Prüfen · Übersprungen), „Details“ klappt den bisherigen Text auf; „Text-Cache löschen“ zeigt „Text-Cache geleert“.
+- [ ] Übersicht, gescannte Ordner: kein Debug-Text mehr (kein „Complete“), Status mit Symbol („✔ Vollständig“, „⚠ Scan unvollständig, 3 Fehler“), Zeit relativ mit genauem Wert im Tooltip, lange Pfade in der Mitte gekürzt (Tooltip voller Pfad, Rechtsklick kopiert).
+- [ ] Übersicht, Letzte Läufe: Tabelle mit Wann · Ordner · Was · Ergebnis · Größe; Lauf-ID nur im Tooltip; „Rückgängig …“ dort fragt nach, dreht den Lauf zurück und ist bei zurückgedrehten oder geleerten Läufen gesperrt.
+- [ ] Übersicht, Quarantäne: „4,2 GB in 3 Läufen warten auf Löschung“ mit Knopf „Quarantäne leeren …“ (springt in den Verlauf); ohne offene Quarantäne der Satz „Keine Quarantäne wartet auf Löschung“.
+- [ ] Profile: „Öffnen“ setzt die Kopfleiste; „n Dateien zum Prüfen“ ist anklickbar und öffnet „Analyse → Inhalte“ für das Profil.
+- [ ] Verlauf: dieselbe Lauf-Tabelle plus „Läuft ab“, „Details“ und „Rückgängig …“; Index-Wurzeln mit Status statt `Complete`.
+- [ ] Uhr des PCs um einen Tag vorstellen und einen Lauf anlegen: keine negativen oder „vor …“-Texte, sondern das Datum.
+
 ## 6. Nutzertest
 
 - [ ] Person ohne CLI-Kenntnisse: „Duplikate in Ordner X finden, prüfen, in die Quarantäne verschieben und zurückholen“, ohne Hilfe. Stolpersteine hier notieren:

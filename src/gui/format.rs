@@ -104,6 +104,32 @@ pub fn relative_time(now: DateTime<Local>, t: DateTime<Local>) -> (String, Strin
     (short, exact)
 }
 
+/// Kurztext und Tooltip eines RFC-3339-Zeitstempels: kein Wert „–“, unlesbar unverändert.
+pub fn time_of(now: DateTime<Local>, rfc3339: Option<&str>) -> (String, String) {
+    match rfc3339 {
+        None => ("–".into(), String::new()),
+        Some(text) => match DateTime::parse_from_rfc3339(text) {
+            Ok(t) => relative_time(now, t.with_timezone(&Local)),
+            Err(_) => (text.to_string(), text.to_string()),
+        },
+    }
+}
+
+/// Zeile der Übersicht zur Quarantäne, die noch auf `purge` wartet.
+pub fn quarantine_text(runs: usize, bytes: u64) -> String {
+    match runs {
+        0 => "Keine Quarantäne wartet auf Löschung".into(),
+        1 => format!(
+            "{} in 1 Lauf wartet auf Löschung",
+            super::texts::bytes(bytes)
+        ),
+        n => format!(
+            "{} in {n} Läufen warten auf Löschung",
+            super::texts::bytes(bytes)
+        ),
+    }
+}
+
 /// Hinweis „Stand: vor 12 Tagen, neu scannen?“, wenn der Scan älter als `STALE_DAYS` ist.
 pub const STALE_DAYS: i64 = 7;
 
@@ -240,12 +266,7 @@ pub struct RunRow {
 const ROOT_CHARS: usize = 32;
 
 pub fn run_row(now: DateTime<Local>, root: &Path, run: &RunSummary) -> RunRow {
-    let (when, when_tooltip) = run
-        .started
-        .as_deref()
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|t| relative_time(now, t.with_timezone(&Local)))
-        .unwrap_or_else(|| ("–".into(), String::new()));
+    let (when, when_tooltip) = time_of(now, run.started.as_deref());
     let root_full = crate::paths::display(root);
     let expires = run
         .expires
@@ -566,6 +587,37 @@ mod tests {
         assert_eq!(
             row.root_full,
             r"D:\Sehr\Lange\Pfade\Mit\Vielen\Ordnern\Daten\Archiv"
+        );
+    }
+
+    #[test]
+    fn zeitstempel_wird_relativ_ohne_wert_ein_strich_unlesbar_roh() {
+        let now = at(2026, 10, 8, 14, 30);
+        let stamp = at(2026, 10, 6, 12, 7).to_rfc3339();
+        assert_eq!(
+            time_of(now, Some(&stamp)),
+            ("vor 2 Tagen".to_string(), "06.10.2026 12:07".to_string())
+        );
+        assert_eq!(time_of(now, None), ("–".to_string(), String::new()));
+        assert_eq!(
+            time_of(now, Some("gestern")),
+            ("gestern".to_string(), "gestern".to_string())
+        );
+    }
+
+    #[test]
+    fn quarantaene_zeile_beachtet_einzahl_und_mehrzahl() {
+        assert_eq!(
+            quarantine_text(0, 0),
+            "Keine Quarantäne wartet auf Löschung"
+        );
+        assert_eq!(
+            quarantine_text(1, 2048),
+            "2.0 KiB in 1 Lauf wartet auf Löschung"
+        );
+        assert_eq!(
+            quarantine_text(3, 2048),
+            "2.0 KiB in 3 Läufen warten auf Löschung"
         );
     }
 

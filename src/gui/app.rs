@@ -137,6 +137,9 @@ impl GuiApp {
                 id if id.starts_with("settings.") => {
                     self.settings.on_answer(id, answer, &mut self.shell)
                 }
+                id if id.starts_with("overview.") => {
+                    self.overview.on_answer(id, answer, &mut self.shell)
+                }
                 id if id.starts_with("history.") => {
                     self.history.on_answer(id, answer, &mut self.shell)
                 }

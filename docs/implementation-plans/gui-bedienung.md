@@ -174,7 +174,14 @@ Stufen 1–4 lassen sich jeweils nach den Schritten 7, 10, 15 und 20 mergen.
 
 **Stufe 1 (Schritte 1–7) ist umgesetzt** (Commits `4ccb613` bis `f852d15` auf `dev`). Volle Suite, `clippy -D warnings` und `fmt --check` sind grün; die GUI startet in einem Wegwerf-Datenordner ohne Absturz. Offen: die Handtests in `docs/manual-tests.md`, Abschnitt 5a. Stufen 2 bis 4 (Schritte 8–20) stehen aus.
 
+**Stufe 2 (Schritte 8–10) ist umgesetzt.** Lauf-Tabelle (`format::run_row`, `run_kind`) in Übersicht und Verlauf, Wurzel- und Profil-Tabellen ohne Debug-Text, Kennzahl-Kacheln für Scan und Klassifizieren (`gui/result.rs`), Quarantäne-Zeile, „Öffnen“ und anklickbares „Zum Prüfen“, „Rückgängig …“ direkt in der Übersicht. Volle Suite grün (1633 Tests), Handtests in `docs/manual-tests.md`, Abschnitt 5b. Stufen 3 und 4 (Schritte 11–20) stehen aus.
+
 Abweichungen vom Plan:
+
+- **Stufe 2, `ScanReport`:** bekommt das Feld `score: Option<u8>` (`ops/scan.rs`), weil die Einordnung „72 – mittel“ die Zahl braucht und `score_line` nur Text ist. Die CLI ist davon nicht berührt.
+- **Stufe 2, `Goto`:** neues Feld `analysis_tab` (`problems`/`content`) und `AnalysisView::preselect_tab`, für „Fehler anzeigen“ und das „Zum Prüfen“-Badge.
+- **Stufe 2, Ergebnisdarstellung:** liegt in `gui/result.rs` statt in `header.rs` (reiner Aufbau `scan_view`/`classify_view`, getestet; `scan_text` und `classify_text` entfallen).
+- **Stufe 2, nicht umgesetzt:** Pfad-Kürzung und Score-Einordnung in den Analyse-Tabs (`analysis_tabs.rs`); dort gibt es keine Debug-Ausgaben, die Tabs bleiben bis Stufe 4 (Theme, Tabellen) unverändert.
 
 - **Schritt 2:** Statt eines eigenen `ThemeChoice` dient `egui::ThemePreference` (hell/dunkel/System, mit serde). `theme::ThemeChoice` ist ein Alias darauf. egui-winit meldet das Windows-Theme selbst; ob es zur Laufzeit wechselt, prüft der Handtest in Schritt 20.
 - **Schritte 5 und 6** liegen in einem Commit, weil Übersicht und Kopfleiste sonst zwei Scan-Oberflächen gleichzeitig gehabt hätten. `views/scan.rs` ist entfernt. `Persisted` speichert `recent` und `theme`.
