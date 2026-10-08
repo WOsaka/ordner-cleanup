@@ -591,9 +591,9 @@ impl CleanupView {
         self.ensure_cards(shell);
         self.ensure_rules(shell);
         self.cards_ui(ui);
-        ui.add_space(8.0);
+        ui.add_space(crate::gui::theme::SPACE_M);
         self.options_ui(ui, shell);
-        ui.add_space(8.0);
+        ui.add_space(crate::gui::theme::SPACE_M);
         ui.horizontal(|ui| {
             let ready = shell.target.is_some() && !busy;
             let button = egui::Button::new(egui::RichText::new("Plan erzeugen").strong());
@@ -610,7 +610,7 @@ impl CleanupView {
                 ui.weak("Wähle oben einen Ordner.");
             }
         });
-        ui.add_space(10.0);
+        ui.add_space(crate::gui::theme::SPACE_L);
         ui.heading("Zuletzt erzeugte Pläne");
         if self.recent.is_empty() {
             ui.label("Noch keine Pläne.");

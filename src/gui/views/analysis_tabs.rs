@@ -12,7 +12,7 @@ use crate::report::{FileItem, Report, TreeNode};
 const ROW_H: f32 = 20.0;
 
 fn heading(ui: &mut egui::Ui, text: &str) {
-    ui.add_space(6.0);
+    ui.add_space(crate::gui::theme::SPACE_M);
     ui.heading(text);
 }
 

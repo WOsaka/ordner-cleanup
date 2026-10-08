@@ -42,7 +42,7 @@ impl ContentTab {
                     &defaults,
                     &mut form_state,
                 );
-                ui.add_space(10.0);
+                ui.add_space(crate::gui::theme::SPACE_L);
                 ui.heading("Lokales LLM (optional)");
                 form::show(
                     ui,

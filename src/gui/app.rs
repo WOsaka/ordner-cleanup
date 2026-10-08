@@ -40,6 +40,8 @@ pub struct GuiApp {
     history: HistoryView,
     settings: SettingsView,
     help_open: bool,
+    /// Symbolschrift vorhanden (einmal beim Start geprüft)
+    icons: bool,
     /// Schließen wurde bestätigt; wir warten auf das Ende der Tasks
     closing: bool,
     theme: ThemeChoice,
@@ -67,6 +69,7 @@ impl GuiApp {
             history: HistoryView::default(),
             settings: SettingsView::default(),
             help_open: false,
+            icons: super::fonts::symbols_available(),
             closing: false,
             theme: saved.theme,
         };
@@ -162,12 +165,12 @@ impl GuiApp {
             .resizable(false)
             .default_size(150.0)
             .show(ui, |ui| {
-                ui.add_space(8.0);
+                ui.add_space(crate::gui::theme::SPACE_M);
                 ui.heading(texts::TITLE);
-                ui.add_space(8.0);
+                ui.add_space(crate::gui::theme::SPACE_M);
                 for (index, page) in Page::ALL.into_iter().enumerate() {
                     if ui
-                        .selectable_label(self.page == page, page.label())
+                        .selectable_label(self.page == page, page.nav_label(self.icons))
                         .on_hover_text(format!("Strg+{}", index + 1))
                         .clicked()
                     {
@@ -175,7 +178,7 @@ impl GuiApp {
                     }
                 }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                    ui.add_space(8.0);
+                    ui.add_space(crate::gui::theme::SPACE_M);
                     if ui.button("? Kürzel").clicked() {
                         self.help_open = !self.help_open;
                     }

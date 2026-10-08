@@ -201,7 +201,7 @@ impl HistoryView {
                 ui.label("Noch keine Läufe.");
             }
             if let Some((run, rows)) = &self.detail {
-                ui.add_space(8.0);
+                ui.add_space(crate::gui::theme::SPACE_M);
                 ui.heading(format!("Lauf {run}"));
                 for row in rows {
                     ui.label(
@@ -209,10 +209,10 @@ impl HistoryView {
                     );
                 }
             }
-            ui.add_space(12.0);
+            ui.add_space(crate::gui::theme::SPACE_L);
             ui.separator();
             self.purge_ui(ui, shell);
-            ui.add_space(12.0);
+            ui.add_space(crate::gui::theme::SPACE_L);
             ui.separator();
             self.index_ui(ui, shell, &data.roots);
         });

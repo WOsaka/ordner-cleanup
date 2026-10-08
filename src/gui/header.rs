@@ -306,7 +306,7 @@ impl Header {
     pub fn ui(&mut self, ui: &mut egui::Ui, shell: &mut Shell) {
         self.maintain(shell);
         let busy = Self::busy(shell);
-        ui.add_space(4.0);
+        ui.add_space(crate::gui::theme::SPACE_S);
         ui.horizontal(|ui| {
             self.target_combo(ui, shell);
             let ready = shell.target.is_some() && !busy && self.target_exists(shell);
@@ -348,7 +348,7 @@ impl Header {
         });
         self.progress_ui(ui, shell);
         self.result_ui(ui, shell);
-        ui.add_space(4.0);
+        ui.add_space(crate::gui::theme::SPACE_S);
         self.options_window(ui, shell, busy);
     }
 

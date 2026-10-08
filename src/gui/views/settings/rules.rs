@@ -68,7 +68,7 @@ impl RulesTab {
         }
         egui::ScrollArea::vertical().show(ui, |ui| {
             self.editor_ui(ui, ed);
-            ui.add_space(10.0);
+            ui.add_space(crate::gui::theme::SPACE_L);
             self.preview_ui(ui, ed, shell);
         });
     }
@@ -159,7 +159,7 @@ impl RulesTab {
                 });
                 ui.end_row();
             });
-        ui.add_space(6.0);
+        ui.add_space(crate::gui::theme::SPACE_M);
         form::show(
             ui,
             doc,
@@ -168,7 +168,7 @@ impl RulesTab {
             &defaults,
             &mut form_state,
         );
-        ui.add_space(6.0);
+        ui.add_space(crate::gui::theme::SPACE_M);
         ui.label(egui::RichText::new("Felder (Inhaltsbedingungen: schlüssel = wert)").strong());
         if ui
             .add(

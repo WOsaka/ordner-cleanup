@@ -1,7 +1,7 @@
 ---
 title: "Implementation Plan: GUI-Bedienung: schneller und klarer"
 feature_spec: docs/features/gui-bedienung.md
-status: approved   # pending-approval | approved | implemented
+status: implemented   # pending-approval | approved | implemented
 created: 2026-10-08
 updated: 2026-10-08
 ---
@@ -178,7 +178,14 @@ Stufen 1–4 lassen sich jeweils nach den Schritten 7, 10, 15 und 20 mergen.
 
 **Stufe 3 (Schritte 11–15) ist umgesetzt.** `views/cleanup_cards.rs` (Karten, `CardFacts`, Dauer-Felder, Regel-Häkchen, Regelnamen laden), Karten-Ansicht in `cleanup.rs`, lesbare Plan-Liste. Rauchtests in `tests/gui_cleanup_cards.rs`, Handtests in `docs/manual-tests.md`, Abschnitt 5c. Stufe 4 (Schritte 16–20) steht aus.
 
+**Stufe 4 (Schritte 16–20) ist umgesetzt.** Alle festen `Color32` sind in `theme.rs` (Test `tests/gui_theme_static.rs` hält das fest), „Darstellung“ steht oben in den Einstellungen, die Review-Kopfzeile hat Anwenden-Knopf mit Anzahl und Größe, Sicherheitshinweis und Menü „Auswahl ▾“, `gui/keys.rs` bildet Tasten auf Aktionen ab (Esc in Dialogen über `dialogs::esc_answer`), Seitenleiste mit Symbolen und `?`-Hilfe. Volle Suite (1664 Tests), Clippy und fmt grün, GUI startet ohne Absturz. **Offen: die Handtests** in `docs/manual-tests.md` (Abschnitte 5a–5d), vor allem Optik, DPI und der Windows-Modus zur Laufzeit.
+
 Abweichungen vom Plan:
+
+- **Stufe 4, Review-Kopfzeile:** keine eigene `Panel::top`; die Tabelle scrollt in sich, daher bleibt die Kopfzeile ohnehin stehen. Der Hinweis richtet sich nach den Aktionsarten im Plan (Quarantäne, Verschieben, Ordner entfernen), `quarantine_days` wird beim Öffnen gelesen.
+- **Stufe 4, Tastatur:** Strg+Enter setzt nur ein Flag, das wie der Knopf „Anwenden“ den bestehenden Dialog öffnet. `KeyAction::CloseDialog` entfällt; Esc wird in `dialogs.rs` behandelt. Tasten werden verbraucht (`consume_key`), damit fokussierte Widgets sie nicht doppelt auslösen.
+- **Stufe 4, Skala:** `SPACE_S/M/L` (4/8/12) ersetzen alle `add_space`-Zahlen; Schriftgrößen und Zeilenhöhen sind nicht vereinheitlicht (YAGNI). Rechtsbündig sind nur die Größen im Review, nicht die Grid-Tabellen in Übersicht und Verlauf.
+- **Stufe 4, Dunkelmodus:** `ThemePreference::System` von egui; ein Registry-Rückfall wurde nicht gebaut, solange der Handtest (5d) nichts anderes zeigt.
 
 - **Stufe 3, Karten-Layout:** `egui::Grid` mit breitenabhängiger Spaltenzahl statt `horizontal_wrapped` (Frames brechen dort nicht um); Karten-Labels sind nicht auswählbar, sonst fängt der Text den Klick ab. Karten tragen die Button-Rolle (Barrierefreiheit, Tests).
 - **Stufe 3, Zahlen:** `CardsData` (Report-Zahlen plus Config-Werte für die Platzhalter) lädt `CleanupView` selbst als Read-Task, neu bei Wechsel von Ziel oder `shell.generation`. Ohne Scan erscheinen die Karten ohne Zahl. Für Profile kommen die Platzhalter aus dem Profil.

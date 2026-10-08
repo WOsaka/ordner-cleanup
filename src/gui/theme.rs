@@ -57,6 +57,11 @@ pub fn tone_color(ui: &egui::Ui, tone: Tone) -> Color32 {
     palette(ui.visuals().dark_mode).tone(tone)
 }
 
+/// Abstände der Oberfläche (Punkte); statt verstreuter Zahlen in den Ansichten.
+pub const SPACE_S: f32 = 4.0;
+pub const SPACE_M: f32 = 8.0;
+pub const SPACE_L: f32 = 12.0;
+
 /// Alle wählbaren Darstellungen mit Beschriftung, in Anzeigereihenfolge.
 pub const CHOICES: [(ThemeChoice, &str); 3] = [
     (egui::ThemePreference::System, "Wie Windows"),

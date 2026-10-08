@@ -169,7 +169,7 @@ fn files_ui(ui: &mut egui::Ui, shell: &mut Shell) {
             }
         });
     }
-    ui.add_space(12.0);
+    ui.add_space(crate::gui::theme::SPACE_L);
     if ui.button("Verknüpfung im Startmenü anlegen").clicked() {
         match crate::platform::shell::create_start_menu_shortcut() {
             Ok(file) => shell.message(

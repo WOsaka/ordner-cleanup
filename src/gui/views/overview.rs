@@ -140,17 +140,17 @@ impl OverviewView {
         ui.separator();
         ui.heading("Gescannte Ordner");
         if data.roots.is_empty() {
-            ui.add_space(16.0);
+            ui.add_space(crate::gui::theme::SPACE_L);
             ui.vertical_centered(|ui| {
                 ui.heading(texts::EMPTY_TITLE);
                 ui.label(texts::EMPTY_TEXT);
-                ui.add_space(8.0);
+                ui.add_space(crate::gui::theme::SPACE_M);
                 let button = egui::Button::new(texts::EMPTY_BUTTON);
                 if ui.add_sized([260.0, 36.0], button).clicked() {
                     shell.header_request = Some(HeaderRequest::PickAndScan);
                 }
             });
-            ui.add_space(16.0);
+            ui.add_space(crate::gui::theme::SPACE_L);
         }
         let now = Local::now();
         let mut chosen: Option<(PathBuf, Page)> = None;
@@ -185,7 +185,7 @@ impl OverviewView {
             });
         }
 
-        ui.add_space(12.0);
+        ui.add_space(crate::gui::theme::SPACE_L);
         ui.heading("Profile");
         if let Some(e) = &data.profile_error {
             ui.colored_label(
@@ -240,7 +240,7 @@ impl OverviewView {
             });
         }
 
-        ui.add_space(12.0);
+        ui.add_space(crate::gui::theme::SPACE_L);
         ui.heading("Letzte Läufe");
         let mut recent: Vec<(&PathBuf, &RunSummary)> = data
             .runs
@@ -277,7 +277,7 @@ impl OverviewView {
             });
         }
         let (count, bytes) = pending_quarantine(&data.runs);
-        ui.add_space(8.0);
+        ui.add_space(crate::gui::theme::SPACE_M);
         ui.horizontal(|ui| {
             ui.label(quarantine_text(count, bytes));
             if count > 0 && ui.button("Quarantäne leeren …").clicked() {

@@ -31,7 +31,7 @@ pub fn show(ctx: &egui::Context, shell: &mut Shell) {
         .show(ctx, |ui| match &dialog {
             Dialog::Message { text, .. } => {
                 ui.label(text);
-                ui.add_space(8.0);
+                ui.add_space(crate::gui::theme::SPACE_M);
                 if ui.button(texts::OK).clicked() {
                     result = Some(Answer {
                         ok: true,
@@ -48,10 +48,10 @@ pub fn show(ctx: &egui::Context, shell: &mut Shell) {
             } => {
                 ui.label(text);
                 if let Some(label) = must_check {
-                    ui.add_space(6.0);
+                    ui.add_space(crate::gui::theme::SPACE_M);
                     ui.checkbox(&mut checked, label);
                 }
-                ui.add_space(8.0);
+                ui.add_space(crate::gui::theme::SPACE_M);
                 ui.horizontal(|ui| {
                     let enabled = must_check.is_none() || checked;
                     let mut button = egui::Button::new(ok_label.as_str());

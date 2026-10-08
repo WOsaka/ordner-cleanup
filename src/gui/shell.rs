@@ -46,6 +46,26 @@ impl Page {
         Page::Settings,
     ];
 
+    /// Symbol der Seitenleiste (Segoe UI Symbol); ohne die Schrift entfällt es.
+    pub fn icon(self) -> &'static str {
+        match self {
+            Page::Overview => "\u{2302}",
+            Page::Analysis => "\u{25D4}",
+            Page::Cleanup => "\u{2702}",
+            Page::History => "\u{21BA}",
+            Page::Settings => "\u{2699}",
+        }
+    }
+
+    /// Beschriftung in der Seitenleiste, mit Symbol, wenn die Symbolschrift geladen ist.
+    pub fn nav_label(self, icons: bool) -> String {
+        if icons {
+            format!("{}  {}", self.icon(), self.label())
+        } else {
+            self.label().to_string()
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Page::Overview => texts::NAV_OVERVIEW,
@@ -359,5 +379,20 @@ mod tests {
         let scanned = [PathBuf::from(r"D:\C")];
         assert_eq!(dropdown_targets(&[], &scanned), [folder(r"D:\C")]);
         assert!(dropdown_targets(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn seitenleiste_zeigt_symbole_nur_mit_symbolschrift() {
+        for page in Page::ALL {
+            assert!(!page.icon().is_empty());
+            assert_eq!(page.nav_label(false), page.label());
+            let with = page.nav_label(true);
+            assert!(
+                with.starts_with(page.icon()) && with.ends_with(page.label()),
+                "{with}"
+            );
+        }
+        let icons: std::collections::HashSet<_> = Page::ALL.iter().map(|p| p.icon()).collect();
+        assert_eq!(icons.len(), Page::ALL.len(), "jedes Symbol nur einmal");
     }
 }

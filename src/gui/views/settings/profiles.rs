@@ -96,7 +96,7 @@ impl ProfilesTab {
             });
             self.manage_ui(ui, ed, shell);
             if let Some(name) = self.selected.clone() {
-                ui.add_space(8.0);
+                ui.add_space(crate::gui::theme::SPACE_M);
                 ui.heading(format!("Profil {name}"));
                 let defaults = Config::default();
                 let mut form_state = std::mem::take(&mut ed.form);
@@ -118,7 +118,7 @@ impl ProfilesTab {
     }
 
     fn manage_ui(&mut self, ui: &mut egui::Ui, ed: &mut DocEditor, shell: &mut Shell) {
-        ui.add_space(6.0);
+        ui.add_space(crate::gui::theme::SPACE_M);
         ui.horizontal_wrapped(|ui| {
             ui.label("Neues Profil:");
             ui.add(
@@ -203,7 +203,7 @@ impl ProfilesTab {
     }
 
     fn schedule_ui(&mut self, ui: &mut egui::Ui, ed: &DocEditor, shell: &mut Shell, profile: &str) {
-        ui.add_space(10.0);
+        ui.add_space(crate::gui::theme::SPACE_L);
         ui.heading("Geplanter Lauf");
         let now = chrono::Local::now().naive_local();
         match self.schedules.iter().find(|r| r.entry.profile == profile) {

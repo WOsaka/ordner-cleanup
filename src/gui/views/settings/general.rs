@@ -72,7 +72,7 @@ impl GeneralTab {
                     &defaults,
                     &mut form_state,
                 );
-                ui.add_space(10.0);
+                ui.add_space(crate::gui::theme::SPACE_L);
                 ui.heading("Benachrichtigung");
                 form::show(
                     ui,
@@ -82,7 +82,7 @@ impl GeneralTab {
                     &defaults,
                     &mut form_state,
                 );
-                ui.add_space(10.0);
+                ui.add_space(crate::gui::theme::SPACE_L);
                 ui.heading("GUI");
                 form::show(
                     ui,
@@ -92,7 +92,7 @@ impl GeneralTab {
                     &defaults,
                     &mut form_state,
                 );
-                ui.add_space(10.0);
+                ui.add_space(crate::gui::theme::SPACE_L);
                 ui.heading("Eigene Müll-Kategorien");
                 list::ui(
                     ui,

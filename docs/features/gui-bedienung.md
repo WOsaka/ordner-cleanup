@@ -1,6 +1,6 @@
 ---
 title: "GUI-Bedienung: schneller und klarer"
-status: approved          # draft | approved | implemented
+status: implemented          # draft | approved | implemented
 created: 2026-10-08
 updated: 2026-10-08
 ---
@@ -21,10 +21,10 @@ Betroffen ist zunächst der Entwickler als Power-User, der das Werkzeug oft nutz
 ## Goals
 Umsetzung in vier voneinander unabhängigen Stufen, jede einzeln baubar, testbar und mergebar, in dieser Reihenfolge.
 
-- [ ] **Stufe 1, Kopfleiste:** Eine feste Leiste mit Ordner/Profil-Auswahl, Scannen und Klassifizieren auf allen Seiten außer den Einstellungen. Die Übersicht zeigt nur noch Zustand.
-- [ ] **Stufe 2, Rohausgaben:** Lesbare Status-Texte, relative Zeiten, Kennzahl-Kacheln, Lauf-Tabelle, gekürzte Pfade, zentral in `gui/format.rs`.
-- [ ] **Stufe 3, Aufräumen mit Zahlen:** Plan-Arten als Karten mit Analyse-Zahlen, Dauer-Felder als Zahl plus Einheit, Regelnamen als Häkchen.
-- [ ] **Stufe 4, Review, Tastatur, Theme:** Feste Review-Kopfzeile mit Quarantäne-Hinweis, Auswahl-Menü, Tastaturkürzel, Theme-Tokens für hell und dunkel, einheitliche Abstände, Icons.
+- [x] **Stufe 1, Kopfleiste:** Eine feste Leiste mit Ordner/Profil-Auswahl, Scannen und Klassifizieren auf allen Seiten außer den Einstellungen. Die Übersicht zeigt nur noch Zustand.
+- [x] **Stufe 2, Rohausgaben:** Lesbare Status-Texte, relative Zeiten, Kennzahl-Kacheln, Lauf-Tabelle, gekürzte Pfade, zentral in `gui/format.rs`.
+- [x] **Stufe 3, Aufräumen mit Zahlen:** Plan-Arten als Karten mit Analyse-Zahlen, Dauer-Felder als Zahl plus Einheit, Regelnamen als Häkchen.
+- [x] **Stufe 4, Review, Tastatur, Theme:** Feste Review-Kopfzeile mit Quarantäne-Hinweis, Auswahl-Menü, Tastaturkürzel, Theme-Tokens für hell und dunkel, einheitliche Abstände, Icons.
 - [ ] Die Grundprinzipien und die Funktionsgleichheit mit der CLI bleiben unverändert.
 - [ ] Die Logik hinter jeder Darstellung (Formatierung, Auswahl per Tastatur, Karten-Zahlen) ist ohne Fenster testbar.
 

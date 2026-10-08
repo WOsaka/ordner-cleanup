@@ -325,7 +325,9 @@ impl ReviewState {
                         );
                     });
                     row.col(|ui| {
-                        ui.label(texts::bytes(r.size));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(texts::bytes(r.size));
+                        });
                     });
                     row.col(|ui| {
                         let text = match &r.rule {

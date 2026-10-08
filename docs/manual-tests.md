@@ -94,6 +94,19 @@ Spec: [`features/gui-bedienung.md`](features/gui-bedienung.md). Mit einem frisch
 - [ ] Zuletzt erzeugte Pläne: Zeile mit relativer Zeit, Art, „n Aktionen, Größe“ und gekürztem Wurzelpfad; Klick öffnet den Plan; eine fremde `.json` im Planordner erscheint nur mit Dateinamen.
 - [ ] Fenster schmal ziehen: Karten rücken auf weniger Spalten, nichts wird abgeschnitten.
 
+## 5d. GUI-Bedienung, Stufe 4 (Review, Tastatur, Theme)
+
+- [ ] Einstellungen → „Darstellung“: Wie Windows / Hell / Dunkel wirken sofort und bleiben nach Neustart. „Wie Windows“ folgt dem Windows-Modus; Windows zur Laufzeit umstellen (Einstellungen → Personalisierung → Farben): die GUI zieht mit. Falls nicht, ist das der Rückfall aus dem Plan (Registry `AppsUseLightTheme`), bitte melden.
+- [ ] Hell und Dunkel: Fehler (rot), Warnungen (gelb/braun), „Gültig“ (grün), Status-Texte und Score-Farben sind in beiden Modi lesbar; der Gefahr-Knopf (Quarantäne leeren, Löschen) hat in beiden Modi weißen Text auf dunkelrotem Grund.
+- [ ] DPI 100 %, 150 %, 200 %: Karten, Kopfleiste, Review-Tabelle, Seitenleiste ohne abgeschnittenen Text; Symbole in der Seitenleiste scharf.
+- [ ] Windows 10: Seitenleisten-Symbole (⌂ ◔ ✂ ↺ ⚙) erscheinen. Fehlt eines (leeres Kästchen), notieren; ohne `seguisym.ttf` erscheint die Seitenleiste ohne Symbole.
+- [ ] Review: Kopfzeile zeigt „Anwenden (N Einträge, X GB)“, bei Auswahl 0 ist der Knopf grau. Darunter steht „Nichts wird gelöscht. Dateien gehen in die Quarantäne und lassen sich n Tage lang zurückholen.“ mit den Tagen aus der Config (`quarantine_days` ändern und Plan neu öffnen). Bei Archiv-/Regel-Plänen lautet der Satz „… werden verschoben …“, bei „Leere Ordner“ „Entfernt werden nur leere Ordner …“.
+- [ ] Review: Menü „Auswahl ▾“ (Alle/Keine/Gefilterte/Ordner), „Übersprungene zeigen (n)“ mit richtiger Zahl; Größen rechtsbündig.
+- [ ] Tastatur im Review: ↑/↓ wechseln die Zeile und scrollen mit, Leertaste wählt an/ab und springt weiter (beim Abwählen mit abhängigen Einträgen erscheint die Rückfrage), Strg+A / Strg+Umschalt+A, Strg+F fokussiert die Suche, Strg+Enter öffnet nur den Bestätigungsdialog „Anwenden“ (nichts wird ohne Dialog angewendet).
+- [ ] Tastatur global: Strg+1 bis Strg+5 wechseln die Seite, Strg+O öffnet den Plan-Dialog, Strg+R lädt neu, `?` öffnet die Kürzel-Liste, Esc schließt sie. Esc in einem Dialog bricht ab (bestätigt nie); während eines Dialogs wirken die Kürzel nicht.
+- [ ] In einem Textfeld getippt (Suche, Ordner, Zahlen): Leertaste, Buchstaben und Pfeiltasten gehen ins Feld und lösen kein Kürzel aus.
+- [ ] Tooltips: Seitenleiste „Strg+n“, Anwenden-Knopf „Strg+Enter“.
+
 ## 6. Nutzertest
 
 - [ ] Person ohne CLI-Kenntnisse: „Duplikate in Ordner X finden, prüfen, in die Quarantäne verschieben und zurückholen“, ohne Hilfe. Stolpersteine hier notieren:

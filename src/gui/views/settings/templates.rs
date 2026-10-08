@@ -94,10 +94,10 @@ impl TemplatesTab {
                 });
             }
             if let Some(name) = self.viewing {
-                ui.add_space(6.0);
+                ui.add_space(crate::gui::theme::SPACE_M);
                 ui.label(egui::RichText::new(builtin_text(name).unwrap_or_default()).monospace());
             }
-            ui.add_space(10.0);
+            ui.add_space(crate::gui::theme::SPACE_L);
             ui.heading("Eigene Vorlagen");
             let own = own_templates();
             if own.is_empty() {
