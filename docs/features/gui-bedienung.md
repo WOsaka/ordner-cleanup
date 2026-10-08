@@ -1,6 +1,6 @@
 ---
 title: "GUI-Bedienung: schneller und klarer"
-status: draft          # draft | approved | implemented
+status: approved          # draft | approved | implemented
 created: 2026-10-08
 updated: 2026-10-08
 ---
