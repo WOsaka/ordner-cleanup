@@ -170,6 +170,18 @@ Jeder Schritt ist ein Commit (kurze Message, kein Footer, laut CLAUDE.md) und en
 
 Stufen 1–4 lassen sich jeweils nach den Schritten 7, 10, 15 und 20 mergen.
 
+## Umsetzungsstand
+
+**Stufe 1 (Schritte 1–7) ist umgesetzt** (Commits `4ccb613` bis `f852d15` auf `dev`). Volle Suite, `clippy -D warnings` und `fmt --check` sind grün; die GUI startet in einem Wegwerf-Datenordner ohne Absturz. Offen: die Handtests in `docs/manual-tests.md`, Abschnitt 5a. Stufen 2 bis 4 (Schritte 8–20) stehen aus.
+
+Abweichungen vom Plan:
+
+- **Schritt 2:** Statt eines eigenen `ThemeChoice` dient `egui::ThemePreference` (hell/dunkel/System, mit serde). `theme::ThemeChoice` ist ein Alias darauf. egui-winit meldet das Windows-Theme selbst; ob es zur Laufzeit wechselt, prüft der Handtest in Schritt 20.
+- **Schritte 5 und 6** liegen in einem Commit, weil Übersicht und Kopfleiste sonst zwei Scan-Oberflächen gleichzeitig gehabt hätten. `views/scan.rs` ist entfernt. `Persisted` speichert `recent` und `theme`.
+- **Neu gegenüber dem Plan:** `Shell::header_request` (Wunsch „Ordner wählen und scannen“ aus der Übersicht an die Kopfleiste) und `header::is_silent` (kurze Hintergrundtasks erscheinen nicht in der Statusleiste). Die Existenzprüfung des Ordners läuft als Hintergrund-Task, damit ein getrenntes Netzlaufwerk die Oberfläche nicht anhält.
+- **`texts::bytes` und `grouped`** bleiben in `texts.rs` und delegieren nicht an `format.rs` (kein Nutzen, YAGNI).
+- **Noch Textblock:** das Scan- und Classify-Ergebnis in der Kopfleiste (`scan_text`); die Kennzahl-Kacheln folgen in Schritt 9. Die Statusspalte der Übersicht zeigt weiter `{:?}` bis Schritt 8.
+
 ## Test Strategy
 - **Unit (ohne Fenster), zuerst geschrieben:**
   - `format.rs`: relative Zeit (gestern, vor 2 Tagen, Zukunft → absolutes Datum, Wochengrenze), `short_path` (Umlaute, `\\?\`, > 260 Zeichen, kürzer als Limit), `run_status` für jeden `RunStatus`, `score_label` an den Bandgrenzen, `duration_to_arg` (Einheiten, 0, Text, Überlauf, leer = `None`).
