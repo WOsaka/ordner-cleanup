@@ -455,7 +455,7 @@ impl CleanupView {
         field: &mut DurationField,
         config_default: &str,
     ) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(label);
             ui.add(
                 egui::TextEdit::singleline(&mut field.amount)
@@ -485,7 +485,7 @@ impl CleanupView {
             });
         match self.kind {
             "dedupe" => {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("Welche Kopie bleibt:");
                     let text = match self.keep {
                         "newest" => "Die neueste Datei bleibt",
@@ -513,7 +513,7 @@ impl CleanupView {
                         });
                 });
                 if self.keep == "path" {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if self.keep_path.trim().is_empty() {
                             ui.weak("Noch kein Ordner gewählt");
                         } else {
@@ -529,7 +529,7 @@ impl CleanupView {
                 }
             }
             "junk" => {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("Kategorien (leer = aus der Config):");
                     ui.add(egui::TextEdit::singleline(&mut self.categories).desired_width(260.0));
                 });
@@ -545,7 +545,7 @@ impl CleanupView {
                 Self::duration_row(ui, "Mindestalter:", &mut self.min_age, &versions_default)
             }
             "rules" => {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("Regeldatei:");
                     if self.rules_file.trim().is_empty() {
                         ui.weak("Standard");
