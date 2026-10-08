@@ -93,6 +93,9 @@ Spec: [`features/gui-bedienung.md`](features/gui-bedienung.md). Mit einem frisch
 - [ ] Nach Regeln: Regeldatei wählen, Regelnamen erscheinen als Häkchen; nur angehakte Regeln landen im Plan (Kopf des Plans prüfen); alle abwählen gibt eine Meldung. Datei mit Syntaxfehler: roter Text mit Datei und Zeile, kein Absturz.
 - [ ] Zuletzt erzeugte Pläne: Zeile mit relativer Zeit, Art, „n Aktionen, Größe“ und gekürztem Wurzelpfad; Klick öffnet den Plan; eine fremde `.json` im Planordner erscheint nur mit Dateinamen.
 - [ ] Fenster schmal ziehen: Karten rücken auf weniger Spalten, nichts wird abgeschnitten.
+- [ ] Fenster auf linke und rechte Bildschirmhälfte: Karten füllen die Breite, rechts ist derselbe Rand wie links.
+- [ ] Fenster niedrig ziehen: die Seite scrollt, alle Optionen und „Plan erzeugen“ sind erreichbar.
+- [ ] Versionen-Plan anwenden, „Weiter“ (Ergebnis schließen): die Karten sind wieder da.
 
 ## 5d. GUI-Bedienung, Stufe 4 (Review, Tastatur, Theme)
 
@@ -101,6 +104,8 @@ Spec: [`features/gui-bedienung.md`](features/gui-bedienung.md). Mit einem frisch
 - [ ] DPI 100 %, 150 %, 200 %: Karten, Kopfleiste, Review-Tabelle, Seitenleiste ohne abgeschnittenen Text; Symbole in der Seitenleiste scharf.
 - [ ] Windows 10: Seitenleisten-Symbole (⌂ ◔ ✂ ↺ ⚙) erscheinen. Fehlt eines (leeres Kästchen), notieren; ohne `seguisym.ttf` erscheint die Seitenleiste ohne Symbole.
 - [ ] Review: Kopfzeile zeigt „Anwenden (N Einträge, X GB)“, bei Auswahl 0 ist der Knopf grau. Darunter steht „Nichts wird gelöscht. Dateien gehen in die Quarantäne und lassen sich n Tage lang zurückholen.“ mit den Tagen aus der Config (`quarantine_days` ändern und Plan neu öffnen). Bei Archiv-/Regel-Plänen lautet der Satz „… werden verschoben …“, bei „Leere Ordner“ „Entfernt werden nur leere Ordner …“.
+- [ ] Review-Tabelle: zwischen Größe, Grund / Regel und Alter sind Trennlinien und Abstand sichtbar, in Hell und Dunkel; Scrollen durch 110.000 Zeilen ruckelt nicht stärker als vorher.
+- [ ] Einstellungen → Regeln: Name, Ziel und die Felder darunter beginnen in derselben Spalte und enden bündig.
 - [ ] Review: Menü „Auswahl ▾“ (Alle/Keine/Gefilterte/Ordner), „Übersprungene zeigen (n)“ mit richtiger Zahl; Größen rechtsbündig.
 - [ ] Tastatur im Review: ↑/↓ wechseln die Zeile und scrollen mit, Leertaste wählt an/ab und springt weiter (beim Abwählen mit abhängigen Einträgen erscheint die Rückfrage), Strg+A / Strg+Umschalt+A, Strg+F fokussiert die Suche, Strg+Enter öffnet nur den Bestätigungsdialog „Anwenden“ (nichts wird ohne Dialog angewendet).
 - [ ] Tastatur global: Strg+1 bis Strg+5 wechseln die Seite, Strg+O öffnet den Plan-Dialog, Strg+R lädt neu, `?` öffnet die Kürzel-Liste, Esc schließt sie. Esc in einem Dialog bricht ab (bestätigt nie); während eines Dialogs wirken die Kürzel nicht.

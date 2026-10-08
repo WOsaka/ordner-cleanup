@@ -1,6 +1,6 @@
 ---
 title: "Bug: Aufräumen-Seite der GUI: Rand rechts, Karten bei schmalem Fenster, kein Scrollen, Rückweg nach Anwenden"
-status: analysed
+status: fixed
 created: 2026-10-08
 updated: 2026-10-08
 ---

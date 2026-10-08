@@ -1,6 +1,7 @@
 ---
 title: "Fix-Plan: Layout der Aufräumen-Seite, Review-Tabelle und Regel-Formular"
-status: pending-approval
+status: fixed
+fixed_at: 2026-10-08
 created: 2026-10-08
 updated: 2026-10-08
 analysis: cleanup-page-layout-analysis.md
