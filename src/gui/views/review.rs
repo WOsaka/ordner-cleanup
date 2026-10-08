@@ -5,13 +5,15 @@ use egui_extras::{Column as TCol, TableBuilder};
 
 use crate::change::plan::ActionType;
 use crate::gui::format;
-use crate::gui::review::{Column, Filter, ReviewModel, Show, Sort};
+use crate::gui::keys::KeyAction;
+use crate::gui::review::{step_focus, Column, Filter, ReviewModel, Show, Sort};
 use crate::gui::shell::{Dialog, Shell};
 use crate::gui::texts;
 use crate::gui::widgets::table::path_menu;
 
 pub const ID_DEPENDENTS: &str = "cleanup.dependents";
 const ROW_H: f32 = 20.0;
+const SEARCH_ID: &str = "review-search";
 
 pub struct ReviewState {
     pub model: ReviewModel,
@@ -28,6 +30,10 @@ pub struct ReviewState {
     rule: Option<String>,
     show_skipped: bool,
     selected_row: Option<usize>,
+    /// Zeile, die beim nächsten Zeichnen in den sichtbaren Bereich soll
+    scroll_to: Option<usize>,
+    /// Strg+Enter wurde gedrückt; `ui` meldet es wie den Knopf „Anwenden“
+    apply_requested: bool,
     /// Nur ansehen (Regel-Vorschau): keine Auswahl, kein Anwenden
     pub read_only: bool,
     /// Abhängige Einträge, nach denen gerade gefragt wird
@@ -88,6 +94,8 @@ impl ReviewState {
             rule: None,
             show_skipped: false,
             selected_row: None,
+            scroll_to: None,
+            apply_requested: false,
             read_only: false,
             dependents: Vec::new(),
         }
@@ -141,6 +149,7 @@ impl ReviewState {
                     egui::RichText::new(format::apply_label(s.selected, s.selected_bytes)).strong();
                 if ui
                     .add_enabled(s.selected > 0, egui::Button::new(label))
+                    .on_hover_text("Strg+Enter")
                     .clicked()
                 {
                     apply = true;
@@ -153,13 +162,17 @@ impl ReviewState {
         self.filter_bar(ui);
         self.table(ui, shell);
         self.detail(ui);
-        apply
+        apply | std::mem::take(&mut self.apply_requested)
     }
 
     fn filter_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.label("Suche:");
-            ui.add(egui::TextEdit::singleline(&mut self.text).desired_width(150.0));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.text)
+                    .id(egui::Id::new(SEARCH_ID))
+                    .desired_width(150.0),
+            );
             ui.label("Unterhalb von:");
             ui.add(egui::TextEdit::singleline(&mut self.folder).desired_width(180.0));
             ui.label("Größe (MB) von/bis:");
@@ -251,7 +264,7 @@ impl ReviewState {
         let mut header_click: Option<Column> = None;
         let model = &self.model;
         let selected_row = self.selected_row;
-        TableBuilder::new(ui)
+        let mut builder = TableBuilder::new(ui)
             .id_salt("review-table")
             .striped(true)
             .sense(egui::Sense::click())
@@ -262,7 +275,11 @@ impl ReviewState {
             .column(TCol::initial(260.0).resizable(true).clip(true))
             .column(TCol::initial(80.0))
             .column(TCol::remainder().clip(true))
-            .column(TCol::initial(80.0))
+            .column(TCol::initial(80.0));
+        if let Some(row) = self.scroll_to.take() {
+            builder = builder.scroll_to_row(row, None);
+        }
+        builder
             .header(ROW_H + 4.0, |mut h| {
                 h.col(|_| {});
                 for (title, column) in header_cols.drain(..) {
@@ -346,12 +363,47 @@ impl ReviewState {
         }
         if let Some(i) = toggled {
             self.model.toggle(i);
-            if !self.model.is_selected(i) {
-                let deps = self.model.dependents_to_deselect(i);
-                if !deps.is_empty() {
-                    self.ask_dependents(shell, deps);
+            self.after_toggle(i, shell);
+        }
+    }
+
+    /// Fragt nach abhängigen Einträgen, wenn Zeile `i` gerade abgewählt wurde.
+    fn after_toggle(&mut self, i: usize, shell: &mut Shell) {
+        if !self.model.is_selected(i) {
+            let deps = self.model.dependents_to_deselect(i);
+            if !deps.is_empty() {
+                self.ask_dependents(shell, deps);
+            }
+        }
+    }
+
+    /// Eine Taste im Review. Schreibende Aktionen laufen weiter über den Bestätigungsdialog.
+    pub fn handle_key(&mut self, action: KeyAction, ctx: &egui::Context, shell: &mut Shell) {
+        let len = self.model.len();
+        match action {
+            KeyAction::Next | KeyAction::Prev => {
+                let delta = if action == KeyAction::Next { 1 } else { -1 };
+                self.selected_row = step_focus(self.selected_row, delta, len);
+                self.scroll_to = self.selected_row;
+            }
+            _ if self.read_only => {}
+            KeyAction::Toggle => {
+                if let Some(i) = self.selected_row.filter(|i| *i < len) {
+                    let next = self.model.toggle_and_advance(i);
+                    self.after_toggle(i, shell);
+                    self.selected_row = Some(next);
+                    self.scroll_to = Some(next);
                 }
             }
+            KeyAction::SelectFiltered => self.model.select_filtered(true),
+            KeyAction::DeselectFiltered => self.model.select_filtered(false),
+            KeyAction::FocusSearch => {
+                ctx.memory_mut(|m| m.request_focus(egui::Id::new(SEARCH_ID)));
+            }
+            KeyAction::Apply => {
+                self.apply_requested = self.model.summary().selected > 0;
+            }
+            _ => {}
         }
     }
 

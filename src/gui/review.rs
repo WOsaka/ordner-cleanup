@@ -110,6 +110,17 @@ fn skipped_reason(s: &Skipped) -> String {
     }
 }
 
+/// Zeilenfokus um `delta` verschieben, in `0..len` begrenzt. Ohne Fokus springt „vor“ auf die
+/// erste und „zurück“ auf die letzte Zeile. Bei leerer Liste gibt es keinen Fokus.
+pub fn step_focus(current: Option<usize>, delta: isize, len: usize) -> Option<usize> {
+    let last = len.checked_sub(1)?;
+    Some(match current {
+        None if delta >= 0 => 0,
+        None => last,
+        Some(i) => i.saturating_add_signed(delta).min(last),
+    })
+}
+
 impl ReviewModel {
     pub fn new(plan: Plan) -> Self {
         let mut rows = Vec::with_capacity(plan.actions.len() + plan.skipped.len());
@@ -244,6 +255,12 @@ impl ReviewModel {
         if self.rows[i].id.is_some() {
             self.selected[i] = !self.selected[i];
         }
+    }
+
+    /// Wählt die Zeile `focus` an bzw. ab und gibt die nächste Zeile zurück (am Ende dieselbe).
+    pub fn toggle_and_advance(&mut self, focus: usize) -> usize {
+        self.toggle(focus);
+        (focus + 1).min(self.len().saturating_sub(1))
     }
 
     fn set_rows(&mut self, indices: impl Iterator<Item = usize>, on: bool) {
@@ -734,5 +751,32 @@ mod tests {
             ReviewModel::new(plan(Vec::new(), Vec::new())).skipped_count(),
             0
         );
+    }
+
+    #[test]
+    fn fokus_wandert_begrenzt_durch_die_liste() {
+        assert_eq!(step_focus(None, 1, 3), Some(0));
+        assert_eq!(step_focus(None, -1, 3), Some(2));
+        assert_eq!(step_focus(Some(0), 1, 3), Some(1));
+        assert_eq!(step_focus(Some(2), 1, 3), Some(2));
+        assert_eq!(step_focus(Some(0), -1, 3), Some(0));
+        assert_eq!(step_focus(Some(7), 1, 3), Some(2));
+        assert_eq!(step_focus(Some(1), 1, 0), None);
+        assert_eq!(step_focus(None, 1, 0), None);
+    }
+
+    #[test]
+    fn leertaste_waehlt_ab_und_springt_weiter() {
+        let mut m = sample();
+        assert!(m.is_selected(0));
+        assert_eq!(m.toggle_and_advance(0), 1);
+        assert!(!m.is_selected(0));
+        assert!(m.is_selected(1));
+        // Am Ende bleibt der Fokus stehen.
+        let last = m.len() - 1;
+        assert_eq!(m.toggle_and_advance(last), last);
+        // Nochmal: wieder angewählt.
+        m.toggle_and_advance(0);
+        assert!(m.is_selected(0));
     }
 }

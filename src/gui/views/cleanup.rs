@@ -16,6 +16,7 @@ use super::undo_flow::{UndoFlow, TASK_CHECK as UNDO_CHECK, TASK_UNDO};
 use crate::change::dedupe::KeepStrategy;
 use crate::change::plan::{Plan, PlanKind};
 use crate::gui::format::{self, DurationUnit};
+use crate::gui::keys::KeyAction;
 use crate::gui::review::ReviewModel;
 use crate::gui::shell::{Answer, Choice, Route, Shell, TaskResult};
 use crate::gui::tasks::TaskKind;
@@ -223,6 +224,30 @@ fn opt(text: &str) -> Option<String> {
 }
 
 impl CleanupView {
+    /// Ist gerade ein Plan zur Prüfung offen (nicht die Ergebnisansicht)?
+    pub fn review_open(&self) -> bool {
+        self.review.is_some() && self.apply.result.is_none()
+    }
+
+    pub fn review_key(&mut self, action: KeyAction, ctx: &egui::Context, shell: &mut Shell) {
+        if let Some(review) = self.review.as_mut().filter(|_| self.apply.result.is_none()) {
+            review.handle_key(action, ctx, shell);
+        }
+    }
+
+    /// „Plan öffnen …“ (Knopf und Strg+O).
+    pub fn request_open_plan(&self, shell: &mut Shell) {
+        if self.review.is_some() || self.apply.result.is_some() {
+            return;
+        }
+        shell.spawn(Route::Cleanup, TASK_PICK_PLAN, TaskKind::Read, |_| {
+            Ok(crate::platform::shell::pick_file(
+                None,
+                Some(("Plan", &["json"])),
+            ))
+        });
+    }
+
     pub fn preselect(&mut self, kind: &'static str) {
         self.kind = CARDS
             .iter()
@@ -579,12 +604,7 @@ impl CleanupView {
                 .add_enabled(!busy, egui::Button::new("Plan öffnen …"))
                 .clicked()
             {
-                shell.spawn(Route::Cleanup, TASK_PICK_PLAN, TaskKind::Read, |_| {
-                    Ok(crate::platform::shell::pick_file(
-                        None,
-                        Some(("Plan", &["json"])),
-                    ))
-                });
+                self.request_open_plan(shell);
             }
             if shell.target.is_none() {
                 ui.weak("Wähle oben einen Ordner.");

@@ -4,6 +4,7 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 use super::header::{self, Header};
+use super::keys::{self, KeyAction, KeyContext};
 use super::shell::{Choice, Dialog, Page, Route, Shell};
 use super::texts;
 use super::theme::{self, ThemeChoice};
@@ -38,6 +39,7 @@ pub struct GuiApp {
     cleanup: CleanupView,
     history: HistoryView,
     settings: SettingsView,
+    help_open: bool,
     /// Schließen wurde bestätigt; wir warten auf das Ende der Tasks
     closing: bool,
     theme: ThemeChoice,
@@ -64,6 +66,7 @@ impl GuiApp {
             cleanup: CleanupView::default(),
             history: HistoryView::default(),
             settings: SettingsView::default(),
+            help_open: false,
             closing: false,
             theme: saved.theme,
         };
@@ -162,14 +165,21 @@ impl GuiApp {
                 ui.add_space(8.0);
                 ui.heading(texts::TITLE);
                 ui.add_space(8.0);
-                for page in Page::ALL {
+                for (index, page) in Page::ALL.into_iter().enumerate() {
                     if ui
                         .selectable_label(self.page == page, page.label())
+                        .on_hover_text(format!("Strg+{}", index + 1))
                         .clicked()
                     {
                         self.page = page;
                     }
                 }
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                    ui.add_space(8.0);
+                    if ui.button("? Kürzel").clicked() {
+                        self.help_open = !self.help_open;
+                    }
+                });
             });
     }
 
@@ -187,6 +197,81 @@ impl GuiApp {
             }
         });
         ui.separator();
+    }
+
+    /// Tastenkürzel verteilen. Eine verbrauchte Taste sehen die Widgets nicht mehr.
+    fn handle_keys(&mut self, ctx: &egui::Context) {
+        let context = KeyContext {
+            dialog_open: !self.shell.dialogs.is_empty(),
+            text_focus: ctx.egui_wants_keyboard_input(),
+            review_open: self.page == Page::Cleanup && self.cleanup.review_open(),
+        };
+        let pressed: Vec<(egui::Key, egui::Modifiers)> = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } => Some((*key, *modifiers)),
+                    _ => None,
+                })
+                .collect()
+        });
+        for (key, modifiers) in pressed {
+            let Some(action) = keys::action(key, modifiers.command, modifiers.shift, context)
+            else {
+                continue;
+            };
+            ctx.input_mut(|i| i.consume_key(modifiers, key));
+            self.run_key(action, ctx);
+        }
+        if !context.text_focus
+            && !context.dialog_open
+            && ctx.input(|i| {
+                i.events
+                    .iter()
+                    .any(|e| matches!(e, egui::Event::Text(t) if t == "?"))
+            })
+        {
+            self.help_open = !self.help_open;
+        }
+    }
+
+    fn run_key(&mut self, action: KeyAction, ctx: &egui::Context) {
+        match action {
+            KeyAction::Page(page) => self.page = page,
+            KeyAction::Reload => self.shell.generation += 1,
+            KeyAction::OpenPlan => {
+                self.page = Page::Cleanup;
+                self.cleanup.request_open_plan(&mut self.shell);
+            }
+            other => self.cleanup.review_key(other, ctx, &mut self.shell),
+        }
+    }
+
+    fn help_window(&mut self, ctx: &egui::Context) {
+        if !self.help_open {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("Tastenkürzel")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                egui::Grid::new("keys-help").num_columns(2).show(ui, |ui| {
+                    for (key, effect) in keys::HELP {
+                        ui.label(egui::RichText::new(key).monospace());
+                        ui.label(effect);
+                        ui.end_row();
+                    }
+                });
+            });
+        self.help_open = open && !ctx.input(|i| i.key_pressed(egui::Key::Escape));
     }
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {
@@ -227,6 +312,7 @@ impl eframe::App for GuiApp {
         if !self.shell.runner.is_idle() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
+        self.handle_keys(&ctx);
         self.sidebar(ui);
         self.status_bar(ui);
         if self.page != Page::Settings {
@@ -242,6 +328,7 @@ impl eframe::App for GuiApp {
                 self.settings.ui(ui, &mut self.shell)
             }
         });
+        self.help_window(&ctx);
         dialogs::show(&ctx, &mut self.shell);
     }
 

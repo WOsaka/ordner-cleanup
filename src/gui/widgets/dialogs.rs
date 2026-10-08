@@ -5,6 +5,14 @@ use eframe::egui::{self, Align2};
 use crate::gui::shell::{Answer, Dialog, Shell};
 use crate::gui::texts;
 
+/// Antwort auf Esc: eine Meldung wird quittiert, eine Rückfrage abgelehnt (nie bestätigt).
+pub fn esc_answer(dialog: &Dialog, checked: bool) -> Answer {
+    Answer {
+        ok: matches!(dialog, Dialog::Message { .. }),
+        checked,
+    }
+}
+
 /// Zeichnet den obersten Dialog; ein Dialog nach dem anderen.
 pub fn show(ctx: &egui::Context, shell: &mut Shell) {
     let Some(dialog) = shell.dialogs.first().cloned() else {
@@ -60,6 +68,9 @@ pub fn show(ctx: &egui::Context, shell: &mut Shell) {
                 });
             }
         });
+    if result.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        result = Some(esc_answer(&dialog, checked));
+    }
     if let Dialog::Confirm { checked: state, .. } = &mut shell.dialogs[0] {
         *state = checked;
     }
@@ -68,5 +79,33 @@ pub fn show(ctx: &egui::Context, shell: &mut Shell) {
         if let Dialog::Confirm { id, .. } = dialog {
             shell.set_answer(id, answer);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn confirm() -> Dialog {
+        Dialog::Confirm {
+            id: "t",
+            title: "T".into(),
+            text: "x".into(),
+            ok_label: "Ja".into(),
+            must_check: None,
+            checked: false,
+            danger: true,
+        }
+    }
+
+    #[test]
+    fn esc_lehnt_rueckfragen_ab_und_quittiert_meldungen() {
+        let a = esc_answer(&confirm(), true);
+        assert!(!a.ok, "Esc darf nie bestätigen");
+        let m = Dialog::Message {
+            title: "T".into(),
+            text: "x".into(),
+        };
+        assert!(esc_answer(&m, false).ok);
     }
 }

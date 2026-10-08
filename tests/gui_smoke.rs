@@ -204,3 +204,45 @@ fn einstellungen_zeigen_alle_tabs_mit_echten_dateien() {
     }
     std::env::remove_var(HOME_OVERRIDE_ENV);
 }
+
+#[test]
+fn review_laesst_sich_mit_der_tastatur_bedienen_und_anwenden_oeffnet_nur_den_dialog() {
+    use eframe::egui::Context;
+    use ordner_cleanup::gui::keys::KeyAction;
+
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let home = tempfile::tempdir().unwrap();
+    std::env::set_var(ordner_cleanup::paths::HOME_OVERRIDE_ENV, home.path());
+    let mut review = ReviewState::new(ReviewModel::new(plan(5)), None, "5".into(), vec![]);
+    std::env::remove_var(ordner_cleanup::paths::HOME_OVERRIDE_ENV);
+    let ctx = Context::default();
+    let mut shell = Shell::new(ctx.clone());
+    // Erste Zeile fokussieren, abwählen (Leertaste springt weiter), zweite ebenso.
+    review.handle_key(KeyAction::Next, &ctx, &mut shell);
+    review.handle_key(KeyAction::Toggle, &ctx, &mut shell);
+    review.handle_key(KeyAction::Toggle, &ctx, &mut shell);
+    assert_eq!(review.model.summary().selected, 3);
+    // Strg+Umschalt+A wählt alle gefilterten ab; Anwenden bleibt dann wirkungslos.
+    review.handle_key(KeyAction::DeselectFiltered, &ctx, &mut shell);
+    review.handle_key(KeyAction::Apply, &ctx, &mut shell);
+    review.handle_key(KeyAction::SelectFiltered, &ctx, &mut shell);
+    review.handle_key(KeyAction::Apply, &ctx, &mut shell);
+
+    let mut harness = Harness::new_ui_state(
+        |ui, state: &mut State| {
+            if state.review.ui(ui, &mut state.shell) {
+                state.apply_clicked = true;
+            }
+        },
+        State {
+            review,
+            shell,
+            apply_clicked: false,
+        },
+    );
+    harness.run();
+    harness.get_by_label_contains("Ausgewählt: 5 von 5 Einträgen");
+    // Nur das gemeldete Anwenden aus dem zweiten Strg+Enter kommt an; es startet nichts selbst.
+    assert!(harness.state().apply_clicked);
+    assert!(harness.state().shell.dialogs.is_empty());
+}
