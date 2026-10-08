@@ -50,8 +50,13 @@ struct State {
 
 #[test]
 fn review_mit_tausend_eintraegen_zeigt_zusammenfassung_und_loest_anwenden_aus() {
+    // Der Hinweis liest die Quarantäne-Tage aus der Config: eine leere, eigene verwenden.
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let home = tempfile::tempdir().unwrap();
+    std::env::set_var(ordner_cleanup::paths::HOME_OVERRIDE_ENV, home.path());
     let model = ReviewModel::new(plan(1000));
     let review = ReviewState::new(model, None, "1000 Aktionen".into(), vec![]);
+    std::env::remove_var(ordner_cleanup::paths::HOME_OVERRIDE_ENV);
     let shell = Shell::new(eframe::egui::Context::default());
     let mut harness = Harness::new_ui_state(
         |ui, state: &mut State| {
@@ -67,7 +72,11 @@ fn review_mit_tausend_eintraegen_zeigt_zusammenfassung_und_loest_anwenden_aus() 
     );
     harness.run();
     harness.get_by_label_contains("Ausgewählt: 1.000 von 1.000 Einträgen");
-    harness.get_by_label("Anwenden …").click();
+    harness.get_by_label_contains("Nichts wird gelöscht");
+    harness.get_by_label_contains("Übersprungene zeigen (0)");
+    harness
+        .get_by_label_contains("Anwenden (1.000 Einträge")
+        .click();
     harness.run();
     assert!(harness.state().apply_clicked);
 }

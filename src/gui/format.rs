@@ -220,6 +220,43 @@ pub fn duration_to_arg(amount: &str, unit: DurationUnit) -> Result<Option<String
     Ok(Some(arg))
 }
 
+/// Knopftext der Review-Kopfzeile: „Anwenden (480 Einträge, 3,1 GB)“.
+pub fn apply_label(selected: usize, bytes: u64) -> String {
+    let noun = if selected == 1 {
+        "Eintrag"
+    } else {
+        "Einträge"
+    };
+    format!(
+        "Anwenden ({} {noun}, {})",
+        crate::gui::texts::grouped(selected as u64),
+        crate::gui::texts::bytes(bytes)
+    )
+}
+
+/// Beruhigender Satz unter der Review-Kopfzeile; sagt, was mit den Dateien geschieht.
+pub fn safety_note(quarantine: bool, moves: bool, remove_dirs: bool, days: u32) -> String {
+    let mut text = String::new();
+    if quarantine {
+        let unit = if days == 1 { "Tag" } else { "Tage" };
+        text.push_str(&format!(
+            "Nichts wird gelöscht. Dateien gehen in die Quarantäne und lassen sich {days} {unit} lang zurückholen."
+        ));
+        if moves {
+            text.push_str(" Verschobene Dateien lassen sich rückgängig machen.");
+        }
+    } else if moves {
+        text.push_str("Nichts wird gelöscht. Dateien werden verschoben; der Lauf lässt sich rückgängig machen.");
+    }
+    if remove_dirs {
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str("Entfernt werden nur leere Ordner; der Lauf lässt sich rückgängig machen.");
+    }
+    text
+}
+
 /// Was ein Lauf getan hat, in Worten: „12 in Quarantäne, 4 leere Ordner entfernt“.
 pub fn run_kind(counts: &ActionCounts) -> String {
     let mut parts = Vec::new();
@@ -686,5 +723,35 @@ mod tests {
             review_text(Some(&r)).as_deref(),
             Some("19 Dateien zum Prüfen")
         );
+    }
+
+    #[test]
+    fn anwenden_knopf_nennt_anzahl_und_groesse() {
+        assert_eq!(
+            apply_label(1, 1000),
+            format!("Anwenden (1 Eintrag, {})", crate::gui::texts::bytes(1000))
+        );
+        let many = apply_label(1480, 3_100_000_000);
+        assert!(many.starts_with("Anwenden (1.480 Einträge, "), "{many}");
+    }
+
+    #[test]
+    fn sicherheitshinweis_folgt_den_aktionen_im_plan() {
+        let q = safety_note(true, false, false, 30);
+        assert!(
+            q.contains("Nichts wird gelöscht") && q.contains("30 Tage"),
+            "{q}"
+        );
+        // Die Tage stammen aus der Config, nicht aus dem Text.
+        assert!(safety_note(true, true, false, 7).contains("7 Tage"));
+        assert!(
+            safety_note(true, false, false, 1).contains("1 Tag ")
+                || safety_note(true, false, false, 1).contains("1 Tag.")
+        );
+        let m = safety_note(false, true, false, 30);
+        assert!(m.contains("verschoben") && !m.contains("Quarantäne"), "{m}");
+        let d = safety_note(false, false, true, 30);
+        assert!(d.contains("leere Ordner"), "{d}");
+        assert_eq!(safety_note(false, false, false, 30), "");
     }
 }

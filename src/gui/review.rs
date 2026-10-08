@@ -364,6 +364,11 @@ impl ReviewModel {
             .collect()
     }
 
+    /// Anzahl der übersprungenen Einträge des Plans (unabhängig vom Filter).
+    pub fn skipped_count(&self) -> usize {
+        self.plan().skipped.len()
+    }
+
     pub fn all_selected(&self) -> bool {
         self.rows
             .iter()
@@ -720,5 +725,14 @@ mod tests {
         // Release-Ziel < 300 ms; im Debug-Build großzügiger, es geht um Größenordnungen.
         let limit = if cfg!(debug_assertions) { 10 } else { 1 };
         assert!(elapsed.as_secs() < limit, "{elapsed:?}");
+    }
+
+    #[test]
+    fn uebersprungene_werden_gezaehlt() {
+        assert_eq!(sample().skipped_count(), 1);
+        assert_eq!(
+            ReviewModel::new(plan(Vec::new(), Vec::new())).skipped_count(),
+            0
+        );
     }
 }

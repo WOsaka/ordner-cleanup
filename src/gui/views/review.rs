@@ -4,6 +4,7 @@ use eframe::egui;
 use egui_extras::{Column as TCol, TableBuilder};
 
 use crate::change::plan::ActionType;
+use crate::gui::format;
 use crate::gui::review::{Column, Filter, ReviewModel, Show, Sort};
 use crate::gui::shell::{Dialog, Shell};
 use crate::gui::texts;
@@ -17,6 +18,8 @@ pub struct ReviewState {
     pub plan_path: Option<std::path::PathBuf>,
     pub headline: String,
     pub notes: Vec<String>,
+    /// Was mit den Dateien geschieht (Quarantäne, Verschieben), einmal beim Öffnen ermittelt
+    safety: String,
     text: String,
     folder: String,
     min_mb: String,
@@ -29,6 +32,20 @@ pub struct ReviewState {
     pub read_only: bool,
     /// Abhängige Einträge, nach denen gerade gefragt wird
     dependents: Vec<u32>,
+}
+
+/// Sicherheitshinweis zum Plan; die Tage der Quarantäne kommen aus der Config.
+fn safety_for(plan: &crate::change::plan::Plan) -> String {
+    let has = |t: ActionType| plan.actions.iter().any(|a| a.action == t);
+    let days = crate::ops::load_config()
+        .unwrap_or_default()
+        .quarantine_days;
+    format::safety_note(
+        has(ActionType::Quarantine),
+        has(ActionType::Move),
+        has(ActionType::RemoveDir),
+        days,
+    )
 }
 
 fn action_label(a: Option<ActionType>) -> &'static str {
@@ -56,11 +73,13 @@ impl ReviewState {
         headline: String,
         notes: Vec<String>,
     ) -> Self {
+        let safety = safety_for(model.plan());
         Self {
             model,
             plan_path,
             headline,
             notes,
+            safety,
             text: String::new(),
             folder: String::new(),
             min_mb: String::new(),
@@ -116,18 +135,22 @@ impl ReviewState {
                 texts::bytes(s.selected_bytes),
                 texts::bytes(s.total_bytes)
             ));
-            if !self.read_only
-                && ui
-                    .add_enabled(s.selected > 0, egui::Button::new("Anwenden …"))
+            if !self.read_only {
+                self.select_menu(ui);
+                let label =
+                    egui::RichText::new(format::apply_label(s.selected, s.selected_bytes)).strong();
+                if ui
+                    .add_enabled(s.selected > 0, egui::Button::new(label))
                     .clicked()
-            {
-                apply = true;
+                {
+                    apply = true;
+                }
             }
         });
-        self.filter_bar(ui);
-        if !self.read_only {
-            self.select_bar(ui);
+        if !self.read_only && !self.safety.is_empty() {
+            ui.label(egui::RichText::new(&self.safety).weak());
         }
+        self.filter_bar(ui);
         self.table(ui, shell);
         self.detail(ui);
         apply
@@ -165,7 +188,10 @@ impl ReviewState {
                         }
                     });
             }
-            ui.checkbox(&mut self.show_skipped, "Übersprungene zeigen");
+            ui.checkbox(
+                &mut self.show_skipped,
+                format!("Übersprungene zeigen ({})", self.model.skipped_count()),
+            );
         });
         let wanted = self.current_filter();
         if &wanted != self.model.filter() {
@@ -174,27 +200,35 @@ impl ReviewState {
         }
     }
 
-    fn select_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("Alle").clicked() {
+    fn select_menu(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("Auswahl ▾", |ui| {
+            if ui.button("Alle wählen").clicked() {
                 self.model.select_all(true);
+                ui.close();
             }
-            if ui.button("Keine").clicked() {
+            if ui.button("Keine wählen").clicked() {
                 self.model.select_all(false);
+                ui.close();
             }
+            ui.separator();
             if ui.button("Gefilterte wählen").clicked() {
                 self.model.select_filtered(true);
+                ui.close();
             }
             if ui.button("Gefilterte abwählen").clicked() {
                 self.model.select_filtered(false);
+                ui.close();
             }
             let folder = self.folder.trim().to_string();
             if !folder.is_empty() {
-                if ui.button("Ordner abwählen").clicked() {
-                    self.model.select_folder(&folder, false);
-                }
+                ui.separator();
                 if ui.button("Ordner wählen").clicked() {
                     self.model.select_folder(&folder, true);
+                    ui.close();
+                }
+                if ui.button("Ordner abwählen").clicked() {
+                    self.model.select_folder(&folder, false);
+                    ui.close();
                 }
             }
         });
