@@ -107,9 +107,14 @@ impl RulesTab {
             .num_columns(2)
             .spacing([12.0, 8.0])
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("Name").strong());
+                ui.vertical(|ui| {
+                    ui.set_min_width(form::LABEL_COL_WIDTH);
+                    ui.label(egui::RichText::new("Name").strong());
+                });
                 if ui
-                    .add(egui::TextEdit::singleline(&mut self.name).desired_width(320.0))
+                    .add(
+                        egui::TextEdit::singleline(&mut self.name).desired_width(form::FIELD_WIDTH),
+                    )
                     .changed()
                 {
                     fields::set_at(
@@ -121,12 +126,15 @@ impl RulesTab {
                     self.synced_for = Some((index, self.name.clone()));
                 }
                 ui.end_row();
-                ui.label(egui::RichText::new("Ziel").strong());
+                ui.vertical(|ui| {
+                    ui.set_min_width(form::LABEL_COL_WIDTH);
+                    ui.label(egui::RichText::new("Ziel").strong());
+                });
                 ui.vertical(|ui| {
                     if ui
                         .add(
                             egui::TextEdit::singleline(&mut self.target)
-                                .desired_width(420.0)
+                                .desired_width(form::FIELD_WIDTH)
                                 .font(egui::TextStyle::Monospace),
                         )
                         .changed()
@@ -174,7 +182,7 @@ impl RulesTab {
             .add(
                 egui::TextEdit::multiline(&mut self.fields)
                     .desired_rows(2)
-                    .desired_width(420.0)
+                    .desired_width(form::FIELD_WIDTH)
                     .font(egui::TextStyle::Monospace),
             )
             .changed()
@@ -186,7 +194,7 @@ impl RulesTab {
             .add(
                 egui::TextEdit::multiline(&mut self.fields_regex)
                     .desired_rows(2)
-                    .desired_width(420.0)
+                    .desired_width(form::FIELD_WIDTH)
                     .font(egui::TextStyle::Monospace),
             )
             .changed()
