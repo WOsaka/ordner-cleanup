@@ -133,6 +133,8 @@ pub struct Shell {
     /// Zuletzt gewählte Ziele, das neueste zuerst (höchstens [`RECENT_MAX`])
     pub recent_targets: Vec<Choice>,
     pub header_request: Option<HeaderRequest>,
+    /// Ein „?“ wurde geklickt; das Hauptfenster öffnet die Hilfe zu diesem Thema
+    pub help_request: Option<super::help::Topic>,
 }
 
 /// So viele zuletzt gewählte Ziele merkt sich die Oberfläche.
@@ -205,7 +207,13 @@ impl Shell {
             generation: 0,
             recent_targets: Vec::new(),
             header_request: None,
+            help_request: None,
         }
+    }
+
+    /// Bittet das Hauptfenster, die Hilfe zu einem Thema zu öffnen.
+    pub fn open_help(&mut self, topic: super::help::Topic) {
+        self.help_request = Some(topic);
     }
 
     /// Merkt sich ein gewähltes Ziel als neuestes. Leere Pfade und Namen werden ignoriert.

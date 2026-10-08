@@ -4,13 +4,14 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 use super::header::{self, Header};
+use super::help::Topic;
 use super::keys::{self, KeyAction, KeyContext};
 use super::shell::{Choice, Dialog, Page, Route, Shell};
 use super::texts;
 use super::theme::{self, ThemeChoice};
 use super::views::{
-    analysis::AnalysisView, cleanup::CleanupView, history::HistoryView, overview::OverviewView,
-    settings::SettingsView,
+    analysis::AnalysisView, cleanup::CleanupView, help_window::HelpState, history::HistoryView,
+    overview::OverviewView, settings::SettingsView,
 };
 use super::widgets::dialogs;
 
@@ -39,7 +40,7 @@ pub struct GuiApp {
     cleanup: CleanupView,
     history: HistoryView,
     settings: SettingsView,
-    help_open: bool,
+    help: HelpState,
     /// Symbolschrift vorhanden (einmal beim Start geprüft)
     icons: bool,
     /// Schließen wurde bestätigt; wir warten auf das Ende der Tasks
@@ -68,7 +69,7 @@ impl GuiApp {
             cleanup: CleanupView::default(),
             history: HistoryView::default(),
             settings: SettingsView::default(),
-            help_open: false,
+            help: HelpState::default(),
             icons: super::fonts::symbols_available(),
             closing: false,
             theme: saved.theme,
@@ -180,7 +181,11 @@ impl GuiApp {
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                     ui.add_space(crate::gui::theme::SPACE_M);
                     if ui.button("? Kürzel").clicked() {
-                        self.help_open = !self.help_open;
+                        self.help.toggle_keys();
+                    }
+                    if ui.button("? Hilfe").on_hover_text("F1").clicked() {
+                        let topic = self.current_topic();
+                        self.help.show_topic(topic);
                     }
                 });
             });
@@ -239,7 +244,22 @@ impl GuiApp {
                     .any(|e| matches!(e, egui::Event::Text(t) if t == "?"))
             })
         {
-            self.help_open = !self.help_open;
+            self.help.toggle_keys();
+        }
+        if !context.dialog_open
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F1))
+        {
+            let topic = self.current_topic();
+            self.help.show_topic(topic);
+        }
+    }
+
+    /// Das Thema, das zur Seite (bzw. zur offenen Review-Ansicht) passt; Ziel von F1.
+    fn current_topic(&self) -> Topic {
+        if self.page == Page::Cleanup && self.cleanup.review_open() {
+            Topic::Review
+        } else {
+            Topic::Page(self.page)
         }
     }
 
@@ -253,28 +273,6 @@ impl GuiApp {
             }
             other => self.cleanup.review_key(other, ctx, &mut self.shell),
         }
-    }
-
-    fn help_window(&mut self, ctx: &egui::Context) {
-        if !self.help_open {
-            return;
-        }
-        let mut open = true;
-        egui::Window::new("Tastenkürzel")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
-                egui::Grid::new("keys-help").num_columns(2).show(ui, |ui| {
-                    for (key, effect) in keys::HELP {
-                        ui.label(egui::RichText::new(key).monospace());
-                        ui.label(effect);
-                        ui.end_row();
-                    }
-                });
-            });
-        self.help_open = open && !ctx.input(|i| i.key_pressed(egui::Key::Escape));
     }
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {
@@ -315,6 +313,9 @@ impl eframe::App for GuiApp {
         if !self.shell.runner.is_idle() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
+        if let Some(topic) = self.shell.help_request.take() {
+            self.help.show_topic(topic);
+        }
         self.handle_keys(&ctx);
         self.sidebar(ui);
         self.status_bar(ui);
@@ -331,7 +332,7 @@ impl eframe::App for GuiApp {
                 self.settings.ui(ui, &mut self.shell)
             }
         });
-        self.help_window(&ctx);
+        self.help.ui(&ctx);
         dialogs::show(&ctx, &mut self.shell);
     }
 

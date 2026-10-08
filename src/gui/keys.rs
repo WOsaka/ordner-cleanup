@@ -68,7 +68,7 @@ pub fn action(key: Key, ctrl: bool, shift: bool, ctx: KeyContext) -> Option<KeyA
 }
 
 /// Kürzel für die Hilfeliste: Taste, Wirkung.
-pub const HELP: [(&str, &str); 11] = [
+pub const HELP: [(&str, &str); 12] = [
     ("↑ / ↓", "Zeile wechseln (Review)"),
     (
         "Leertaste",
@@ -85,6 +85,7 @@ pub const HELP: [(&str, &str); 11] = [
     ("Strg+R", "Neu laden"),
     ("Strg+1 … Strg+5", "Seite wechseln"),
     ("Esc", "Dialog schließen"),
+    ("F1", "Hilfe zur aktuellen Seite"),
     ("?", "Diese Liste"),
 ];
 
@@ -224,6 +225,10 @@ mod tests {
                 }
             }
         }
-        assert_eq!(HELP.len(), 11);
+        assert_eq!(HELP.len(), 12);
+        assert!(
+            HELP.iter().any(|(key, _)| *key == "F1"),
+            "F1 fehlt in der Hilfeliste"
+        );
     }
 }
