@@ -57,6 +57,13 @@ pub fn tone_color(ui: &egui::Ui, tone: Tone) -> Color32 {
     palette(ui.visuals().dark_mode).tone(tone)
 }
 
+/// Alle wählbaren Darstellungen mit Beschriftung, in Anzeigereihenfolge.
+pub const CHOICES: [(ThemeChoice, &str); 3] = [
+    (egui::ThemePreference::System, "Wie Windows"),
+    (egui::ThemePreference::Light, "Hell"),
+    (egui::ThemePreference::Dark, "Dunkel"),
+];
+
 /// Übernimmt die gewählte Darstellung.
 pub fn apply(ctx: &egui::Context, choice: ThemeChoice) {
     ctx.set_theme(choice);
@@ -65,6 +72,19 @@ pub fn apply(ctx: &egui::Context, choice: ThemeChoice) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn darstellung_bietet_system_hell_dunkel_ohne_dubletten() {
+        let choices: Vec<_> = CHOICES.iter().map(|(c, _)| *c).collect();
+        assert_eq!(
+            choices,
+            [
+                egui::ThemePreference::System,
+                egui::ThemePreference::Light,
+                egui::ThemePreference::Dark
+            ]
+        );
+    }
 
     fn luminance(c: Color32) -> f64 {
         let channel = |v: u8| {

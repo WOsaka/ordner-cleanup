@@ -48,7 +48,8 @@ pub fn show(ctx: &egui::Context, shell: &mut Shell) {
                     let enabled = must_check.is_none() || checked;
                     let mut button = egui::Button::new(ok_label.as_str());
                     if *danger {
-                        button = button.fill(egui::Color32::from_rgb(160, 40, 40));
+                        button = button
+                            .fill(crate::gui::theme::palette(ui.visuals().dark_mode).danger_fill);
                     }
                     if ui.add_enabled(enabled, button).clicked() {
                         result = Some(Answer { ok: true, checked });

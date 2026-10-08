@@ -173,6 +173,22 @@ impl GuiApp {
             });
     }
 
+    /// Hell, dunkel oder wie Windows; gilt sofort und wird mit dem Fensterzustand gemerkt.
+    fn appearance_ui(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Darstellung:");
+            for (choice, label) in theme::CHOICES {
+                if ui
+                    .selectable_value(&mut self.theme, choice, label)
+                    .clicked()
+                {
+                    theme::apply(ui.ctx(), choice);
+                }
+            }
+        });
+        ui.separator();
+    }
+
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -221,7 +237,10 @@ impl eframe::App for GuiApp {
             Page::Analysis => self.analysis.ui(ui, &mut self.shell),
             Page::Cleanup => self.cleanup.ui(ui, &mut self.shell),
             Page::History => self.history.ui(ui, &mut self.shell),
-            Page::Settings => self.settings.ui(ui, &mut self.shell),
+            Page::Settings => {
+                self.appearance_ui(ui);
+                self.settings.ui(ui, &mut self.shell)
+            }
         });
         dialogs::show(&ctx, &mut self.shell);
     }

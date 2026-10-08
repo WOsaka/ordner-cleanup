@@ -104,7 +104,10 @@ fn field(
             }
         });
         if let Some(error) = state.errors.get(&id) {
-            ui.colored_label(egui::Color32::LIGHT_RED, error);
+            ui.colored_label(
+                crate::gui::theme::tone_color(ui, crate::gui::format::Tone::Error),
+                error,
+            );
         }
     });
     changed

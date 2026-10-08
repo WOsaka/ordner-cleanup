@@ -194,7 +194,10 @@ impl RulesTab {
             self.map_error = write_map(doc, index, "fields_regex", &self.fields_regex);
         }
         if let Some(e) = &self.map_error {
-            ui.colored_label(egui::Color32::LIGHT_RED, e);
+            ui.colored_label(
+                crate::gui::theme::tone_color(ui, crate::gui::format::Tone::Error),
+                e,
+            );
         }
         ed.form = form_state;
     }

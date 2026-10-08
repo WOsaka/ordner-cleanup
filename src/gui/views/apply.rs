@@ -252,7 +252,7 @@ impl ApplyFlow {
             ui.label(egui::RichText::new(&r.headline).strong());
             if r.aborted {
                 ui.colored_label(
-                    egui::Color32::YELLOW,
+                    crate::gui::theme::tone_color(ui, crate::gui::format::Tone::Warn),
                     "Abgebrochen; der Lauf ist teilweise ausgeführt und lässt sich zurückdrehen.",
                 );
             }

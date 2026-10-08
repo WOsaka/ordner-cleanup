@@ -191,7 +191,10 @@ impl ProfilesTab {
             });
         }
         if let Some(e) = &self.error {
-            ui.colored_label(egui::Color32::LIGHT_RED, e);
+            ui.colored_label(
+                crate::gui::theme::tone_color(ui, crate::gui::format::Tone::Error),
+                e,
+            );
         }
     }
 
@@ -229,7 +232,7 @@ impl ProfilesTab {
                 });
                 if !matches!(row.state, crate::schedule::TaskState::Ok) {
                     ui.colored_label(
-                        egui::Color32::YELLOW,
+                        crate::gui::theme::tone_color(ui, crate::gui::format::Tone::Warn),
                         "Die Aufgabe fehlt in der Aufgabenplanung oder zeigt auf ein fehlendes Programm; neu anlegen.",
                     );
                 }

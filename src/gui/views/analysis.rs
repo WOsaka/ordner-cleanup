@@ -129,14 +129,20 @@ impl AnalysisView {
         });
         let Some(view) = &self.view else {
             if let Some(e) = &self.error {
-                ui.colored_label(egui::Color32::LIGHT_RED, e);
+                ui.colored_label(
+                    crate::gui::theme::tone_color(ui, crate::gui::format::Tone::Error),
+                    e,
+                );
             } else if !shell.is_running(Route::Analysis) {
                 ui.label("Für dieses Ziel gibt es noch keine Analyse. Erst scannen.");
             }
             return;
         };
         for w in &view.notes.warnings {
-            ui.colored_label(egui::Color32::YELLOW, w);
+            ui.colored_label(
+                crate::gui::theme::tone_color(ui, crate::gui::format::Tone::Warn),
+                w,
+            );
         }
         ui.horizontal_wrapped(|ui| {
             for (tab, label) in Tab::ALL {

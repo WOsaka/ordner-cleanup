@@ -3,7 +3,10 @@
 
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, text::LayoutJob, Color32, FontId, TextFormat};
+use eframe::egui::{self, text::LayoutJob, FontId, TextFormat};
+
+use crate::gui::format::Tone;
+use crate::gui::theme;
 
 use crate::settings::ValidationError;
 
@@ -67,7 +70,14 @@ impl TomlEditor {
             .max_height(rows as f32 * 16.0)
             .show(ui, |ui| {
                 ui.horizontal_top(|ui| {
-                    ui.add(egui::Label::new(gutter(lines, error_line)).selectable(false));
+                    ui.add(
+                        egui::Label::new(gutter(
+                            lines,
+                            error_line,
+                            &theme::palette(ui.visuals().dark_mode),
+                        ))
+                        .selectable(false),
+                    );
                     let response = ui.add(
                         egui::TextEdit::multiline(&mut self.text)
                             .font(egui::TextStyle::Monospace)
@@ -91,10 +101,10 @@ impl TomlEditor {
         }
         match &self.error {
             Some(e) => {
-                ui.colored_label(Color32::LIGHT_RED, e.to_string());
+                ui.colored_label(theme::tone_color(ui, Tone::Error), e.to_string());
             }
             None if self.validated.is_some() => {
-                ui.colored_label(Color32::LIGHT_GREEN, "Gültig");
+                ui.colored_label(theme::tone_color(ui, Tone::Ok), "Gültig");
             }
             None => {}
         }
@@ -103,14 +113,14 @@ impl TomlEditor {
 }
 
 /// Zeilennummern als eine Spalte; die Fehlerzeile ist rot.
-fn gutter(lines: usize, error_line: Option<usize>) -> LayoutJob {
+fn gutter(lines: usize, error_line: Option<usize>, palette: &theme::Palette) -> LayoutJob {
     let mut job = LayoutJob::default();
     let font = FontId::monospace(14.0);
     for n in 1..=lines {
         let color = if error_line == Some(n) {
-            Color32::LIGHT_RED
+            palette.error
         } else {
-            Color32::GRAY
+            palette.muted
         };
         job.append(
             &format!("{n:>3}\n"),
