@@ -17,12 +17,14 @@ use super::undo_flow::{UndoFlow, TASK_CHECK as UNDO_CHECK, TASK_UNDO};
 use crate::change::dedupe::KeepStrategy;
 use crate::change::plan::{Plan, PlanKind};
 use crate::gui::format::{self, DurationUnit};
+use crate::gui::help::Topic;
 use crate::gui::keys::KeyAction;
 use crate::gui::review::ReviewModel;
-use crate::gui::shell::{Answer, Choice, Route, Shell, TaskResult};
+use crate::gui::shell::{Answer, Choice, Page, Route, Shell, TaskResult};
 use crate::gui::tasks::TaskKind;
 use crate::gui::texts;
 use crate::gui::theme;
+use crate::gui::widgets::help_button::{heading_with_help, help_button_at};
 use crate::ops::plan::{
     plan, resolve_rules_path, PlanKindRequest, PlanOut, PlanOutcome, PlanRequest,
 };
@@ -300,7 +302,7 @@ impl CleanupView {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, shell: &mut Shell) {
-        ui.heading(texts::NAV_CLEANUP);
+        heading_with_help(ui, texts::NAV_CLEANUP, Topic::Page(Page::Cleanup), shell);
         if !self.recent_loaded {
             self.refresh_recent(shell);
         }
@@ -387,7 +389,7 @@ impl CleanupView {
         });
     }
 
-    fn cards_ui(&mut self, ui: &mut egui::Ui) {
+    fn cards_ui(&mut self, ui: &mut egui::Ui, shell: &mut Shell) {
         let now = chrono::Local::now();
         let facts = self.cards.as_ref().and_then(|c| c.facts.as_ref());
         match facts {
@@ -421,15 +423,21 @@ impl CleanupView {
                         .stroke(egui::Stroke::new(if selected { 2.0 } else { 1.0 }, color));
                     let response = frame
                         .show(ui, |ui| {
-                            // Auswählbarer Text finge den Klick ab, der die Karte wählen soll.
-                            ui.style_mut().interaction.selectable_labels = false;
-                            ui.set_width(card_width);
-                            ui.set_min_height(CARD_HEIGHT);
-                            ui.label(egui::RichText::new(card.title).strong());
-                            ui.add(egui::Label::new(card.text).wrap());
-                            if let Some(n) = facts.and_then(|f| f.number_text(card.key)) {
-                                ui.add(egui::Label::new(egui::RichText::new(n).strong()).wrap());
-                            }
+                            // Der Frame erbt das Links-nach-rechts-Layout der Grid-Zelle; ohne
+                            // `vertical` stünde die Zahlzeile neben dem Text und bekäme keine Breite.
+                            ui.vertical(|ui| {
+                                // Auswählbarer Text finge den Klick ab, der die Karte wählen soll.
+                                ui.style_mut().interaction.selectable_labels = false;
+                                ui.set_width(card_width);
+                                ui.set_min_height(CARD_HEIGHT);
+                                ui.label(egui::RichText::new(card.title).strong());
+                                ui.add(egui::Label::new(card.text).wrap());
+                                if let Some(n) = facts.and_then(|f| f.number_text(card.key)) {
+                                    ui.add(
+                                        egui::Label::new(egui::RichText::new(n).strong()).wrap(),
+                                    );
+                                }
+                            });
                         })
                         .response;
                     let click = response
@@ -445,6 +453,15 @@ impl CleanupView {
                     });
                     if click.clicked() {
                         chosen = Some(card.key);
+                    }
+                    // Das „?“ wird nach der Kartenfläche gezeichnet und liegt damit darüber:
+                    // sein Klick wählt die Karte nicht.
+                    let spot = egui::Rect::from_min_size(
+                        egui::pos2(response.rect.right() - 30.0, response.rect.top() + 6.0),
+                        egui::vec2(24.0, 20.0),
+                    );
+                    if help_button_at(ui, spot, Topic::Card(card.key)) {
+                        shell.open_help(Topic::Card(card.key));
                     }
                     if (index + 1) % columns == 0 {
                         ui.end_row();
@@ -606,7 +623,7 @@ impl CleanupView {
             .any(|r| r.kind == TaskKind::Write);
         self.ensure_cards(shell);
         self.ensure_rules(shell);
-        self.cards_ui(ui);
+        self.cards_ui(ui, shell);
         ui.add_space(crate::gui::theme::SPACE_M);
         self.options_ui(ui, shell);
         ui.add_space(crate::gui::theme::SPACE_M);

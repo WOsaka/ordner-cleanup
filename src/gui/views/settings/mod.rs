@@ -13,8 +13,10 @@ use std::path::PathBuf;
 
 use eframe::egui;
 
-use crate::gui::shell::{Answer, Shell, TaskResult};
+use crate::gui::help::Topic;
+use crate::gui::shell::{Answer, Page, Shell, TaskResult};
 use crate::gui::texts;
+use crate::gui::widgets::help_button::heading_with_help;
 use crate::paths;
 use doc_editor::DocEditor;
 
@@ -87,7 +89,7 @@ impl Default for SettingsView {
 
 impl SettingsView {
     pub fn ui(&mut self, ui: &mut egui::Ui, shell: &mut Shell) {
-        ui.heading(texts::NAV_SETTINGS);
+        heading_with_help(ui, texts::NAV_SETTINGS, Topic::Page(Page::Settings), shell);
         ui.horizontal_wrapped(|ui| {
             for (tab, label) in Tab::ALL {
                 ui.selectable_value(&mut self.tab, tab, label);

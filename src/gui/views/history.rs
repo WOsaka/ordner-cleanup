@@ -13,9 +13,11 @@ use crate::change::quarantine;
 use crate::change::undo::RunSummary;
 use crate::change::RunId;
 use crate::gui::format::{root_status, run_row};
-use crate::gui::shell::{Answer, Dialog, Route, Shell, TaskResult};
+use crate::gui::help::Topic;
+use crate::gui::shell::{Answer, Dialog, Page, Route, Shell, TaskResult};
 use crate::gui::tasks::TaskKind;
 use crate::gui::texts;
+use crate::gui::widgets::help_button::heading_with_help;
 use crate::gui::widgets::table::{short_path_cell, status_cell};
 use crate::index::RootInfo;
 use crate::ops::admin::{index_remove, index_roots};
@@ -132,7 +134,7 @@ impl HistoryView {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, shell: &mut Shell) {
-        ui.heading(texts::NAV_HISTORY);
+        heading_with_help(ui, texts::NAV_HISTORY, Topic::Page(Page::History), shell);
         if self.loaded_generation != Some(shell.generation) && !shell.is_running(Route::History) {
             self.reload(shell);
         }

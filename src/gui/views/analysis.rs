@@ -5,9 +5,11 @@ use std::path::PathBuf;
 use eframe::egui;
 
 use super::analysis_tabs as tabs;
-use crate::gui::shell::{Choice, Route, Shell, TaskResult};
+use crate::gui::help::Topic;
+use crate::gui::shell::{Choice, Page, Route, Shell, TaskResult};
 use crate::gui::tasks::TaskKind;
 use crate::gui::texts;
+use crate::gui::widgets::help_button::heading_with_help;
 use crate::ops::report::{export_report, report_model, ReportRequest, ReportView};
 use crate::report::Format;
 
@@ -109,7 +111,7 @@ impl AnalysisView {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, shell: &mut Shell) {
-        ui.heading(texts::NAV_ANALYSIS);
+        heading_with_help(ui, texts::NAV_ANALYSIS, Topic::Page(Page::Analysis), shell);
         let Some(choice) = shell.target.clone() else {
             ui.label(texts::NO_ROOT_YET);
             return;

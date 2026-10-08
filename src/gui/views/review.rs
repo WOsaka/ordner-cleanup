@@ -5,10 +5,12 @@ use egui_extras::{Column as TCol, TableBuilder};
 
 use crate::change::plan::ActionType;
 use crate::gui::format;
+use crate::gui::help::Topic;
 use crate::gui::keys::KeyAction;
 use crate::gui::review::{step_focus, Column, Filter, ReviewModel, Show, Sort};
 use crate::gui::shell::{Dialog, Shell};
 use crate::gui::texts;
+use crate::gui::widgets::help_button::help_button;
 use crate::gui::widgets::table::path_menu;
 
 pub const ID_DEPENDENTS: &str = "cleanup.dependents";
@@ -150,7 +152,12 @@ impl ReviewState {
     /// Zeichnet die Review-Ansicht; `true`, wenn „Anwenden“ gedrückt wurde.
     pub fn ui(&mut self, ui: &mut egui::Ui, shell: &mut Shell) -> bool {
         let mut apply = false;
-        ui.label(egui::RichText::new(&self.headline).strong());
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(&self.headline).strong());
+            if help_button(ui, Topic::Review) {
+                shell.open_help(Topic::Review);
+            }
+        });
         for n in &self.notes {
             ui.label(egui::RichText::new(format!("Hinweis: {n}")).weak());
         }

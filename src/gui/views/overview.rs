@@ -13,10 +13,12 @@ use crate::change::RunId;
 use crate::gui::format::{
     quarantine_text, review_text, root_status, run_row, score_style, time_of, trend, Tone,
 };
+use crate::gui::help::Topic;
 use crate::gui::shell::{Answer, Choice, Goto, HeaderRequest, Page, Route, Shell, TaskResult};
 use crate::gui::tasks::TaskKind;
 use crate::gui::texts;
 use crate::gui::theme;
+use crate::gui::widgets::help_button::heading_with_help;
 use crate::gui::widgets::table::{short_path_cell, status_cell, time_cell};
 use crate::history::History;
 use crate::index::RootInfo;
@@ -127,7 +129,7 @@ impl OverviewView {
             self.refresh(shell);
         }
         egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.heading(texts::NAV_OVERVIEW);
+            heading_with_help(ui, texts::NAV_OVERVIEW, Topic::Page(Page::Overview), shell);
             self.data_ui(ui, shell);
         });
     }
