@@ -23,9 +23,8 @@ fn cell_padding(ui: &mut egui::Ui) {
 }
 
 /// Dünne Trennlinie am rechten Zellrand, in der Theme-Farbe.
-fn cell_rule(ui: &egui::Ui) {
+fn cell_rule(ui: &egui::Ui, stroke: egui::Stroke) {
     let rect = ui.max_rect();
-    let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
     ui.painter()
         .vline(rect.right() - 0.5, rect.y_range(), stroke);
 }
@@ -287,41 +286,40 @@ impl ReviewState {
         let mut header_click: Option<Column> = None;
         let model = &self.model;
         let selected_row = self.selected_row;
+        let rule = ui.visuals().widgets.noninteractive.bg_stroke;
+        // Spaltenbreiten werden jedes Mal aus der verfügbaren Breite berechnet: egui_extras
+        // merkt sich dehnende Spalten nach dem ersten Zeichnen, sodass „Grund“ und „Alter“
+        // bei schmalerem Fenster hinausrutschen.
+        let (w_action, w_size, w_reason, w_age) = (100.0, 70.0, 170.0, 60.0);
+        let cols = if has_target { 7.0 } else { 6.0 };
+        let gaps = ui.spacing().item_spacing.x * cols + ui.spacing().scroll.bar_width + 34.0;
+        // `available_width` kann größer sein als der sichtbare Bereich (gemessen: 804 statt 711
+        // bei halber Bildschirmbreite); maßgeblich ist der Ausschnitt.
+        let visible = ui
+            .available_width()
+            .min(ui.clip_rect().right() - ui.next_widget_position().x);
+        let flex = (visible - 26.0 - w_action - w_size - w_reason - w_age - gaps)
+            .max(if has_target { 200.0 } else { 100.0 });
+        let (w_source, w_target) = if has_target {
+            (flex * 0.55, flex * 0.45)
+        } else {
+            (flex, 0.0)
+        };
         let mut builder = TableBuilder::new(ui)
-            .id_salt("review-table")
+            .id_salt("review-table-v3")
             .striped(true)
             .sense(egui::Sense::click())
             .max_scroll_height(avail)
             .column(TCol::exact(26.0))
-            .column(
-                TCol::initial(110.0)
-                    .at_least(60.0)
-                    .resizable(true)
-                    .clip(true),
-            )
-            .column(TCol::remainder().at_least(160.0).resizable(true).clip(true));
+            .column(TCol::exact(w_action))
+            .column(TCol::exact(w_source));
         if has_target {
-            builder = builder.column(
-                TCol::initial(240.0)
-                    .at_least(80.0)
-                    .resizable(true)
-                    .clip(true),
-            );
+            builder = builder.column(TCol::exact(w_target));
         }
         builder = builder
-            .column(
-                TCol::initial(80.0)
-                    .at_least(60.0)
-                    .resizable(true)
-                    .clip(true),
-            )
-            .column(
-                TCol::initial(220.0)
-                    .at_least(100.0)
-                    .resizable(true)
-                    .clip(true),
-            )
-            .column(TCol::initial(64.0).at_least(50.0).clip(true));
+            .column(TCol::exact(w_size))
+            .column(TCol::exact(w_reason))
+            .column(TCol::remainder().clip(true));
         if let Some(row) = self.scroll_to.take() {
             builder = builder.scroll_to_row(row, None);
         }
@@ -340,9 +338,7 @@ impl ReviewState {
                             }
                             _ => "",
                         };
-                        if column != Column::Age {
-                            cell_rule(ui);
-                        }
+                        cell_rule(ui, rule);
                         cell_padding(ui);
                         let text = egui::RichText::new(format!("{title}{mark}")).strong();
                         if ui.add(egui::Button::new(text).frame(false)).clicked() {
@@ -365,12 +361,12 @@ impl ReviewState {
                         }
                     });
                     row.col(|ui| {
-                        cell_rule(ui);
+                        cell_rule(ui, rule);
                         cell_padding(ui);
                         ui.add(egui::Label::new(action_label(r.action)).truncate());
                     });
                     row.col(|ui| {
-                        cell_rule(ui);
+                        cell_rule(ui, rule);
                         cell_padding(ui);
                         ui.add(
                             egui::Label::new(egui::RichText::new(&r.path).monospace()).truncate(),
@@ -379,7 +375,7 @@ impl ReviewState {
                     });
                     if has_target {
                         row.col(|ui| {
-                            cell_rule(ui);
+                            cell_rule(ui, rule);
                             cell_padding(ui);
                             let t = r.target.as_deref().unwrap_or("");
                             let label = ui.add(
@@ -391,14 +387,14 @@ impl ReviewState {
                         });
                     }
                     row.col(|ui| {
-                        cell_rule(ui);
+                        cell_rule(ui, rule);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.add_space(8.0);
                             ui.label(texts::bytes(r.size));
                         });
                     });
                     row.col(|ui| {
-                        cell_rule(ui);
+                        cell_rule(ui, rule);
                         cell_padding(ui);
                         let text = match &r.rule {
                             Some(rule) => format!("{rule}: {}", r.reason),
@@ -408,6 +404,7 @@ impl ReviewState {
                             .on_hover_text(&text);
                     });
                     row.col(|ui| {
+                        cell_rule(ui, rule);
                         cell_padding(ui);
                         ui.label(age_text(r.mtime_ticks));
                     });
