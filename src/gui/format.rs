@@ -1,9 +1,12 @@
 //! Darstellung von Werten für die Oberfläche: Status, Zeiten, Pfade, Score, Dauer-Eingaben.
 //! Alles rein und ohne egui, damit es ohne Fenster testbar ist. Farben kennt nur `theme`.
 
+use std::path::Path;
+
 use chrono::{DateTime, Local};
 
-use crate::change::undo::RunStatus;
+use crate::change::undo::{RunStatus, RunSummary};
+use crate::change::ActionCounts;
 use crate::index::RootStatus;
 
 /// Wie ein Wert gewichtet dargestellt wird; `theme` ordnet jedem Ton eine Farbe zu.
@@ -189,6 +192,82 @@ pub fn duration_to_arg(amount: &str, unit: DurationUnit) -> Result<Option<String
     // Derselbe Parser wie in der CLI, damit auch ein Überlauf auffällt.
     crate::analysis::age::parse_old_after(&arg)?;
     Ok(Some(arg))
+}
+
+/// Was ein Lauf getan hat, in Worten: „12 in Quarantäne, 4 leere Ordner entfernt“.
+pub fn run_kind(counts: &ActionCounts) -> String {
+    let mut parts = Vec::new();
+    if counts.quarantined > 0 {
+        parts.push(format!("{} in Quarantäne", counts.quarantined));
+    }
+    if counts.archived > 0 {
+        parts.push(format!("{} archiviert", counts.archived));
+    }
+    match counts.dirs_removed {
+        0 => {}
+        1 => parts.push("1 leerer Ordner entfernt".to_string()),
+        n => parts.push(format!("{n} leere Ordner entfernt")),
+    }
+    if counts.sorted > 0 {
+        parts.push(format!("{} einsortiert", counts.sorted));
+    }
+    if parts.is_empty() {
+        "keine Aktionen".into()
+    } else {
+        parts.join(", ")
+    }
+}
+
+/// Eine Zeile der Lauf-Tabelle, fertig formatiert.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunRow {
+    pub when: String,
+    pub when_tooltip: String,
+    /// Wurzel, in der Mitte gekürzt
+    pub root: String,
+    pub root_full: String,
+    pub kind: String,
+    pub status: StatusStyle,
+    /// Bytes in der Quarantäne, sonst „–“
+    pub size: String,
+    pub run_id: String,
+    pub can_undo: bool,
+    /// „dd.mm.yyyy“, solange die Quarantäne noch nicht gelöscht ist
+    pub expires: String,
+}
+
+/// Breite der Wurzel-Spalte in Zeichen.
+const ROOT_CHARS: usize = 32;
+
+pub fn run_row(now: DateTime<Local>, root: &Path, run: &RunSummary) -> RunRow {
+    let (when, when_tooltip) = run
+        .started
+        .as_deref()
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map(|t| relative_time(now, t.with_timezone(&Local)))
+        .unwrap_or_else(|| ("–".into(), String::new()));
+    let root_full = crate::paths::display(root);
+    let expires = run
+        .expires
+        .filter(|_| run.status != RunStatus::Purged)
+        .map(|e| e.with_timezone(&Local).format("%d.%m.%Y").to_string())
+        .unwrap_or_default();
+    RunRow {
+        when,
+        when_tooltip,
+        root: short_path(&root_full, ROOT_CHARS),
+        root_full,
+        kind: run_kind(&run.counts),
+        status: run_status(run.status),
+        size: if run.bytes > 0 {
+            super::texts::bytes(run.bytes)
+        } else {
+            "–".into()
+        },
+        run_id: run.run.to_string(),
+        can_undo: !matches!(run.status, RunStatus::Undone | RunStatus::Purged),
+        expires,
+    }
 }
 
 /// Zeile der Kopfleiste: „Letzter Scan: vor 2 Tagen · Score 72 (▲ 3)“.
@@ -386,6 +465,108 @@ mod tests {
             assert!(duration_to_arg(bad, Days).is_err(), "{bad}");
         }
         assert!(duration_to_arg("99999999999999999", Years).is_err());
+    }
+
+    fn counts(quarantined: usize, archived: usize, dirs: usize, sorted: usize) -> ActionCounts {
+        ActionCounts {
+            quarantined,
+            archived,
+            dirs_removed: dirs,
+            sorted,
+        }
+    }
+
+    #[test]
+    fn laufart_nennt_jede_aktion_in_worten() {
+        assert_eq!(run_kind(&counts(12, 0, 0, 0)), "12 in Quarantäne");
+        assert_eq!(run_kind(&counts(0, 2, 0, 0)), "2 archiviert");
+        assert_eq!(run_kind(&counts(0, 0, 4, 0)), "4 leere Ordner entfernt");
+        assert_eq!(run_kind(&counts(0, 0, 1, 0)), "1 leerer Ordner entfernt");
+        assert_eq!(run_kind(&counts(0, 0, 0, 5)), "5 einsortiert");
+        assert_eq!(
+            run_kind(&counts(3, 2, 1, 0)),
+            "3 in Quarantäne, 2 archiviert, 1 leerer Ordner entfernt"
+        );
+        assert_eq!(run_kind(&counts(0, 0, 0, 0)), "keine Aktionen");
+    }
+
+    fn summary(status: RunStatus, bytes: u64) -> RunSummary {
+        RunSummary {
+            run: crate::change::RunId::parse("20261006-120000-ab12").unwrap(),
+            started: Some(at(2026, 10, 6, 12, 0).to_rfc3339()),
+            moved: 12,
+            counts: counts(12, 0, 0, 0),
+            bytes,
+            status,
+            expires: Some(at(2026, 11, 5, 12, 0).with_timezone(&chrono::Utc)),
+        }
+    }
+
+    #[test]
+    fn laufzeile_ist_fertig_formatiert() {
+        let now = at(2026, 10, 8, 14, 30);
+        let row = run_row(
+            now,
+            Path::new(r"D:\Daten"),
+            &summary(RunStatus::Complete, 2048),
+        );
+        assert_eq!(row.when, "vor 2 Tagen");
+        assert_eq!(row.when_tooltip, "06.10.2026 12:00");
+        assert_eq!(row.root, r"D:\Daten");
+        assert_eq!(row.root_full, r"D:\Daten");
+        assert_eq!(row.kind, "12 in Quarantäne");
+        assert_eq!(row.status.text, "Vollständig");
+        assert_eq!(row.size, "2.0 KiB");
+        assert_eq!(row.run_id, "20261006-120000-ab12");
+        assert!(row.can_undo);
+        assert_eq!(row.expires, "05.11.2026");
+    }
+
+    #[test]
+    fn zurueckgedrehte_und_geloeschte_laeufe_lassen_sich_nicht_rueckgaengig_machen() {
+        let now = at(2026, 10, 8, 14, 30);
+        let root = Path::new(r"D:\Daten");
+        for status in [RunStatus::Undone, RunStatus::Purged] {
+            assert!(
+                !run_row(now, root, &summary(status, 0)).can_undo,
+                "{status:?}"
+            );
+        }
+        for status in [
+            RunStatus::Complete,
+            RunStatus::Partial,
+            RunStatus::Incomplete,
+            RunStatus::PartiallyUndone,
+        ] {
+            assert!(
+                run_row(now, root, &summary(status, 0)).can_undo,
+                "{status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn geloeschte_quarantaene_hat_kein_ablaufdatum_und_keine_groesse() {
+        let now = at(2026, 10, 8, 14, 30);
+        let row = run_row(now, Path::new(r"D:\Daten"), &summary(RunStatus::Purged, 0));
+        assert_eq!(row.expires, "");
+        assert_eq!(row.size, "–");
+    }
+
+    #[test]
+    fn lauf_ohne_startzeit_zeigt_einen_strich_und_lange_wurzel_wird_gekuerzt() {
+        let now = at(2026, 10, 8, 14, 30);
+        let mut run = summary(RunStatus::Complete, 0);
+        run.started = None;
+        let root = Path::new(r"D:\Sehr\Lange\Pfade\Mit\Vielen\Ordnern\Daten\Archiv");
+        let row = run_row(now, root, &run);
+        assert_eq!(row.when, "–");
+        assert!(row.root.chars().count() <= 32, "{}", row.root);
+        assert!(row.root.contains('…'), "{}", row.root);
+        assert_eq!(
+            row.root_full,
+            r"D:\Sehr\Lange\Pfade\Mit\Vielen\Ordnern\Daten\Archiv"
+        );
     }
 
     #[test]
