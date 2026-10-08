@@ -8,6 +8,7 @@ pub mod review;
 pub mod shell;
 pub mod tasks;
 pub mod texts;
+pub mod theme;
 pub mod views;
 pub mod widgets;
 

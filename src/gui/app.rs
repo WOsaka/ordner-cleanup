@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::shell::{Choice, Dialog, Page, Route, Shell};
 use super::texts;
+use super::theme::{self, ThemeChoice};
 use super::views::{
     analysis::AnalysisView, cleanup::CleanupView, history::HistoryView, overview::OverviewView,
     settings::SettingsView,
@@ -19,6 +20,8 @@ const ID_CLOSE: &str = "close";
 struct Persisted {
     page: Page,
     target: Option<Choice>,
+    #[serde(default)]
+    theme: ThemeChoice,
 }
 
 pub struct GuiApp {
@@ -31,6 +34,7 @@ pub struct GuiApp {
     settings: SettingsView,
     /// Schließen wurde bestätigt; wir warten auf das Ende der Tasks
     closing: bool,
+    theme: ThemeChoice,
 }
 
 impl GuiApp {
@@ -40,6 +44,7 @@ impl GuiApp {
             .storage
             .and_then(|s| eframe::get_value(s, STATE_KEY))
             .unwrap_or_default();
+        theme::apply(&cc.egui_ctx, saved.theme);
         let mut shell = Shell::new(cc.egui_ctx.clone());
         shell.target = saved.target;
         let mut app = Self {
@@ -51,6 +56,7 @@ impl GuiApp {
             history: HistoryView::default(),
             settings: SettingsView::default(),
             closing: false,
+            theme: saved.theme,
         };
         app.overview.refresh(&mut app.shell);
         app
@@ -190,6 +196,7 @@ impl eframe::App for GuiApp {
             &Persisted {
                 page: self.page,
                 target: self.shell.target.clone(),
+                theme: self.theme,
             },
         );
     }
