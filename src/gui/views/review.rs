@@ -20,6 +20,13 @@ fn cell_padding(ui: &mut egui::Ui) {
     ui.add_space(6.0);
 }
 
+/// Trennlinie am linken Zellrand (vor der letzten Spalte, deren Vorgänger sich dehnt).
+fn cell_rule_left(ui: &egui::Ui) {
+    let rect = ui.max_rect();
+    let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+    ui.painter().vline(rect.left(), rect.y_range(), stroke);
+}
+
 /// Dünne Trennlinie am rechten Zellrand, in der Theme-Farbe.
 fn cell_rule(ui: &egui::Ui) {
     let rect = ui.max_rect();
@@ -283,17 +290,22 @@ impl ReviewState {
             .sense(egui::Sense::click())
             .max_scroll_height(avail)
             .column(TCol::exact(26.0))
-            .column(TCol::initial(110.0).resizable(true))
-            .column(TCol::initial(380.0).resizable(true).clip(true))
-            .column(TCol::initial(260.0).resizable(true).clip(true))
+            .column(
+                TCol::initial(100.0)
+                    .at_least(60.0)
+                    .resizable(true)
+                    .clip(true),
+            )
+            .column(TCol::remainder().at_least(80.0).resizable(true).clip(true))
+            .column(TCol::remainder().at_least(80.0).resizable(true).clip(true))
             .column(
                 TCol::initial(90.0)
                     .at_least(70.0)
                     .resizable(true)
                     .clip(true),
             )
-            .column(TCol::remainder().clip(true))
-            .column(TCol::initial(80.0).at_least(60.0));
+            .column(TCol::remainder().at_least(80.0).clip(true))
+            .column(TCol::initial(80.0).at_least(60.0).clip(true));
         if let Some(row) = self.scroll_to.take() {
             builder = builder.scroll_to_row(row, None);
         }
@@ -312,7 +324,9 @@ impl ReviewState {
                             }
                             _ => "",
                         };
-                        if column != Column::Age {
+                        if column == Column::Age {
+                            cell_rule_left(ui);
+                        } else if column != Column::Reason {
                             cell_rule(ui);
                         }
                         cell_padding(ui);
@@ -360,7 +374,6 @@ impl ReviewState {
                         });
                     });
                     row.col(|ui| {
-                        cell_rule(ui);
                         cell_padding(ui);
                         let text = match &r.rule {
                             Some(rule) => format!("{rule}: {}", r.reason),
@@ -369,6 +382,7 @@ impl ReviewState {
                         ui.label(text);
                     });
                     row.col(|ui| {
+                        cell_rule_left(ui);
                         cell_padding(ui);
                         ui.label(age_text(r.mtime_ticks));
                     });

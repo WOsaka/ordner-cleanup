@@ -5,6 +5,7 @@ pub mod app;
 pub mod fonts;
 pub mod format;
 pub mod header;
+pub mod help;
 pub mod keys;
 pub mod result;
 pub mod review;

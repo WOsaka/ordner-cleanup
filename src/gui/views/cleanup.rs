@@ -428,7 +428,7 @@ impl CleanupView {
                             ui.label(egui::RichText::new(card.title).strong());
                             ui.add(egui::Label::new(card.text).wrap());
                             if let Some(n) = facts.and_then(|f| f.number_text(card.key)) {
-                                ui.label(egui::RichText::new(n).strong());
+                                ui.add(egui::Label::new(egui::RichText::new(n).strong()).wrap());
                             }
                         })
                         .response;
