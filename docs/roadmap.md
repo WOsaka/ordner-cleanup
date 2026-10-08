@@ -1,7 +1,7 @@
 ---
 title: "Roadmap & Feature-Ideen"
 created: 2026-10-02
-updated: 2026-10-05
+updated: 2026-10-08
 ---
 
 # Roadmap & Feature-Ideen
@@ -90,3 +90,4 @@ Ideensammlung und grobe Priorisierung für ordner-cleanup. Einzelne Features wer
 | Phase 5: Laufender Betrieb (Verlauf, Health-Score, geplante Läufe, Profile, Vorlagen) | [`features/laufender-betrieb.md`](features/laufender-betrieb.md), Plan: [`implementation-plans/laufender-betrieb.md`](implementation-plans/laufender-betrieb.md) | Umgesetzt (manueller Test mit echten geplanten Läufen und Toast offen); Watch-Mode und Auto-Apply ausgeklammert |
 | Phase 6a: Inhaltsbasierte Klassifikation (PDF/Office/EXIF/Video/OCR, Kategorien, optional lokales LLM) | [`features/inhalts-klassifikation.md`](features/inhalts-klassifikation.md), Plan: [`implementation-plans/inhalts-klassifikation.md`](implementation-plans/inhalts-klassifikation.md) | Umgesetzt (Schritte 1 bis 13; manueller Test auf echtem Downloads-/Scans-Ordner und Spikes mit echten PDFs und lokalem LLM offen); GUI (Phase 6b) bekommt eine eigene Spec |
 | Phase 6b: GUI (egui, eigene `ordner-cleanup-gui.exe`, Funktionsgleichheit mit der CLI) | [`features/gui.md`](features/gui.md), Plan: [`implementation-plans/gui.md`](implementation-plans/gui.md) | Stufe 1 und 2 im Code umgesetzt (ops-Schicht, GUI, Einstellungen); manueller Test (Teil A und B), Nutzertest und Messung in VM/RDP offen |
+| Phase 6c: GUI-Bedienung (Kennzahl-Kacheln, Aufräumen als Karten, Theme hell/dunkel, Tastaturkürzel, Skala) | [`features/gui-bedienung.md`](features/gui-bedienung.md), Plan: [`implementation-plans/gui-bedienung.md`](implementation-plans/gui-bedienung.md) | Umgesetzt (Stufe 1 bis 4, Schritte 1 bis 20); Handtests in `manual-tests.md` 5a bis 5d (Optik, DPI, Windows-Modus) offen |
