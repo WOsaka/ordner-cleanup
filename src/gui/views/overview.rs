@@ -8,6 +8,7 @@ use eframe::egui;
 
 use super::scan::ScanPanel;
 use crate::change::undo::{RunStatus, RunSummary};
+use crate::gui::format::{review_text, trend};
 use crate::gui::shell::{Choice, Goto, Page, Route, Shell, TaskResult};
 use crate::gui::tasks::TaskKind;
 use crate::gui::texts;
@@ -41,14 +42,6 @@ pub fn pending_quarantine(runs: &[(PathBuf, Vec<RunSummary>)]) -> (usize, u64) {
         .flat_map(|(_, r)| r)
         .filter(|r| !matches!(r.status, RunStatus::Purged | RunStatus::Undone) && r.bytes > 0)
         .fold((0, 0), |(n, b), r| (n + 1, b + r.bytes))
-}
-
-/// „n Dateien zum Prüfen“ aus dem letzten Lauf (nur Profile mit `classify = true`).
-fn review_text(last_run: Option<&crate::runlog::RunRecord>) -> Option<String> {
-    match last_run?.review? {
-        1 => Some("1 Datei zum Prüfen".into()),
-        n => Some(format!("{n} Dateien zum Prüfen")),
-    }
 }
 
 fn load() -> Result<OverviewData> {
@@ -92,16 +85,6 @@ fn load() -> Result<OverviewData> {
 pub struct OverviewView {
     data: Option<OverviewData>,
     scan: ScanPanel,
-}
-
-fn trend(score: Option<u8>, previous: Option<u8>) -> String {
-    match (score, previous) {
-        (Some(s), Some(p)) if s > p => format!("{s} (▲ {})", s - p),
-        (Some(s), Some(p)) if s < p => format!("{s} (▼ {})", p - s),
-        (Some(s), Some(_)) => format!("{s} (=)"),
-        (Some(s), None) => s.to_string(),
-        _ => "–".into(),
-    }
 }
 
 impl OverviewView {
@@ -285,39 +268,5 @@ mod tests {
             ],
         )];
         assert_eq!(pending_quarantine(&runs), (2, 105));
-    }
-
-    #[test]
-    fn zum_pruefen_kommt_aus_dem_letzten_lauf() {
-        assert_eq!(review_text(None), None);
-        let mut r = crate::runlog::RunRecord {
-            started: "2026-10-03T12:00:00+02:00".into(),
-            ended: "2026-10-03T12:01:00+02:00".into(),
-            status: crate::runlog::RunStatus::Ok,
-            score: None,
-            score_delta: None,
-            report: None,
-            plans: Vec::new(),
-            errors: Vec::new(),
-            notified: false,
-            review: None,
-        };
-        assert_eq!(review_text(Some(&r)), None);
-        r.review = Some(1);
-        assert_eq!(review_text(Some(&r)).as_deref(), Some("1 Datei zum Prüfen"));
-        r.review = Some(19);
-        assert_eq!(
-            review_text(Some(&r)).as_deref(),
-            Some("19 Dateien zum Prüfen")
-        );
-    }
-
-    #[test]
-    fn trend_zeigt_richtung_und_differenz() {
-        assert_eq!(trend(Some(80), Some(70)), "80 (▲ 10)");
-        assert_eq!(trend(Some(60), Some(70)), "60 (▼ 10)");
-        assert_eq!(trend(Some(60), Some(60)), "60 (=)");
-        assert_eq!(trend(Some(60), None), "60");
-        assert_eq!(trend(None, None), "–");
     }
 }
