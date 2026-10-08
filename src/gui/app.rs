@@ -88,6 +88,9 @@ impl GuiApp {
             if let Some(kind) = goto.plan_kind {
                 self.cleanup.preselect(kind);
             }
+            if let Some(tab) = goto.analysis_tab {
+                self.analysis.preselect_tab(tab);
+            }
             self.page = goto.page;
         }
     }

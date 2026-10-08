@@ -5,6 +5,7 @@ pub mod app;
 pub mod fonts;
 pub mod format;
 pub mod header;
+pub mod result;
 pub mod review;
 pub mod shell;
 pub mod tasks;

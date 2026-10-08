@@ -8,12 +8,13 @@ use chrono::Local;
 use eframe::egui;
 
 use super::format::{self, scan_info};
-use super::shell::{dropdown_targets, Choice, HeaderRequest, Route, Shell, TaskResult};
+use super::result::{self, ResultAction, ResultView};
+use super::shell::{dropdown_targets, Choice, Goto, HeaderRequest, Page, Route, Shell, TaskResult};
 use super::tasks::{TaskError, TaskKind};
 use super::texts;
 use super::views::overview::{root_rows, RootRow};
 use crate::ops::admin::{profiles, ProfileInfo};
-use crate::ops::classify::{classify, render_summary, ClassifyOutcome, ClassifyRequest};
+use crate::ops::classify::{classify, ClassifyOutcome, ClassifyRequest};
 use crate::ops::scan::{scan, ScanReport, ScanRequest};
 use crate::ops::target::TargetSpec;
 use crate::paths;
@@ -140,34 +141,6 @@ pub fn options_ui(ui: &mut egui::Ui, options: &mut ScanOptions, can_clear: bool)
         .clicked()
 }
 
-/// Zusammenfassung eines Scans (wie in der Konsole).
-pub fn scan_text(report: &ScanReport) -> String {
-    let o = &report.outcome;
-    let mut text = format!(
-        "{} Dateien, {} Ordner, {} ({} Fehler/Warnungen)\n",
-        texts::grouped(o.files),
-        texts::grouped(o.dirs),
-        texts::bytes(o.bytes),
-        o.errors
-    );
-    for hint in &report.notes.hints {
-        text.push_str(hint);
-        text.push('\n');
-    }
-    if o.aborted {
-        text.push_str("Scan abgebrochen; der Index bleibt konsistent, aber unvollständig.\n");
-        return text;
-    }
-    if let Some(line) = &report.score_line {
-        text.push_str(line);
-        text.push('\n');
-    }
-    if let Some(w) = &report.history_warning {
-        text.push_str(&format!("Warnung: Verlauf nicht aktualisiert: {w}\n"));
-    }
-    text
-}
-
 /// Wurzeln und Profile für das Dropdown und die Zeile „Letzter Scan“.
 struct TargetsData {
     roots: Vec<RootRow>,
@@ -208,7 +181,7 @@ pub struct Header {
     checking: Option<Choice>,
     /// Nach dem Ordnerdialog sofort scannen (Leerzustand der Übersicht)
     scan_after_pick: bool,
-    result: String,
+    result: Option<ResultView>,
     retry: Option<Retry>,
 }
 
@@ -374,7 +347,7 @@ impl Header {
             }
         });
         self.progress_ui(ui, shell);
-        self.result_ui(ui);
+        self.result_ui(ui, shell);
         ui.add_space(4.0);
         self.options_window(ui, shell, busy);
     }
@@ -475,19 +448,18 @@ impl Header {
         ui.label(egui::RichText::new(p.current()).monospace().weak());
     }
 
-    fn result_ui(&mut self, ui: &mut egui::Ui) {
-        if self.result.is_empty() {
-            return;
-        }
-        let mut close = false;
-        ui.group(|ui| {
-            ui.label(egui::RichText::new(&self.result).monospace());
-            if ui.button(texts::CLOSE).clicked() {
-                close = true;
+    fn result_ui(&mut self, ui: &mut egui::Ui, shell: &mut Shell) {
+        let Some(view) = &self.result else { return };
+        match result::show(ui, view) {
+            ResultAction::Close => self.result = None,
+            ResultAction::ShowErrors => {
+                shell.goto = Some(Goto {
+                    page: Page::Analysis,
+                    analysis_tab: Some("problems"),
+                    ..Goto::default()
+                });
             }
-        });
-        if close {
-            self.result.clear();
+            ResultAction::None => {}
         }
     }
 
@@ -517,7 +489,7 @@ impl Header {
             return;
         };
         let request = self.options.scan_request(&choice);
-        self.result.clear();
+        self.result = None;
         self.retry = Some(Retry::Scan);
         shell.spawn(Route::Header, TASK_SCAN, TaskKind::Write, move |ctx| {
             scan(&request, ctx)
@@ -529,7 +501,7 @@ impl Header {
             return;
         };
         let request = self.options.classify_request(&choice, clear);
-        self.result.clear();
+        self.result = None;
         self.retry = Some(Retry::Classify);
         shell.spawn(Route::Header, TASK_CLASSIFY, TaskKind::Write, move |ctx| {
             classify(&request, ctx)
@@ -564,7 +536,7 @@ impl Header {
             TASK_SCAN => match result {
                 Ok(boxed) => {
                     if let Ok(report) = boxed.downcast::<ScanReport>() {
-                        self.result = scan_text(&report);
+                        self.result = Some(result::scan_view(&report));
                         self.retry = None;
                     }
                     shell.generation += 1;
@@ -574,7 +546,7 @@ impl Header {
             TASK_CLASSIFY => match result {
                 Ok(boxed) => {
                     if let Ok(outcome) = boxed.downcast::<ClassifyOutcome>() {
-                        self.result = classify_text(&outcome);
+                        self.result = Some(result::classify_view(&outcome));
                         self.retry = None;
                     }
                     shell.generation += 1;
@@ -593,69 +565,12 @@ impl Header {
     }
 }
 
-fn classify_text(outcome: &ClassifyOutcome) -> String {
-    match outcome {
-        ClassifyOutcome::Cleared { root, entries } => format!(
-            "Inhalts- und OCR-Text-Cache von {} geleert ({entries} Einträge).",
-            paths::display(root)
-        ),
-        ClassifyOutcome::Classified { root, run, summary } => {
-            let mut text = render_summary(&paths::display(root), run, summary);
-            if run.aborted {
-                text.push_str("Abgebrochen; bis dahin Analysiertes bleibt im Cache.\n");
-            }
-            text
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ops::Notes;
-    use crate::scan::ScanOutcome;
 
     fn folder() -> Choice {
         Choice::Folder(PathBuf::from(r"D:\Daten"))
-    }
-
-    fn report(aborted: bool) -> ScanReport {
-        let mut notes = Notes::default();
-        notes.hint("Hinweis: x");
-        ScanReport {
-            root: PathBuf::from(r"D:\Daten"),
-            outcome: ScanOutcome {
-                files: 1234,
-                dirs: 7,
-                bytes: 2048,
-                errors: 1,
-                aborted,
-                hash: Default::default(),
-            },
-            index_file: PathBuf::from("index.db"),
-            score_line: Some("Health-Score 80 (erster Lauf)".into()),
-            history_warning: None,
-            notes,
-        }
-    }
-
-    #[test]
-    fn scan_text_nennt_zaehler_hinweise_und_score() {
-        let text = scan_text(&report(false));
-        assert!(text.contains("1.234 Dateien, 7 Ordner"), "{text}");
-        assert!(
-            text.contains("Hinweis: x") && text.contains("Health-Score 80"),
-            "{text}"
-        );
-    }
-
-    #[test]
-    fn abgebrochener_scan_zeigt_keinen_score() {
-        let text = scan_text(&report(true));
-        assert!(
-            text.contains("abgebrochen") && !text.contains("Health-Score"),
-            "{text}"
-        );
     }
 
     #[test]

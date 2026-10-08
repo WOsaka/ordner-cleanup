@@ -160,7 +160,7 @@ impl OverviewView {
             shell.target = Some(Choice::Folder(path));
             shell.goto = Some(Goto {
                 page,
-                plan_kind: None,
+                ..Goto::default()
             });
         }
 

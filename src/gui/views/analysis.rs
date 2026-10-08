@@ -90,6 +90,15 @@ fn request_for(choice: &Choice, old_after: &str, top: &str) -> ReportRequest {
 }
 
 impl AnalysisView {
+    /// Öffnet einen Tab von außen (`problems` oder `content`); unbekannte Schlüssel ändern nichts.
+    pub fn preselect_tab(&mut self, key: &str) {
+        match key {
+            "problems" => self.tab = Tab::Problems,
+            "content" => self.tab = Tab::Content,
+            _ => {}
+        }
+    }
+
     fn load(&mut self, shell: &mut Shell, choice: Choice) {
         let key = (choice.clone(), shell.generation);
         self.requested = Some(key);
@@ -255,5 +264,28 @@ impl AnalysisView {
             (_, Err(e)) => shell.show_error(name, &e),
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tab_laesst_sich_von_aussen_vorwaehlen() {
+        let mut view = AnalysisView::default();
+        assert_eq!(view.tab, Tab::SizeTree);
+        view.preselect_tab("problems");
+        assert_eq!(view.tab, Tab::Problems);
+        view.preselect_tab("content");
+        assert_eq!(view.tab, Tab::Content);
+    }
+
+    #[test]
+    fn unbekannter_tab_schluessel_aendert_nichts() {
+        let mut view = AnalysisView::default();
+        view.preselect_tab("content");
+        view.preselect_tab("gibt-es-nicht");
+        assert_eq!(view.tab, Tab::Content);
     }
 }

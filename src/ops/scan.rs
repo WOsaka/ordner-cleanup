@@ -43,10 +43,15 @@ impl ScanResult {
             Some(Err(e)) => (None, Some(format!("{e:#}"))),
             None => (None, None),
         };
+        let score = match &self.recorded {
+            Some(Ok(recorded)) => Some(recorded.score()),
+            _ => None,
+        };
         ScanReport {
             root: root.to_path_buf(),
             outcome: self.outcome.clone(),
             index_file: self.index_file.clone(),
+            score,
             score_line,
             history_warning,
             notes,
@@ -157,7 +162,9 @@ pub struct ScanReport {
     pub root: PathBuf,
     pub outcome: ScanOutcome,
     pub index_file: PathBuf,
-    /// „Health-Score 82 (…)“, nur bei vollständigem Lauf und geschriebener Momentaufnahme
+    /// Health-Score (0–100), nur bei vollständigem Lauf und geschriebener Momentaufnahme
+    pub score: Option<u8>,
+    /// „Health-Score 82 (…)“, wie `score`
     pub score_line: Option<String>,
     /// Die Momentaufnahme konnte nicht geschrieben werden
     pub history_warning: Option<String>,

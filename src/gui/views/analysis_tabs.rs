@@ -21,6 +21,7 @@ fn plan_button(ui: &mut egui::Ui, shell: &mut Shell, label: &str, kind: &'static
         shell.goto = Some(Goto {
             page: Page::Cleanup,
             plan_kind: Some(kind),
+            ..Goto::default()
         });
     }
 }

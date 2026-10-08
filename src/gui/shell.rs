@@ -58,11 +58,13 @@ impl Page {
 }
 
 /// Sprung in eine andere Ansicht (z. B. aus der Analyse zum passenden Plan).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Goto {
     pub page: Page,
     /// Vorgewählte Plan-Art (nur `Page::Cleanup`): `dedupe`, `junk`, `empty-dirs`, …
     pub plan_kind: Option<&'static str>,
+    /// Vorgewählter Tab (nur `Page::Analysis`): `problems` oder `content`
+    pub analysis_tab: Option<&'static str>,
 }
 
 /// Was eine Ansicht von der Kopfleiste verlangt.
