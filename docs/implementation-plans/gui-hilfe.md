@@ -1,7 +1,7 @@
 ---
 title: "Implementation Plan: GUI-Hilfe (kontextbezogene Erklärungen)"
 feature_spec: docs/features/gui-hilfe.md
-status: pending-approval   # pending-approval | approved | implemented
+status: approved   # pending-approval | approved | implemented
 created: 2026-10-08
 updated: 2026-10-08
 ---
