@@ -1,15 +1,14 @@
 //! Ansicht „Übersicht“: gescannte Wurzeln und Profile mit Score, letzte Läufe, ausstehende
-//! Quarantäne, darüber das Scannen und Klassifizieren.
+//! Quarantäne. Scannen und Klassifizieren liegen in der Kopfleiste.
 
 use std::path::PathBuf;
 
 use anyhow::Result;
 use eframe::egui;
 
-use super::scan::ScanPanel;
 use crate::change::undo::{RunStatus, RunSummary};
 use crate::gui::format::{review_text, trend};
-use crate::gui::shell::{Choice, Goto, Page, Route, Shell, TaskResult};
+use crate::gui::shell::{Choice, Goto, HeaderRequest, Page, Route, Shell, TaskResult};
 use crate::gui::tasks::TaskKind;
 use crate::gui::texts;
 use crate::history::History;
@@ -44,7 +43,8 @@ pub fn pending_quarantine(runs: &[(PathBuf, Vec<RunSummary>)]) -> (usize, u64) {
         .fold((0, 0), |(n, b), r| (n + 1, b + r.bytes))
 }
 
-fn load() -> Result<OverviewData> {
+/// Alle gescannten Wurzeln mit dem letzten und vorletzten Score (liest nur).
+pub fn root_rows() -> Result<Vec<RootRow>> {
     let roots = match paths::index_path() {
         Ok(file) if file.exists() => index_roots()?,
         _ => Vec::new(),
@@ -53,7 +53,7 @@ fn load() -> Result<OverviewData> {
         .ok()
         .filter(|p| p.exists())
         .and_then(|p| History::open(&p).ok());
-    let roots = roots
+    Ok(roots
         .into_iter()
         .map(|info| {
             let series = history
@@ -68,7 +68,11 @@ fn load() -> Result<OverviewData> {
                 previous_score,
             }
         })
-        .collect();
+        .collect())
+}
+
+fn load() -> Result<OverviewData> {
+    let roots = root_rows()?;
     let (profiles, profile_error) = match profiles() {
         Ok(p) => (p, None),
         Err(e) => (Vec::new(), Some(format!("{e:#}"))),
@@ -84,28 +88,22 @@ fn load() -> Result<OverviewData> {
 #[derive(Default)]
 pub struct OverviewView {
     data: Option<OverviewData>,
-    scan: ScanPanel,
+    /// Stand von `Shell::generation`, für den `data` geladen wurde
+    loaded_generation: u64,
 }
 
 impl OverviewView {
     pub fn refresh(&mut self, shell: &mut Shell) {
+        self.loaded_generation = shell.generation;
         shell.spawn(Route::Overview, TASK_LOAD, TaskKind::Read, |_| load());
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, shell: &mut Shell) {
+        if shell.generation != self.loaded_generation {
+            self.refresh(shell);
+        }
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.heading(texts::NAV_OVERVIEW);
-            let before = shell.generation;
-            let names: Vec<String> = self
-                .data
-                .as_ref()
-                .map(|d| d.profiles.iter().map(|p| p.name.clone()).collect())
-                .unwrap_or_default();
-            self.scan.ui(ui, shell, &names);
-            if shell.generation != before {
-                self.refresh(shell);
-            }
-            ui.add_space(12.0);
             self.data_ui(ui, shell);
         });
     }
@@ -118,7 +116,17 @@ impl OverviewView {
         ui.separator();
         ui.heading("Gescannte Ordner");
         if data.roots.is_empty() {
-            ui.label(texts::NO_ROOT_YET);
+            ui.add_space(16.0);
+            ui.vertical_centered(|ui| {
+                ui.heading(texts::EMPTY_TITLE);
+                ui.label(texts::EMPTY_TEXT);
+                ui.add_space(8.0);
+                let button = egui::Button::new(texts::EMPTY_BUTTON);
+                if ui.add_sized([260.0, 36.0], button).clicked() {
+                    shell.header_request = Some(HeaderRequest::PickAndScan);
+                }
+            });
+            ui.add_space(16.0);
         }
         let mut chosen: Option<(PathBuf, Page)> = None;
         egui::Grid::new("roots").striped(true).show(ui, |ui| {
@@ -232,9 +240,7 @@ impl OverviewView {
                 Ok(data) => self.data = Some(*data),
                 Err(e) => shell.show_error(name, &e),
             }
-            return;
         }
-        self.scan.on_finished(name, result, shell);
     }
 }
 

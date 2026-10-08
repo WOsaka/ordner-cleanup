@@ -15,6 +15,8 @@ use crate::ops::OpCtx;
 /// Welche Ansicht ein Task-Ergebnis erhält.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Route {
+    /// Kopfleiste: Ziel prüfen, Scan, Klassifizieren
+    Header,
     Overview,
     Analysis,
     Cleanup,
@@ -63,6 +65,13 @@ pub struct Goto {
     pub plan_kind: Option<&'static str>,
 }
 
+/// Was eine Ansicht von der Kopfleiste verlangt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderRequest {
+    /// Ordner wählen und danach sofort scannen (Leerzustand der Übersicht)
+    PickAndScan,
+}
+
 /// Antwort auf einen Bestätigungsdialog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Answer {
@@ -101,6 +110,7 @@ pub struct Shell {
     pub generation: u64,
     /// Zuletzt gewählte Ziele, das neueste zuerst (höchstens [`RECENT_MAX`])
     pub recent_targets: Vec<Choice>,
+    pub header_request: Option<HeaderRequest>,
 }
 
 /// So viele zuletzt gewählte Ziele merkt sich die Oberfläche.
@@ -172,6 +182,7 @@ impl Shell {
             goto: None,
             generation: 0,
             recent_targets: Vec::new(),
+            header_request: None,
         }
     }
 

@@ -1,12 +1,36 @@
-//! Kopfleiste über dem Seiteninhalt: Ziel wählen, scannen, klassifizieren. Dieser Teil hält die
-//! Optionen und baut daraus die Anfragen; die Zeichnung kommt in den nächsten Schritten dazu.
+//! Kopfleiste über dem Seiteninhalt: Ziel wählen, scannen, klassifizieren. Sie gilt für alle
+//! Seiten außer den Einstellungen und zeigt immer die tatsächliche Auswahl.
 
+use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
+
+use chrono::Local;
 use eframe::egui;
 
-use super::shell::Choice;
-use crate::ops::classify::ClassifyRequest;
-use crate::ops::scan::ScanRequest;
+use super::format::{self, scan_info};
+use super::shell::{dropdown_targets, Choice, HeaderRequest, Route, Shell, TaskResult};
+use super::tasks::{TaskError, TaskKind};
+use super::texts;
+use super::views::overview::{root_rows, RootRow};
+use crate::ops::admin::{profiles, ProfileInfo};
+use crate::ops::classify::{classify, render_summary, ClassifyOutcome, ClassifyRequest};
+use crate::ops::scan::{scan, ScanReport, ScanRequest};
 use crate::ops::target::TargetSpec;
+use crate::paths;
+
+const TASK_TARGETS: &str = "Ziele laden";
+const TASK_PICK: &str = "Ordner wählen";
+const TASK_CHECK: &str = "Ziel prüfen";
+pub const TASK_SCAN: &str = "Scannen";
+pub const TASK_CLASSIFY: &str = "Klassifizieren";
+
+/// Kurze Hintergrundaufgaben der Kopfleiste, die die Statusleiste nicht anzeigen soll.
+pub fn is_silent(task_name: &str) -> bool {
+    task_name == TASK_TARGETS || task_name == TASK_CHECK
+}
+
+/// So breit darf der Pfad im Dropdown werden, bevor er in der Mitte gekürzt wird.
+const LABEL_CHARS: usize = 44;
 
 /// Eingaben des Dialogs „Scan-Optionen“, wie sie als Text im Formular stehen.
 #[derive(Debug, Default, Clone)]
@@ -116,13 +140,522 @@ pub fn options_ui(ui: &mut egui::Ui, options: &mut ScanOptions, can_clear: bool)
         .clicked()
 }
 
+/// Zusammenfassung eines Scans (wie in der Konsole).
+pub fn scan_text(report: &ScanReport) -> String {
+    let o = &report.outcome;
+    let mut text = format!(
+        "{} Dateien, {} Ordner, {} ({} Fehler/Warnungen)\n",
+        texts::grouped(o.files),
+        texts::grouped(o.dirs),
+        texts::bytes(o.bytes),
+        o.errors
+    );
+    for hint in &report.notes.hints {
+        text.push_str(hint);
+        text.push('\n');
+    }
+    if o.aborted {
+        text.push_str("Scan abgebrochen; der Index bleibt konsistent, aber unvollständig.\n");
+        return text;
+    }
+    if let Some(line) = &report.score_line {
+        text.push_str(line);
+        text.push('\n');
+    }
+    if let Some(w) = &report.history_warning {
+        text.push_str(&format!("Warnung: Verlauf nicht aktualisiert: {w}\n"));
+    }
+    text
+}
+
+/// Wurzeln und Profile für das Dropdown und die Zeile „Letzter Scan“.
+struct TargetsData {
+    roots: Vec<RootRow>,
+    profiles: Vec<ProfileInfo>,
+    /// Fehler beim Lesen der Config (Ordner lassen sich trotzdem wählen)
+    profile_error: Option<String>,
+}
+
+fn load_targets() -> anyhow::Result<TargetsData> {
+    let roots = root_rows()?;
+    let (profiles, profile_error) = match profiles() {
+        Ok(p) => (p, None),
+        Err(e) => (Vec::new(), Some(format!("{e:#}"))),
+    };
+    Ok(TargetsData {
+        roots,
+        profiles,
+        profile_error,
+    })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Retry {
+    Scan,
+    Classify,
+}
+
+#[derive(Default)]
+pub struct Header {
+    options: ScanOptions,
+    options_open: bool,
+    data: Option<TargetsData>,
+    /// Stand von `Shell::generation`, für den `data` geladen wird bzw. wurde
+    loaded_generation: Option<u64>,
+    /// Ob der gewählte Ordner existiert (aus einem Hintergrund-Task, damit ein getrenntes
+    /// Netzlaufwerk die Oberfläche nicht anhält)
+    exists: Option<(Choice, bool)>,
+    checking: Option<Choice>,
+    /// Nach dem Ordnerdialog sofort scannen (Leerzustand der Übersicht)
+    scan_after_pick: bool,
+    result: String,
+    retry: Option<Retry>,
+}
+
+impl Header {
+    fn busy(shell: &Shell) -> bool {
+        shell
+            .runner
+            .running()
+            .iter()
+            .any(|r| r.kind == TaskKind::Write || r.name == TASK_PICK)
+    }
+
+    /// Lädt Daten nach und beantwortet Wünsche anderer Ansichten.
+    fn maintain(&mut self, shell: &mut Shell) {
+        if let Some(HeaderRequest::PickAndScan) = shell.header_request.take() {
+            if !Self::busy(shell) {
+                self.scan_after_pick = true;
+                self.pick_folder(shell);
+            }
+        }
+        if self.loaded_generation != Some(shell.generation) {
+            self.loaded_generation = Some(shell.generation);
+            self.exists = None;
+            self.checking = None;
+            shell.spawn(Route::Header, TASK_TARGETS, TaskKind::Read, |_| {
+                load_targets()
+            });
+        }
+        if let Some(choice @ Choice::Folder(_)) = shell.target.clone() {
+            if self.checking.as_ref() != Some(&choice) {
+                self.checking = Some(choice.clone());
+                shell.spawn(Route::Header, TASK_CHECK, TaskKind::Read, move |_| {
+                    let exists = match &choice {
+                        Choice::Folder(path) => path.exists(),
+                        Choice::Profile(_) => true,
+                    };
+                    Ok((choice, exists))
+                });
+            }
+        }
+    }
+
+    fn pick_folder(&self, shell: &mut Shell) {
+        shell.spawn(Route::Header, TASK_PICK, TaskKind::Read, |_| {
+            Ok(crate::platform::shell::pick_folder(None))
+        });
+    }
+
+    /// Existiert das gewählte Ziel? Solange unbekannt, gilt es als vorhanden.
+    fn target_exists(&self, shell: &Shell) -> bool {
+        match (&shell.target, &self.exists) {
+            (Some(chosen), Some((checked, exists))) if chosen == checked => *exists,
+            _ => true,
+        }
+    }
+
+    /// Ein Eintrag der Dropdown-Liste: Profile, die es nicht mehr gibt, fallen heraus.
+    fn is_known(&self, choice: &Choice) -> bool {
+        match (choice, &self.data) {
+            (Choice::Profile(name), Some(data)) if data.profile_error.is_none() => {
+                data.profiles.iter().any(|p| &p.name == name)
+            }
+            _ => true,
+        }
+    }
+
+    fn combo_label(&self, shell: &Shell) -> String {
+        match &shell.target {
+            None => "Ordner wählen …".into(),
+            Some(choice) => {
+                let text = format::short_path(&choice.label(), LABEL_CHARS);
+                if self.target_exists(shell) {
+                    text
+                } else {
+                    format!("⚠ {text}")
+                }
+            }
+        }
+    }
+
+    /// „Letzter Scan: vor 2 Tagen · Score 72 (▲ 3)“ für das gewählte Ziel.
+    fn info(&self, choice: &Choice) -> String {
+        let Some(data) = &self.data else {
+            return String::new();
+        };
+        let now = Local::now();
+        match choice {
+            Choice::Folder(path) => {
+                let key = paths::path_key(path);
+                data.roots
+                    .iter()
+                    .find(|r| paths::path_key(Path::new(&r.info.path)) == key)
+                    .map_or_else(
+                        || scan_info(now, None, None, None),
+                        |r| {
+                            let finished = r
+                                .info
+                                .finished_at
+                                .as_deref()
+                                .or(r.info.started_at.as_deref());
+                            scan_info(now, finished, r.score, r.previous_score)
+                        },
+                    )
+            }
+            Choice::Profile(name) => data
+                .profiles
+                .iter()
+                .find(|p| &p.name == name)
+                .map(|p| {
+                    let finished = p.last_run.as_ref().map(|r| r.ended.as_str());
+                    scan_info(
+                        now,
+                        finished,
+                        p.last_point.as_ref().map(|pt| pt.score),
+                        None,
+                    )
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    pub fn ui(&mut self, ui: &mut egui::Ui, shell: &mut Shell) {
+        self.maintain(shell);
+        let busy = Self::busy(shell);
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            self.target_combo(ui, shell);
+            let ready = shell.target.is_some() && !busy && self.target_exists(shell);
+            if ui
+                .add_enabled(ready, egui::Button::new("Scannen"))
+                .clicked()
+            {
+                self.start_scan(shell);
+            }
+            if ui
+                .add_enabled(ready, egui::Button::new("Klassifizieren"))
+                .clicked()
+            {
+                self.start_classify(shell, false);
+            }
+            if ui
+                .add_enabled(!busy, egui::Button::new("Optionen …"))
+                .clicked()
+            {
+                self.options_open = true;
+            }
+            if self.retry.is_some() && !busy && ui.button(texts::RETRY).clicked() {
+                match self.retry.take() {
+                    Some(Retry::Scan) => self.start_scan(shell),
+                    Some(Retry::Classify) => self.start_classify(shell, false),
+                    None => {}
+                }
+            }
+            if let Some(choice) = &shell.target {
+                if !self.target_exists(shell) {
+                    ui.colored_label(
+                        super::theme::palette(ui.visuals().dark_mode).warn,
+                        "Ordner nicht gefunden",
+                    );
+                } else {
+                    ui.weak(self.info(choice));
+                }
+            }
+        });
+        self.progress_ui(ui, shell);
+        self.result_ui(ui);
+        ui.add_space(4.0);
+        self.options_window(ui, shell, busy);
+    }
+
+    fn target_combo(&mut self, ui: &mut egui::Ui, shell: &mut Shell) {
+        let mut picked: Option<Choice> = None;
+        let mut pick_other = false;
+        let label = self.combo_label(shell);
+        let scanned: Vec<PathBuf> = self.data.as_ref().map_or_else(Vec::new, |d| {
+            d.roots
+                .iter()
+                .map(|r| PathBuf::from(&r.info.path))
+                .collect()
+        });
+        egui::ComboBox::from_id_salt("header-target")
+            .selected_text(label)
+            .width(320.0)
+            .show_ui(ui, |ui| {
+                let entries = dropdown_targets(&shell.recent_targets, &scanned);
+                for choice in entries.into_iter().filter(|c| self.is_known(c)) {
+                    let text = format::short_path(&choice.label(), LABEL_CHARS);
+                    let selected = shell.target.as_ref() == Some(&choice);
+                    if ui.selectable_label(selected, text).clicked() {
+                        picked = Some(choice);
+                    }
+                }
+                if let Some(data) = &self.data {
+                    if let Some(error) = &data.profile_error {
+                        ui.separator();
+                        ui.weak(format!("Config nicht lesbar: {error}"));
+                    } else if !data.profiles.is_empty() {
+                        ui.separator();
+                        ui.weak("Profile");
+                        egui::ScrollArea::vertical()
+                            .max_height(160.0)
+                            .show(ui, |ui| {
+                                for p in &data.profiles {
+                                    let choice = Choice::Profile(p.name.clone());
+                                    let selected = shell.target.as_ref() == Some(&choice);
+                                    if ui.selectable_label(selected, &p.name).clicked() {
+                                        picked = Some(choice);
+                                    }
+                                }
+                            });
+                    }
+                }
+                ui.separator();
+                if ui.button("Anderen Ordner wählen …").clicked() {
+                    pick_other = true;
+                }
+            });
+        if let Some(choice) = picked {
+            shell.target = Some(choice);
+        }
+        if pick_other && !Self::busy(shell) {
+            self.pick_folder(shell);
+        }
+    }
+
+    fn progress_ui(&self, ui: &mut egui::Ui, shell: &Shell) {
+        let running = shell
+            .runner
+            .running()
+            .into_iter()
+            .find(|r| r.name == TASK_SCAN || r.name == TASK_CLASSIFY);
+        let Some(task) = running else { return };
+        let p = &task.ctx.progress;
+        let (done, total) = (
+            p.done.load(Ordering::Relaxed),
+            p.total.load(Ordering::Relaxed),
+        );
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(format!("{}: {}", task.name, p.phase()));
+            if total > 0 {
+                ui.add(
+                    egui::ProgressBar::new(done as f32 / total as f32)
+                        .desired_width(220.0)
+                        .text(format!(
+                            "{} / {}",
+                            texts::grouped(done),
+                            texts::grouped(total)
+                        )),
+                );
+            } else {
+                ui.label(format!(
+                    "{} Dateien, {} Ordner, {}, {} Fehler",
+                    texts::grouped(done),
+                    texts::grouped(p.dirs.load(Ordering::Relaxed)),
+                    texts::bytes(p.bytes.load(Ordering::Relaxed)),
+                    p.errors.load(Ordering::Relaxed)
+                ));
+            }
+            if ui.button(texts::CANCEL).clicked() {
+                task.ctx.cancel.store(true, Ordering::Relaxed);
+            }
+        });
+        ui.label(egui::RichText::new(p.current()).monospace().weak());
+    }
+
+    fn result_ui(&mut self, ui: &mut egui::Ui) {
+        if self.result.is_empty() {
+            return;
+        }
+        let mut close = false;
+        ui.group(|ui| {
+            ui.label(egui::RichText::new(&self.result).monospace());
+            if ui.button(texts::CLOSE).clicked() {
+                close = true;
+            }
+        });
+        if close {
+            self.result.clear();
+        }
+    }
+
+    fn options_window(&mut self, ui: &egui::Ui, shell: &mut Shell, busy: bool) {
+        if !self.options_open {
+            return;
+        }
+        let mut open = true;
+        let mut clear = false;
+        let can_clear = shell.target.is_some() && !busy;
+        egui::Window::new("Scan-Optionen")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ui.ctx(), |ui| {
+                clear = options_ui(ui, &mut self.options, can_clear);
+            });
+        self.options_open = open && !clear;
+        if clear {
+            self.start_classify(shell, true);
+        }
+    }
+
+    fn start_scan(&mut self, shell: &mut Shell) {
+        let Some(choice) = shell.target.clone() else {
+            return;
+        };
+        let request = self.options.scan_request(&choice);
+        self.result.clear();
+        self.retry = Some(Retry::Scan);
+        shell.spawn(Route::Header, TASK_SCAN, TaskKind::Write, move |ctx| {
+            scan(&request, ctx)
+        });
+    }
+
+    fn start_classify(&mut self, shell: &mut Shell, clear: bool) {
+        let Some(choice) = shell.target.clone() else {
+            return;
+        };
+        let request = self.options.classify_request(&choice, clear);
+        self.result.clear();
+        self.retry = Some(Retry::Classify);
+        shell.spawn(Route::Header, TASK_CLASSIFY, TaskKind::Write, move |ctx| {
+            classify(&request, ctx)
+        });
+    }
+
+    pub fn on_finished(&mut self, name: &str, result: TaskResult, shell: &mut Shell) {
+        match name {
+            TASK_TARGETS => {
+                if let Ok(Ok(data)) = result.map(|b| b.downcast::<TargetsData>()) {
+                    self.data = Some(*data);
+                }
+            }
+            TASK_CHECK => {
+                if let Ok(Ok(checked)) = result.map(|b| b.downcast::<(Choice, bool)>()) {
+                    self.exists = Some(*checked);
+                }
+            }
+            TASK_PICK => {
+                let picked = result
+                    .ok()
+                    .and_then(|b| b.downcast::<Option<PathBuf>>().ok())
+                    .and_then(|p| *p);
+                let scan_now = std::mem::take(&mut self.scan_after_pick);
+                if let Some(path) = picked {
+                    shell.target = Some(Choice::Folder(path));
+                    if scan_now {
+                        self.start_scan(shell);
+                    }
+                }
+            }
+            TASK_SCAN => match result {
+                Ok(boxed) => {
+                    if let Ok(report) = boxed.downcast::<ScanReport>() {
+                        self.result = scan_text(&report);
+                        self.retry = None;
+                    }
+                    shell.generation += 1;
+                }
+                Err(e) => self.fail(name, &e, shell),
+            },
+            TASK_CLASSIFY => match result {
+                Ok(boxed) => {
+                    if let Ok(outcome) = boxed.downcast::<ClassifyOutcome>() {
+                        self.result = classify_text(&outcome);
+                        self.retry = None;
+                    }
+                    shell.generation += 1;
+                }
+                Err(e) => self.fail(name, &e, shell),
+            },
+            _ => {}
+        }
+    }
+
+    fn fail(&mut self, name: &str, error: &TaskError, shell: &mut Shell) {
+        if *error != TaskError::Busy {
+            self.retry = None;
+        }
+        shell.show_error(name, error);
+    }
+}
+
+fn classify_text(outcome: &ClassifyOutcome) -> String {
+    match outcome {
+        ClassifyOutcome::Cleared { root, entries } => format!(
+            "Inhalts- und OCR-Text-Cache von {} geleert ({entries} Einträge).",
+            paths::display(root)
+        ),
+        ClassifyOutcome::Classified { root, run, summary } => {
+            let mut text = render_summary(&paths::display(root), run, summary);
+            if run.aborted {
+                text.push_str("Abgebrochen; bis dahin Analysiertes bleibt im Cache.\n");
+            }
+            text
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use crate::ops::Notes;
+    use crate::scan::ScanOutcome;
 
     fn folder() -> Choice {
         Choice::Folder(PathBuf::from(r"D:\Daten"))
+    }
+
+    fn report(aborted: bool) -> ScanReport {
+        let mut notes = Notes::default();
+        notes.hint("Hinweis: x");
+        ScanReport {
+            root: PathBuf::from(r"D:\Daten"),
+            outcome: ScanOutcome {
+                files: 1234,
+                dirs: 7,
+                bytes: 2048,
+                errors: 1,
+                aborted,
+                hash: Default::default(),
+            },
+            index_file: PathBuf::from("index.db"),
+            score_line: Some("Health-Score 80 (erster Lauf)".into()),
+            history_warning: None,
+            notes,
+        }
+    }
+
+    #[test]
+    fn scan_text_nennt_zaehler_hinweise_und_score() {
+        let text = scan_text(&report(false));
+        assert!(text.contains("1.234 Dateien, 7 Ordner"), "{text}");
+        assert!(
+            text.contains("Hinweis: x") && text.contains("Health-Score 80"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn abgebrochener_scan_zeigt_keinen_score() {
+        let text = scan_text(&report(true));
+        assert!(
+            text.contains("abgebrochen") && !text.contains("Health-Score"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -206,5 +739,43 @@ mod tests {
     fn text_cache_loeschen_setzt_clear() {
         let req = ScanOptions::default().classify_request(&folder(), true);
         assert!(req.clear);
+    }
+
+    #[test]
+    fn unbekanntes_ziel_gilt_als_vorhanden_bis_die_pruefung_zurueck_ist() {
+        let shell = Shell::new(egui::Context::default());
+        let mut header = Header::default();
+        let mut shell = shell;
+        shell.target = Some(folder());
+        assert!(header.target_exists(&shell));
+        header.exists = Some((folder(), false));
+        assert!(!header.target_exists(&shell));
+        // Ergebnis eines früheren Ziels zählt nicht für das neue
+        shell.target = Some(Choice::Folder(PathBuf::from(r"D:\Anderer")));
+        assert!(header.target_exists(&shell));
+    }
+
+    #[test]
+    fn profile_ohne_config_eintrag_fallen_aus_der_liste() {
+        let header = Header {
+            data: Some(TargetsData {
+                roots: Vec::new(),
+                profiles: Vec::new(),
+                profile_error: None,
+            }),
+            ..Header::default()
+        };
+        assert!(!header.is_known(&Choice::Profile("weg".into())));
+        assert!(header.is_known(&folder()));
+        // Ist die Config nicht lesbar, bleiben gemerkte Profile stehen
+        let broken = Header {
+            data: Some(TargetsData {
+                roots: Vec::new(),
+                profiles: Vec::new(),
+                profile_error: Some("kaputt".into()),
+            }),
+            ..Header::default()
+        };
+        assert!(broken.is_known(&Choice::Profile("weg".into())));
     }
 }

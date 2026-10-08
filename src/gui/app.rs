@@ -3,6 +3,7 @@
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
+use super::header::{self, Header};
 use super::shell::{Choice, Dialog, Page, Route, Shell};
 use super::texts;
 use super::theme::{self, ThemeChoice};
@@ -22,11 +23,16 @@ struct Persisted {
     target: Option<Choice>,
     #[serde(default)]
     theme: ThemeChoice,
+    #[serde(default)]
+    recent: Vec<Choice>,
 }
 
 pub struct GuiApp {
     shell: Shell,
     page: Page,
+    header: Header,
+    /// Das Ziel, das zuletzt in `recent_targets` eingetragen wurde
+    remembered: Option<Choice>,
     overview: OverviewView,
     analysis: AnalysisView,
     cleanup: CleanupView,
@@ -47,9 +53,12 @@ impl GuiApp {
         theme::apply(&cc.egui_ctx, saved.theme);
         let mut shell = Shell::new(cc.egui_ctx.clone());
         shell.target = saved.target;
+        shell.recent_targets = saved.recent;
         let mut app = Self {
             shell,
             page: saved.page,
+            header: Header::default(),
+            remembered: None,
             overview: OverviewView::default(),
             analysis: AnalysisView::default(),
             cleanup: CleanupView::default(),
@@ -67,6 +76,7 @@ impl GuiApp {
             let name = finished.name.clone();
             let result = finished.result;
             match route {
+                Route::Header => self.header.on_finished(&name, result, &mut self.shell),
                 Route::Overview => self.overview.on_finished(&name, result, &mut self.shell),
                 Route::Analysis => self.analysis.on_finished(&name, result, &mut self.shell),
                 Route::Cleanup => self.cleanup.on_finished(&name, result, &mut self.shell),
@@ -79,6 +89,17 @@ impl GuiApp {
                 self.cleanup.preselect(kind);
             }
             self.page = goto.page;
+        }
+    }
+
+    /// Trägt ein neu gewähltes Ziel in die Liste der zuletzt benutzten ein, egal woher die
+    /// Wahl kam (Kopfleiste, Übersicht, Sprung aus einer Ansicht).
+    fn remember_target(&mut self) {
+        if self.shell.target != self.remembered {
+            if let Some(target) = self.shell.target.clone() {
+                self.shell.remember(target);
+            }
+            self.remembered = self.shell.target.clone();
         }
     }
 
@@ -149,7 +170,13 @@ impl GuiApp {
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
-                let running = self.shell.runner.running();
+                let running: Vec<_> = self
+                    .shell
+                    .runner
+                    .running()
+                    .into_iter()
+                    .filter(|r| !header::is_silent(&r.name))
+                    .collect();
                 if self.closing {
                     ui.label(texts::CLOSING);
                 } else if let Some(task) = running.first() {
@@ -173,12 +200,16 @@ impl eframe::App for GuiApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.dispatch_results();
+        self.remember_target();
         self.handle_close(&ctx);
         if !self.shell.runner.is_idle() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         self.sidebar(ui);
         self.status_bar(ui);
+        if self.page != Page::Settings {
+            egui::Panel::top("header").show(ui, |ui| self.header.ui(ui, &mut self.shell));
+        }
         egui::CentralPanel::default_margins().show(ui, |ui| match self.page {
             Page::Overview => self.overview.ui(ui, &mut self.shell),
             Page::Analysis => self.analysis.ui(ui, &mut self.shell),
@@ -197,6 +228,7 @@ impl eframe::App for GuiApp {
                 page: self.page,
                 target: self.shell.target.clone(),
                 theme: self.theme,
+                recent: self.shell.recent_targets.clone(),
             },
         );
     }

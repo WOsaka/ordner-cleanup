@@ -191,6 +191,26 @@ pub fn duration_to_arg(amount: &str, unit: DurationUnit) -> Result<Option<String
     Ok(Some(arg))
 }
 
+/// Zeile der Kopfleiste: „Letzter Scan: vor 2 Tagen · Score 72 (▲ 3)“.
+pub fn scan_info(
+    now: DateTime<Local>,
+    finished: Option<&str>,
+    score: Option<u8>,
+    previous: Option<u8>,
+) -> String {
+    let Some(finished) = finished else {
+        return "Noch nicht gescannt".into();
+    };
+    let when = match DateTime::parse_from_rfc3339(finished) {
+        Ok(t) => relative_time(now, t.with_timezone(&Local)).0,
+        Err(_) => finished.to_string(),
+    };
+    match score {
+        Some(_) => format!("Letzter Scan: {when} · Score {}", trend(score, previous)),
+        None => format!("Letzter Scan: {when}"),
+    }
+}
+
 /// `80 (▲ 10)`, `60 (▼ 10)`, `60 (=)`, `60` oder `–`.
 pub fn trend(score: Option<u8>, previous: Option<u8>) -> String {
     match (score, previous) {
@@ -366,6 +386,39 @@ mod tests {
             assert!(duration_to_arg(bad, Days).is_err(), "{bad}");
         }
         assert!(duration_to_arg("99999999999999999", Years).is_err());
+    }
+
+    #[test]
+    fn kopfzeile_nennt_scan_zeit_und_score() {
+        let now = at(2026, 10, 8, 14, 30);
+        let finished = at(2026, 10, 6, 12, 0).to_rfc3339();
+        assert_eq!(
+            scan_info(now, Some(&finished), Some(72), Some(69)),
+            "Letzter Scan: vor 2 Tagen · Score 72 (▲ 3)"
+        );
+        assert_eq!(
+            scan_info(now, Some(&finished), None, None),
+            "Letzter Scan: vor 2 Tagen"
+        );
+        assert_eq!(
+            scan_info(now, Some(&finished), Some(72), None),
+            "Letzter Scan: vor 2 Tagen · Score 72"
+        );
+    }
+
+    #[test]
+    fn kopfzeile_ohne_scan_sagt_das() {
+        let now = at(2026, 10, 8, 14, 30);
+        assert_eq!(scan_info(now, None, None, None), "Noch nicht gescannt");
+    }
+
+    #[test]
+    fn kopfzeile_zeigt_unlesbare_zeit_unveraendert() {
+        let now = at(2026, 10, 8, 14, 30);
+        assert_eq!(
+            scan_info(now, Some("gestern"), None, None),
+            "Letzter Scan: gestern"
+        );
     }
 
     #[test]

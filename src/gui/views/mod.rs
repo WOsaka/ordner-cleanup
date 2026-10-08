@@ -5,6 +5,5 @@ pub mod cleanup;
 pub mod history;
 pub mod overview;
 pub mod review;
-pub mod scan;
 pub mod settings;
 pub mod undo_flow;

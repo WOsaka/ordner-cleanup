@@ -14,6 +14,10 @@ pub const CANCEL: &str = "Abbrechen";
 pub const CLOSE: &str = "Schließen";
 pub const OK: &str = "OK";
 pub const NO_ROOT_YET: &str = "Noch nichts gescannt. Ordner wählen und scannen.";
+pub const EMPTY_TITLE: &str = "Noch nichts gescannt";
+pub const EMPTY_TEXT: &str =
+    "Wähle einen Ordner und scanne ihn. Danach erscheinen hier Zustand und Läufe.";
+pub const EMPTY_BUTTON: &str = "Ordner wählen und scannen";
 
 pub const CLOSE_TITLE: &str = "Aufgabe läuft noch";
 pub const CLOSE_TEXT: &str = "Es läuft noch eine Aufgabe. Beim Abbrechen endet die laufende \

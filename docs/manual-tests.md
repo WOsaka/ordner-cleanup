@@ -54,6 +54,20 @@ Vorbereitung: `cargo build --release`, dann `target\release\ordner-cleanup.exe` 
 - [ ] Vorlage kopieren und bearbeiten.
 - [ ] Verknüpfung im Startmenü anlegen, Start darüber.
 
+## 5a. GUI-Bedienung, Stufe 1 (Kopfleiste)
+
+Spec: [`features/gui-bedienung.md`](features/gui-bedienung.md). Mit einem frischen Datenordner (`ORDNER_CLEANUP_HOME`) und danach mit dem echten starten.
+
+- [ ] Frischer Datenordner: Übersicht zeigt „Noch nichts gescannt“ mit dem Knopf „Ordner wählen und scannen“; der Knopf öffnet den Ordnerdialog und startet nach der Wahl den Scan.
+- [ ] Kopfleiste ist auf Übersicht, Analyse, Aufräumen und Verlauf sichtbar, auf den Einstellungen nicht.
+- [ ] Dropdown: zuletzt gewählte Ordner stehen oben, danach die gescannten Wurzeln ohne Dubletten (auch mit anderer Groß-/Kleinschreibung), Profile in einer eigenen Gruppe. Nach Auswahl eines Profils zeigt der Kopf den Profilnamen.
+- [ ] Mehr als 8 verschiedene Ordner nacheinander wählen: die Liste „zuletzt gewählt“ hält höchstens 8. Nach Neustart ist die Auswahl wieder da.
+- [ ] Scan aus der Kopfleiste: Fortschritt mit „Abbrechen“ im Kopf, Seitenwechsel während des Scans, danach Ergebnistext, Übersicht lädt neu.
+- [ ] Ordner umbenennen oder Laufwerk trennen, während er gewählt ist: Warnsymbol im Dropdown, „Ordner nicht gefunden“, Scannen und Klassifizieren gesperrt; die Oberfläche hängt nicht (auch bei getrenntem Netzlaufwerk).
+- [ ] „Optionen …“: zwei Abschnitte (Scannen, Klassifizieren); alle bisherigen Optionen sind da; „Text-Cache löschen“ schließt den Dialog und läuft.
+- [ ] Zweiter Scan (Geplanter Lauf oder zweites Fenster) während ein Scan läuft: Meldung „Ein anderer Scan läuft“, „Erneut versuchen“ funktioniert.
+- [ ] Fenster mit gewähltem Ziel schließen und neu öffnen, mit einem in der Config entfernten Profil als gemerktem Ziel: kein Fehlerdialog, das Profil fehlt in der Liste.
+
 ## 6. Nutzertest
 
 - [ ] Person ohne CLI-Kenntnisse: „Duplikate in Ordner X finden, prüfen, in die Quarantäne verschieben und zurückholen“, ohne Hilfe. Stolpersteine hier notieren:
