@@ -305,7 +305,11 @@ impl CleanupView {
             self.refresh_recent(shell);
         }
         if self.apply.result.is_some() {
-            let (undo, close) = self.apply.result_ui(ui);
+            let (undo, close) = egui::ScrollArea::vertical()
+                .id_salt("cleanup.result")
+                .auto_shrink([false, false])
+                .show(ui, |ui| self.apply.result_ui(ui))
+                .inner;
             if let Some((run, root)) = undo {
                 self.undo.begin(shell, Route::Cleanup, run, Some(root));
             }
@@ -317,7 +321,10 @@ impl CleanupView {
             return;
         }
         let Some(mut review) = self.review.take() else {
-            self.form_ui(ui, shell);
+            egui::ScrollArea::vertical()
+                .id_salt("cleanup.form")
+                .auto_shrink([false, false])
+                .show(ui, |ui| self.form_ui(ui, shell));
             return;
         };
         let mut start_apply = false;
