@@ -99,6 +99,38 @@ pub struct Shell {
     pub goto: Option<Goto>,
     /// Zählt Änderungen an Index oder Dateien (Scan, Classify, Apply, Undo); Ansichten laden danach neu
     pub generation: u64,
+    /// Zuletzt gewählte Ziele, das neueste zuerst (höchstens [`RECENT_MAX`])
+    pub recent_targets: Vec<Choice>,
+}
+
+/// So viele zuletzt gewählte Ziele merkt sich die Oberfläche.
+pub const RECENT_MAX: usize = 8;
+
+/// Dasselbe Ziel? Ordner werden wie im Index verglichen (Groß-/Kleinschreibung, Schrägstriche).
+fn same_target(a: &Choice, b: &Choice) -> bool {
+    match (a, b) {
+        (Choice::Folder(x), Choice::Folder(y)) => {
+            crate::paths::path_key(x) == crate::paths::path_key(y)
+        }
+        (Choice::Profile(x), Choice::Profile(y)) => x == y,
+        _ => false,
+    }
+}
+
+/// Einträge des Ordner-Dropdowns: zuerst die zuletzt gewählten Ziele, danach alle gescannten
+/// Wurzeln aus dem Index, jeweils ohne Dubletten.
+pub fn dropdown_targets(recent: &[Choice], scanned: &[std::path::PathBuf]) -> Vec<Choice> {
+    let mut out: Vec<Choice> = Vec::new();
+    let all = recent
+        .iter()
+        .cloned()
+        .chain(scanned.iter().cloned().map(Choice::Folder));
+    for choice in all {
+        if !out.iter().any(|c| same_target(c, &choice)) {
+            out.push(choice);
+        }
+    }
+    out
 }
 
 /// Ordner oder Profil, mit dem gearbeitet wird.
@@ -139,7 +171,22 @@ impl Shell {
             target: None,
             goto: None,
             generation: 0,
+            recent_targets: Vec::new(),
         }
+    }
+
+    /// Merkt sich ein gewähltes Ziel als neuestes. Leere Pfade und Namen werden ignoriert.
+    pub fn remember(&mut self, choice: Choice) {
+        let empty = match &choice {
+            Choice::Folder(path) => path.as_os_str().is_empty(),
+            Choice::Profile(name) => name.trim().is_empty(),
+        };
+        if empty {
+            return;
+        }
+        self.recent_targets.retain(|c| !same_target(c, &choice));
+        self.recent_targets.insert(0, choice);
+        self.recent_targets.truncate(RECENT_MAX);
     }
 
     /// Startet einen Task für eine Ansicht. Ein zweiter schreibender Task wird mit einem Hinweis
@@ -227,3 +274,77 @@ impl Shell {
 
 /// Ergebnis eines Tasks, vom Typ gelöst.
 pub type TaskResult = Result<Box<dyn Any + Send>, TaskError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn folder(p: &str) -> Choice {
+        Choice::Folder(PathBuf::from(p))
+    }
+
+    fn shell() -> Shell {
+        Shell::new(egui::Context::default())
+    }
+
+    #[test]
+    fn neuestes_ziel_steht_vorn() {
+        let mut s = shell();
+        s.remember(folder(r"D:\A"));
+        s.remember(Choice::Profile("downloads".into()));
+        assert_eq!(
+            s.recent_targets,
+            [Choice::Profile("downloads".into()), folder(r"D:\A")]
+        );
+    }
+
+    #[test]
+    fn dasselbe_ziel_rueckt_nach_vorn_statt_doppelt_zu_stehen() {
+        let mut s = shell();
+        s.remember(folder(r"D:\A"));
+        s.remember(folder(r"D:\B"));
+        s.remember(folder(r"d:\a\"));
+        assert_eq!(s.recent_targets, [folder(r"d:\a\"), folder(r"D:\B")]);
+    }
+
+    #[test]
+    fn es_bleiben_hoechstens_acht_ziele() {
+        let mut s = shell();
+        for i in 0..12 {
+            s.remember(folder(&format!(r"D:\Ordner{i}")));
+        }
+        assert_eq!(s.recent_targets.len(), RECENT_MAX);
+        assert_eq!(s.recent_targets[0], folder(r"D:\Ordner11"));
+        assert_eq!(s.recent_targets[7], folder(r"D:\Ordner4"));
+    }
+
+    #[test]
+    fn leere_ziele_werden_nicht_gemerkt() {
+        let mut s = shell();
+        s.remember(folder(""));
+        s.remember(Choice::Profile("  ".into()));
+        assert!(s.recent_targets.is_empty());
+    }
+
+    #[test]
+    fn dropdown_zeigt_gewaehlte_zuerst_dann_gescannte_ohne_dubletten() {
+        let recent = [folder(r"D:\B"), Choice::Profile("p".into())];
+        let scanned = [PathBuf::from(r"d:\b"), PathBuf::from(r"D:\C")];
+        assert_eq!(
+            dropdown_targets(&recent, &scanned),
+            [
+                folder(r"D:\B"),
+                Choice::Profile("p".into()),
+                folder(r"D:\C")
+            ]
+        );
+    }
+
+    #[test]
+    fn dropdown_ohne_gemerkte_ziele_zeigt_die_gescannten() {
+        let scanned = [PathBuf::from(r"D:\C")];
+        assert_eq!(dropdown_targets(&[], &scanned), [folder(r"D:\C")]);
+        assert!(dropdown_targets(&[], &[]).is_empty());
+    }
+}
