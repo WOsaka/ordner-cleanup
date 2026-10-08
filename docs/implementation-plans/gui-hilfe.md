@@ -1,7 +1,7 @@
 ---
 title: "Implementation Plan: GUI-Hilfe (kontextbezogene Erklärungen)"
 feature_spec: docs/features/gui-hilfe.md
-status: approved   # pending-approval | approved | implemented
+status: implemented   # pending-approval | approved | implemented
 created: 2026-10-08
 updated: 2026-10-08
 ---
@@ -129,3 +129,15 @@ pub struct HelpEntry {
 - [ ] **Abschnitts-Sprung:** Reicht „Datei öffnen, Abschnitt namentlich nennen“? Springen an die Stelle wäre nur mit HTML-Auslieferung (Markdown-Renderer) möglich. Vorschlag: so lassen.
 - [ ] **Reiter im Fenster:** Sind „Erklärung“ und „Tastenkürzel“ in einem Fenster wie geplant in Ordnung, oder soll die Kürzel-Liste ein eigenes Fenster bleiben? Vorschlag: ein Fenster.
 - [ ] **Zusätzliche Themen:** Soll die Review-Ansicht (Anwenden/Quarantäne) schon in dieser Runde ein eigenes Thema bekommen, weil sie für Personen ohne CLI-Kenntnisse die wichtigste Stelle ist? Vorschlag: ja, als ein zusätzlicher `Topic::Review` mit F1 in der Review-Ansicht; Aufwand gering (ein Eintrag, ein „?“ in der Kopfzeile).
+
+## Umsetzungsstand
+
+Schritte 1 bis 9 sind im Code umgesetzt. `cargo test`, `cargo clippy --all-targets -- -D warnings` und `cargo fmt --check` sind grün. **Offen:** die Handtests in `docs/manual-tests.md`, Abschnitt 5e (Optik, `F1` im echten Fenster, Notepad-Rückfall, DPI, `netstat`).
+
+Abweichungen vom Plan:
+
+- **Review-Thema:** `Topic::Review` mit „?“ neben der Plan-Überschrift und `F1` in der Review-Ansicht ist enthalten (Open Question 3, Vorschlag „ja“).
+- **„?“ in den Karten:** Statt `ui.put` (verschiebt den Zellzeiger des Grids) zeichnet `help_button_at` den Knopf über `ui.interact` und den Painter; er liegt über der Kartenfläche und belegt keinen Platz.
+- **F1 und Dialog:** `F1` im Hauptfenster ist nicht automatisiert getestet (`GuiApp` braucht einen `CreationContext`); das Verhalten steht in den Handtests 5e. Getestet sind die Hilfe-Anfrage, „?“ an Karte und Seite, der Doku-Link und die Esc-Reihenfolge.
+- **Nebenbefund behoben:** Der bestehende Test `duplikat_karte_zeigt_die_zahl_aus_dem_scan_ohne_neue_analyse` scheiterte schon vor dieser Arbeit: Der Karteninhalt erbte das Links-nach-rechts-Layout der Grid-Zelle, die Zahlzeile stand neben dem Text und bekam keine Breite (Karten bis 526 px hoch, zweite Reihe unten abgeschnitten). Der Inhalt liegt jetzt in `ui.vertical` (`cleanup.rs`).
+- **Kartentext „Archivieren“:** Der Kartentext in `cleanup_cards.rs` sagt „als ZIP ablegen“, die Doku und die Hilfe sagen „nach `_Archiv` verschieben“ (so arbeitet `plan archive`). Der Kartentext wurde nicht geändert; bitte prüfen.

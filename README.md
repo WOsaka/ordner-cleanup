@@ -305,6 +305,8 @@ max_confidence  = 0.75                   # unter min_confidence: LLM-Kategorien 
 
 **Speicherorte:** Pläne der GUI liegen unter `%LOCALAPPDATA%\ordner-cleanup\plans\_gui` (änderbar mit `[gui] plans_dir`), der Fensterzustand unter `%APPDATA%\ordner-cleanup\gui`, Abstürze im Hintergrund unter `%LOCALAPPDATA%\ordner-cleanup\gui-errors.log`. Die Dateien (Index, Pläne, Journal, Register, Config) sind dieselben wie bei der CLI: ein in der GUI erzeugter Plan lässt sich per `apply` anwenden und umgekehrt, ebenso `undo`.
 
+**Hilfe:** Neben jeder Seitenüberschrift, im Kopf jeder Aufräum-Karte und in der Review-Ansicht steht ein **„?“**; `F1` öffnet die Hilfe zur aktuellen Seite. Das Hilfefenster erklärt in einfachen Worten, was die Funktion tut, was sich ändert und wie man es rückgängig macht, und öffnet mit „Ausführliche Doku öffnen“ diese README bzw. `docs\dokumentation.md`. Beide Dateien gehören in denselben Ordner wie die `exe`-Dateien (`README.md` daneben, `dokumentation.md` im Unterordner `docs`); das CI-Artefakt enthält sie. Gibt es kein Programm für `.md`, öffnet sich Notepad.
+
 Beim Schließen während einer laufenden Aufgabe fragt die GUI nach; bei „Abbrechen und schließen“ endet die laufende Einzeloperation sauber und das Journal bleibt konsistent. Startet das Fenster nicht (VM, Remotedesktop, alte Treiber), versucht die GUI einmal einen zweiten Renderer und verweist sonst auf die Kommandozeile.
 
 ## Entwicklung

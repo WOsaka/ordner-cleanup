@@ -565,6 +565,8 @@ dirs = ["D:\\Logs"]           # optional: nur direkt in diesen Ordnern
 
 `scan` erfasst den Ordner `.ordner-cleanup` nie.
 
+**Neben den Programmdateien** (`ordner-cleanup.exe`, `ordner-cleanup-bg.exe`, `ordner-cleanup-gui.exe`) liegen `README.md` und `docs\dokumentation.md`. Die Hilfe der Oberfläche („?“ an Seiten und Karten, `F1`) öffnet sie über „Ausführliche Doku öffnen“. Fehlen die Dateien, zeigt die Oberfläche den erwarteten Pfad an; die Kurztexte funktionieren auch ohne sie.
+
 ---
 
 ## 11. Exit-Codes

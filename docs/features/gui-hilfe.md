@@ -1,6 +1,6 @@
 ---
 title: "GUI-Hilfe: Erklärungen zu jeder Funktion direkt auf der Seite"
-status: approved          # draft | approved | implemented
+status: implemented          # draft | approved | implemented
 created: 2026-10-08
 updated: 2026-10-08
 ---
