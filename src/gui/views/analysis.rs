@@ -76,7 +76,7 @@ impl Default for AnalysisView {
     }
 }
 
-fn request_for(choice: &Choice, old_after: &str, top: &str) -> ReportRequest {
+pub fn request_for(choice: &Choice, old_after: &str, top: &str) -> ReportRequest {
     let mut req = ReportRequest {
         old_after: Some(old_after.trim().to_string()).filter(|t| !t.is_empty()),
         top: top.trim().parse().ok(),

@@ -2,6 +2,7 @@ pub mod analysis;
 pub mod analysis_tabs;
 pub mod apply;
 pub mod cleanup;
+pub mod cleanup_cards;
 pub mod history;
 pub mod overview;
 pub mod review;

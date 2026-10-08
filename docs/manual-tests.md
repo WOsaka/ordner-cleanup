@@ -81,6 +81,19 @@ Spec: [`features/gui-bedienung.md`](features/gui-bedienung.md). Mit einem frisch
 - [ ] Verlauf: dieselbe Lauf-Tabelle plus „Läuft ab“, „Details“ und „Rückgängig …“; Index-Wurzeln mit Status statt `Complete`.
 - [ ] Uhr des PCs um einen Tag vorstellen und einen Lauf anlegen: keine negativen oder „vor …“-Texte, sondern das Datum.
 
+## 5c. GUI-Bedienung, Stufe 3 (Aufräumen mit Karten)
+
+- [ ] Aufräumen zeigt sechs Karten (3 × 2), gleich hoch, die gewählte mit Akzentrahmen; ein Klick irgendwo auf die Karte (auch auf den Text) wählt sie und zeigt die Optionen darunter.
+- [ ] Gescannter Ordner: Duplikate „37 Gruppen, 4,2 GB könnten frei werden“, Müll „1.204 Dateien, 860 MB“, Leere Ordner „58 Ordner“ stimmen mit Analyse → Übersicht überein; Archivieren, Versionen und Nach Regeln zeigen keine Zahl.
+- [ ] Ungescannter Ordner: Hinweis „Keine Zahlen: Dieser Ordner ist noch nicht gescannt.“, Karten nur mit Beschreibung.
+- [ ] Scan älter als 7 Tage (Systemuhr vorstellen): Hinweis „Stand: vor n Tagen, neu scannen?“ in Warnfarbe. Nach neuem Scan verschwindet er und die Zahlen ändern sich ohne Neuladen.
+- [ ] Archivieren / Versionen: Zahlfeld plus Einheit (Tage / Monate / Jahre); Platzhalter zeigt den Config-Wert („Standard: 2 Jahre“, „Standard: 30 Tage“); leer erzeugt den Plan mit dem Config-Wert, „2“ + Jahre erzeugt denselben Plan wie `plan archive --older-than 2y`; „abc“ ergibt eine Meldung statt eines Plans.
+- [ ] Profil als Ziel: Platzhalter zeigen die Werte aus dem Profil, nicht die globalen.
+- [ ] Duplikate: Dropdown mit „Die älteste / neueste Datei bleibt / Die Kopie in einem bestimmten Ordner bleibt“; bei der dritten Variante „Ordner wählen …“ öffnet den Dialog, Pfad gekürzt mit Tooltip.
+- [ ] Nach Regeln: Regeldatei wählen, Regelnamen erscheinen als Häkchen; nur angehakte Regeln landen im Plan (Kopf des Plans prüfen); alle abwählen gibt eine Meldung. Datei mit Syntaxfehler: roter Text mit Datei und Zeile, kein Absturz.
+- [ ] Zuletzt erzeugte Pläne: Zeile mit relativer Zeit, Art, „n Aktionen, Größe“ und gekürztem Wurzelpfad; Klick öffnet den Plan; eine fremde `.json` im Planordner erscheint nur mit Dateinamen.
+- [ ] Fenster schmal ziehen: Karten rücken auf weniger Spalten, nichts wird abgeschnitten.
+
 ## 6. Nutzertest
 
 - [ ] Person ohne CLI-Kenntnisse: „Duplikate in Ordner X finden, prüfen, in die Quarantäne verschieben und zurückholen“, ohne Hilfe. Stolpersteine hier notieren:

@@ -6,16 +6,24 @@ use std::time::SystemTime;
 
 use eframe::egui;
 
+use super::analysis::request_for;
 use super::apply::{ApplyFlow, ID_APPLY};
+use super::cleanup_cards::{
+    duration_placeholder, only_from_checks, rule_names, CardFacts, DurationField, CARDS,
+};
 use super::review::{ReviewState, ID_DEPENDENTS};
 use super::undo_flow::{UndoFlow, TASK_CHECK as UNDO_CHECK, TASK_UNDO};
 use crate::change::dedupe::KeepStrategy;
-use crate::change::plan::Plan;
+use crate::change::plan::{Plan, PlanKind};
+use crate::gui::format::{self, DurationUnit};
 use crate::gui::review::ReviewModel;
-use crate::gui::shell::{Answer, Route, Shell, TaskResult};
+use crate::gui::shell::{Answer, Choice, Route, Shell, TaskResult};
 use crate::gui::tasks::TaskKind;
 use crate::gui::texts;
-use crate::ops::plan::{plan, PlanKindRequest, PlanOut, PlanOutcome, PlanRequest};
+use crate::gui::theme;
+use crate::ops::plan::{
+    plan, resolve_rules_path, PlanKindRequest, PlanOut, PlanOutcome, PlanRequest,
+};
 use crate::paths;
 
 const TASK_PLAN: &str = "Plan erzeugen";
@@ -23,22 +31,80 @@ const TASK_OPEN: &str = "Plan öffnen";
 const TASK_RECENT: &str = "Pläne suchen";
 const TASK_PICK_PLAN: &str = "Plan wählen";
 const TASK_PICK_RULES: &str = "Regeldatei wählen";
+const TASK_PICK_KEEP: &str = "Ordner wählen";
+const TASK_FACTS: &str = "Zahlen laden";
+const TASK_RULE_NAMES: &str = "Regeln lesen";
 const ID_UNDO: &str = "cleanup.undo";
 
-const KINDS: [(&str, &str); 6] = [
-    ("dedupe", "Duplikate"),
-    ("junk", "Müll"),
-    ("empty-dirs", "Leere Ordner"),
-    ("archive", "Archivieren"),
-    ("versions", "Versionen"),
-    ("rules", "Nach Regeln"),
-];
+const CARD_WIDTH: f32 = 230.0;
+const CARD_HEIGHT: f32 = 110.0;
+
+/// Zahlen für die Karten und die Standardwerte aus der Config (Platzhalter der Dauer-Felder).
+struct CardsData {
+    facts: Option<CardFacts>,
+    archive_default: String,
+    versions_default: String,
+}
+
+fn load_cards(choice: &Choice, ctx: &crate::ops::OpCtx) -> anyhow::Result<CardsData> {
+    let config = match choice {
+        Choice::Profile(name) => crate::ops::target::target(None, Some(name))
+            .map(|t| t.config)
+            .or_else(|_| crate::ops::load_config()),
+        Choice::Folder(_) => crate::ops::load_config(),
+    }
+    .unwrap_or_default();
+    // Ohne Scan gibt es keinen Report; die Karten zeigen dann nur ihre Beschreibung.
+    let facts = crate::ops::report::report_model(&request_for(choice, "", ""), ctx)
+        .ok()
+        .map(|view| CardFacts::from_report(&view.model));
+    Ok(CardsData {
+        facts,
+        archive_default: config.archive_older_than.clone(),
+        versions_default: config.versions_min_age.clone(),
+    })
+}
 
 /// Ein vorhandener Plan auf der Platte.
 #[derive(Debug, Clone)]
 pub struct PlanFile {
     pub path: PathBuf,
     pub modified: SystemTime,
+    /// Kopfdaten; `None`, wenn sich die Datei nicht als Plan lesen ließ
+    pub info: Option<PlanInfo>,
+}
+
+/// Art, Wurzel und Umfang eines Plans für die Liste „Zuletzt erzeugte Pläne“.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanInfo {
+    pub kind: &'static str,
+    pub root: String,
+    pub actions: usize,
+    pub bytes: u64,
+}
+
+/// Anzeigename einer Plan-Art.
+pub fn kind_title(kind: PlanKind) -> &'static str {
+    let key = match kind {
+        PlanKind::Dedupe => "dedupe",
+        PlanKind::Junk => "junk",
+        PlanKind::EmptyDirs => "empty-dirs",
+        PlanKind::Archive => "archive",
+        PlanKind::Versions => "versions",
+        PlanKind::Rules => "rules",
+    };
+    CARDS.iter().find(|c| c.key == key).map_or(key, |c| c.title)
+}
+
+/// Liest den Kopf eines Plans; eine Datei, die kein Plan ist, ergibt `None`.
+pub fn plan_info(path: &Path) -> Option<PlanInfo> {
+    let plan = Plan::load(path).ok()?;
+    Some(PlanInfo {
+        kind: kind_title(plan.kind),
+        root: plan.root.clone(),
+        actions: plan.actions.len(),
+        bytes: plan.total_bytes(),
+    })
 }
 
 /// Die neuesten Plan-Dateien aus den Ordnern und deren Unterordnern (eine Ebene), neueste zuerst.
@@ -52,7 +118,11 @@ pub fn recent_plans(dirs: &[PathBuf], limit: usize) -> Vec<PlanFile> {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "json") {
                 if let Ok(modified) = entry.metadata().and_then(|m| m.modified()) {
-                    found.push(PlanFile { path, modified });
+                    found.push(PlanFile {
+                        path,
+                        modified,
+                        info: None,
+                    });
                 }
             }
         }
@@ -72,6 +142,10 @@ pub fn recent_plans(dirs: &[PathBuf], limit: usize) -> Vec<PlanFile> {
     found.retain(|p| seen.insert(paths::path_key(&p.path)));
     found.sort_by_key(|a| std::cmp::Reverse(a.modified));
     found.truncate(limit);
+    // Der Kopf wird erst für die angezeigten Pläne gelesen.
+    for p in &mut found {
+        p.info = plan_info(&p.path);
+    }
     found
 }
 
@@ -92,11 +166,18 @@ pub struct CleanupView {
     keep: &'static str,
     keep_path: String,
     categories: String,
-    older_than: String,
-    min_age: String,
+    older_than: DurationField,
+    min_age: DurationField,
     rules_file: String,
-    only: String,
+    /// Regeln der geladenen Datei mit Häkchen; leer, solange nichts geladen ist
+    rules: Vec<(String, bool)>,
+    rules_error: Option<String>,
+    /// Für welchen Dateinamen `rules` zuletzt angefordert wurde
+    rules_requested: Option<String>,
     no_classify: bool,
+    cards: Option<CardsData>,
+    /// Ziel und Scan-Stand, für die `cards` angefordert wurden
+    cards_requested: Option<(Choice, u64)>,
     review: Option<ReviewState>,
     recent: Vec<PlanFile>,
     recent_loaded: bool,
@@ -111,11 +192,15 @@ impl Default for CleanupView {
             keep: "oldest",
             keep_path: String::new(),
             categories: String::new(),
-            older_than: String::new(),
-            min_age: String::new(),
+            older_than: DurationField::new(DurationUnit::Years),
+            min_age: DurationField::new(DurationUnit::Days),
             rules_file: String::new(),
-            only: String::new(),
+            rules: Vec::new(),
+            rules_error: None,
+            rules_requested: None,
             no_classify: false,
+            cards: None,
+            cards_requested: None,
             review: None,
             recent: Vec::new(),
             recent_loaded: false,
@@ -139,38 +224,38 @@ fn opt(text: &str) -> Option<String> {
 
 impl CleanupView {
     pub fn preselect(&mut self, kind: &'static str) {
-        self.kind = KINDS
+        self.kind = CARDS
             .iter()
-            .map(|(k, _)| *k)
+            .map(|c| c.key)
             .find(|k| *k == kind)
             .unwrap_or("dedupe");
         self.review = None;
         self.apply.result = None;
     }
 
-    fn kind_request(&self) -> PlanKindRequest {
-        match self.kind {
+    fn kind_request(&self) -> Result<PlanKindRequest, String> {
+        Ok(match self.kind {
             "junk" => PlanKindRequest::Junk {
                 categories: words(&self.categories),
             },
             "empty-dirs" => PlanKindRequest::EmptyDirs,
             "archive" => PlanKindRequest::Archive {
-                older_than: opt(&self.older_than),
+                older_than: self.older_than.arg()?,
             },
             "versions" => PlanKindRequest::Versions {
-                min_age: opt(&self.min_age),
+                min_age: self.min_age.arg()?,
             },
             "rules" => PlanKindRequest::Rules {
                 rules_file: opt(&self.rules_file).map(PathBuf::from),
                 rules_text: None,
-                only: words(&self.only),
+                only: only_from_checks(&self.rules)?,
                 no_classify: self.no_classify,
                 lock_held: false,
             },
             _ => PlanKindRequest::Dedupe {
-                keep: self.keep_strategy().unwrap_or(KeepStrategy::Oldest),
+                keep: self.keep_strategy()?,
             },
-        }
+        })
     }
 
     /// Die gewählte Strategie; „path“ braucht einen absoluten Ordner.
@@ -235,28 +320,177 @@ impl CleanupView {
         let _ = start_apply;
     }
 
-    fn form_ui(&mut self, ui: &mut egui::Ui, shell: &mut Shell) {
-        let busy = shell.is_running(Route::Cleanup);
-        ui.horizontal_wrapped(|ui| {
-            for (key, label) in KINDS {
-                ui.selectable_value(&mut self.kind, key, label);
+    /// Zahlen neu anfordern, wenn Ziel oder Scan-Stand wechseln.
+    fn ensure_cards(&mut self, shell: &mut Shell) {
+        let Some(choice) = shell.target.clone() else {
+            self.cards = None;
+            self.cards_requested = None;
+            return;
+        };
+        let key = (choice.clone(), shell.generation);
+        if self.cards_requested.as_ref() == Some(&key) {
+            return;
+        }
+        self.cards_requested = Some(key);
+        shell.spawn(Route::Cleanup, TASK_FACTS, TaskKind::Read, move |ctx| {
+            load_cards(&choice, ctx)
+        });
+    }
+
+    /// Liest die Regeln der gewählten Datei, sobald die Karte „Nach Regeln“ offen ist.
+    fn ensure_rules(&mut self, shell: &mut Shell) {
+        let wanted = self.rules_file.trim().to_string();
+        if self.kind != "rules" || self.rules_requested.as_deref() == Some(wanted.as_str()) {
+            return;
+        }
+        self.rules_requested = Some(wanted);
+        let file = opt(&self.rules_file).map(PathBuf::from);
+        shell.spawn(Route::Cleanup, TASK_RULE_NAMES, TaskKind::Read, move |_| {
+            let config = crate::ops::load_config().unwrap_or_default();
+            let names: Result<Vec<String>, String> =
+                resolve_rules_path(file.as_deref(), &config, paths::config_dir().as_deref())
+                    .map_err(|e| format!("{e:#}"))
+                    .and_then(|path| rule_names(&path, &config));
+            Ok(names)
+        });
+    }
+
+    fn cards_ui(&mut self, ui: &mut egui::Ui) {
+        let now = chrono::Local::now();
+        let facts = self.cards.as_ref().and_then(|c| c.facts.as_ref());
+        match facts {
+            None => {
+                ui.weak("Keine Zahlen: Dieser Ordner ist noch nicht gescannt.");
+            }
+            Some(f) => {
+                if let Some(note) = f.scanned().and_then(|t| format::stale_note(t, now)) {
+                    let warn = theme::tone_color(ui, format::Tone::Warn);
+                    ui.colored_label(warn, note);
+                }
+            }
+        }
+        let palette = theme::palette(ui.visuals().dark_mode);
+        let mut chosen: Option<&'static str> = None;
+        // Frames brechen in einem umbrechenden Layout nicht um; das Grid ordnet nach Breite.
+        let columns = ((ui.available_width() / (CARD_WIDTH + 24.0)) as usize).max(1);
+        egui::Grid::new("cards").spacing([8.0, 8.0]).show(ui, |ui| {
+            for (index, card) in CARDS.iter().enumerate() {
+                let selected = self.kind == card.key;
+                let color = if selected {
+                    palette.accent
+                } else {
+                    ui.visuals().widgets.noninteractive.bg_stroke.color
+                };
+                let frame = egui::Frame::group(ui.style())
+                    .stroke(egui::Stroke::new(if selected { 2.0 } else { 1.0 }, color));
+                let response = frame
+                    .show(ui, |ui| {
+                        // Auswählbarer Text finge den Klick ab, der die Karte wählen soll.
+                        ui.style_mut().interaction.selectable_labels = false;
+                        ui.set_width(CARD_WIDTH);
+                        ui.set_min_height(CARD_HEIGHT);
+                        ui.label(egui::RichText::new(card.title).strong());
+                        ui.add(egui::Label::new(card.text).wrap());
+                        if let Some(n) = facts.and_then(|f| f.number_text(card.key)) {
+                            ui.label(egui::RichText::new(n).strong());
+                        }
+                    })
+                    .response;
+                let click = response
+                    .interact(egui::Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                click.widget_info(|| {
+                    egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, card.title)
+                });
+                if click.clicked() {
+                    chosen = Some(card.key);
+                }
+                if (index + 1) % columns == 0 {
+                    ui.end_row();
+                }
             }
         });
-        ui.add_space(6.0);
+        if let Some(key) = chosen {
+            self.kind = key;
+        }
+    }
+
+    fn duration_row(
+        ui: &mut egui::Ui,
+        label: &str,
+        field: &mut DurationField,
+        config_default: &str,
+    ) {
+        ui.horizontal(|ui| {
+            ui.label(label);
+            ui.add(
+                egui::TextEdit::singleline(&mut field.amount)
+                    .desired_width(60.0)
+                    .hint_text(duration_placeholder(config_default)),
+            );
+            egui::ComboBox::from_id_salt(label)
+                .selected_text(match field.unit {
+                    DurationUnit::Days => "Tage",
+                    DurationUnit::Months => "Monate",
+                    DurationUnit::Years => "Jahre",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut field.unit, DurationUnit::Days, "Tage");
+                    ui.selectable_value(&mut field.unit, DurationUnit::Months, "Monate");
+                    ui.selectable_value(&mut field.unit, DurationUnit::Years, "Jahre");
+                });
+        });
+    }
+
+    fn options_ui(&mut self, ui: &mut egui::Ui, shell: &mut Shell) {
+        let (archive_default, versions_default) = self
+            .cards
+            .as_ref()
+            .map_or(("2y".to_string(), "30d".to_string()), |c| {
+                (c.archive_default.clone(), c.versions_default.clone())
+            });
         match self.kind {
             "dedupe" => {
                 ui.horizontal(|ui| {
                     ui.label("Welche Kopie bleibt:");
-                    ui.selectable_value(&mut self.keep, "oldest", "älteste");
-                    ui.selectable_value(&mut self.keep, "newest", "neueste");
-                    ui.selectable_value(&mut self.keep, "path", "unterhalb von Ordner …");
+                    let text = match self.keep {
+                        "newest" => "Die neueste Datei bleibt",
+                        "path" => "Die Kopie in einem bestimmten Ordner bleibt",
+                        _ => "Die älteste Datei bleibt",
+                    };
+                    egui::ComboBox::from_id_salt("keep")
+                        .selected_text(text)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.keep,
+                                "oldest",
+                                "Die älteste Datei bleibt",
+                            );
+                            ui.selectable_value(
+                                &mut self.keep,
+                                "newest",
+                                "Die neueste Datei bleibt",
+                            );
+                            ui.selectable_value(
+                                &mut self.keep,
+                                "path",
+                                "Die Kopie in einem bestimmten Ordner bleibt",
+                            );
+                        });
                 });
                 if self.keep == "path" {
                     ui.horizontal(|ui| {
-                        ui.label("Ordner (absolut):");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.keep_path).desired_width(320.0),
-                        );
+                        if self.keep_path.trim().is_empty() {
+                            ui.weak("Noch kein Ordner gewählt");
+                        } else {
+                            ui.label(format::short_path(&self.keep_path, 56))
+                                .on_hover_text(&self.keep_path);
+                        }
+                        if ui.button("Ordner wählen …").clicked() {
+                            shell.spawn(Route::Cleanup, TASK_PICK_KEEP, TaskKind::Read, |_| {
+                                Ok(crate::platform::shell::pick_folder(None))
+                            });
+                        }
                     });
                 }
             }
@@ -271,21 +505,20 @@ impl CleanupView {
                 );
             }
             "archive" => {
-                ui.horizontal(|ui| {
-                    ui.label("Älter als (leer = aus der Config, z. B. 2y):");
-                    ui.add(egui::TextEdit::singleline(&mut self.older_than).desired_width(80.0));
-                });
+                Self::duration_row(ui, "Älter als:", &mut self.older_than, &archive_default)
             }
             "versions" => {
-                ui.horizontal(|ui| {
-                    ui.label("Mindestalter (leer = aus der Config, z. B. 30d):");
-                    ui.add(egui::TextEdit::singleline(&mut self.min_age).desired_width(80.0));
-                });
+                Self::duration_row(ui, "Mindestalter:", &mut self.min_age, &versions_default)
             }
             "rules" => {
                 ui.horizontal(|ui| {
-                    ui.label("Regeldatei (leer = Standard):");
-                    ui.add(egui::TextEdit::singleline(&mut self.rules_file).desired_width(320.0));
+                    ui.label("Regeldatei:");
+                    if self.rules_file.trim().is_empty() {
+                        ui.weak("Standard");
+                    } else {
+                        ui.label(format::short_path(&self.rules_file, 56))
+                            .on_hover_text(&self.rules_file);
+                    }
                     if ui.button("Wählen …").clicked() {
                         shell.spawn(Route::Cleanup, TASK_PICK_RULES, TaskKind::Read, |_| {
                             Ok(crate::platform::shell::pick_file(
@@ -294,11 +527,27 @@ impl CleanupView {
                             ))
                         });
                     }
+                    if !self.rules_file.trim().is_empty() && ui.button("Standard").clicked() {
+                        self.rules_file.clear();
+                    }
                 });
-                ui.horizontal(|ui| {
-                    ui.label("Nur diese Regeln (Namen, kommagetrennt):");
-                    ui.add(egui::TextEdit::singleline(&mut self.only).desired_width(200.0));
-                });
+                match &self.rules_error {
+                    Some(e) => {
+                        let error = theme::tone_color(ui, format::Tone::Error);
+                        ui.colored_label(error, e);
+                    }
+                    None if !self.rules.is_empty() => {
+                        ui.label("Diese Regeln anwenden:");
+                        egui::ScrollArea::vertical()
+                            .max_height(160.0)
+                            .show(ui, |ui| {
+                                for (name, on) in &mut self.rules {
+                                    ui.checkbox(on, name.as_str());
+                                }
+                            });
+                    }
+                    None => {}
+                }
                 ui.checkbox(
                     &mut self.no_classify,
                     "Fehlende Inhalte nicht nachklassifizieren",
@@ -306,13 +555,24 @@ impl CleanupView {
             }
             _ => {}
         }
+    }
+
+    fn form_ui(&mut self, ui: &mut egui::Ui, shell: &mut Shell) {
+        let busy = shell
+            .runner
+            .running()
+            .iter()
+            .any(|r| r.kind == TaskKind::Write);
+        self.ensure_cards(shell);
+        self.ensure_rules(shell);
+        self.cards_ui(ui);
+        ui.add_space(8.0);
+        self.options_ui(ui, shell);
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             let ready = shell.target.is_some() && !busy;
-            if ui
-                .add_enabled(ready, egui::Button::new("Plan erzeugen"))
-                .clicked()
-            {
+            let button = egui::Button::new(egui::RichText::new("Plan erzeugen").strong());
+            if ui.add_enabled(ready, button).clicked() {
                 self.generate(shell);
             }
             if ui
@@ -326,25 +586,38 @@ impl CleanupView {
                     ))
                 });
             }
-            match &shell.target {
-                Some(t) => ui.label(format!("Ziel: {}", t.label())),
-                None => ui.label(texts::NO_ROOT_YET),
-            };
+            if shell.target.is_none() {
+                ui.weak("Wähle oben einen Ordner.");
+            }
         });
         ui.add_space(10.0);
         ui.heading("Zuletzt erzeugte Pläne");
         if self.recent.is_empty() {
             ui.label("Noch keine Pläne.");
         }
+        let now = chrono::Local::now();
         let mut open: Option<PathBuf> = None;
         for p in &self.recent {
             let when: chrono::DateTime<chrono::Local> = p.modified.into();
+            let (short, exact) = format::relative_time(now, when);
+            let text = match &p.info {
+                Some(i) => format!(
+                    "{short}  ·  {}  ·  {} Aktionen, {}  ·  {}",
+                    i.kind,
+                    texts::grouped(i.actions as u64),
+                    texts::bytes(i.bytes),
+                    format::short_path(&i.root, 40)
+                ),
+                None => format!(
+                    "{short}  ·  {}",
+                    p.path
+                        .file_name()
+                        .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+                ),
+            };
             if ui
-                .button(format!(
-                    "{}  {}",
-                    when.format("%d.%m.%Y %H:%M"),
-                    paths::display(&p.path)
-                ))
+                .button(text)
+                .on_hover_text(format!("{exact}\n{}", paths::display(&p.path)))
                 .clicked()
             {
                 open = Some(p.path.clone());
@@ -359,14 +632,13 @@ impl CleanupView {
         let Some(target) = shell.target.as_ref().map(|t| t.spec()) else {
             return;
         };
-        if self.kind == "dedupe" {
-            if let Err(e) = self.keep_strategy() {
-                return shell.message("Plan erzeugen", &e);
-            }
-        }
+        let kind = match self.kind_request() {
+            Ok(kind) => kind,
+            Err(e) => return shell.message("Plan erzeugen", &e),
+        };
         let req = PlanRequest {
             target,
-            kind: self.kind_request(),
+            kind,
             out: PlanOut::GuiDir,
         };
         shell.spawn(Route::Cleanup, TASK_PLAN, TaskKind::Write, move |ctx| {
@@ -443,6 +715,41 @@ impl CleanupView {
                 if let Ok(Ok(path)) = result.map(|b| b.downcast::<Option<PathBuf>>()) {
                     if let Some(path) = *path {
                         self.rules_file = paths::display(&path);
+                    }
+                }
+            }
+            TASK_PICK_KEEP => {
+                if let Ok(Ok(path)) = result.map(|b| b.downcast::<Option<PathBuf>>()) {
+                    if let Some(path) = *path {
+                        self.keep_path = paths::display(&path);
+                    }
+                }
+            }
+            TASK_FACTS => {
+                if let Ok(Ok(data)) = result.map(|b| b.downcast::<CardsData>()) {
+                    self.cards = Some(*data);
+                }
+            }
+            TASK_RULE_NAMES => {
+                if let Ok(Ok(names)) = result.map(|b| b.downcast::<Result<Vec<String>, String>>()) {
+                    match *names {
+                        Ok(names) => {
+                            // Bereits getroffene Auswahl bleibt, neue Regeln sind angehakt.
+                            let old = std::mem::take(&mut self.rules);
+                            self.rules = names
+                                .into_iter()
+                                .map(|n| {
+                                    let on =
+                                        old.iter().find(|(o, _)| *o == n).is_none_or(|(_, on)| *on);
+                                    (n, on)
+                                })
+                                .collect();
+                            self.rules_error = None;
+                        }
+                        Err(e) => {
+                            self.rules.clear();
+                            self.rules_error = Some(e);
+                        }
                     }
                 }
             }
@@ -540,5 +847,35 @@ mod tests {
             ["temp", "logs", "installer"]
         );
         assert!(words("  ").is_empty());
+    }
+
+    #[test]
+    fn plankopf_nennt_art_wurzel_anzahl_und_groesse() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plan.json");
+        let plan = Plan {
+            version: crate::change::plan::PLAN_VERSION,
+            created: "2026-10-08T10:00:00+02:00".into(),
+            kind: PlanKind::EmptyDirs,
+            root: r"D:\Daten".into(),
+            keep_strategy: None,
+            params: Default::default(),
+            protected_paths: Vec::new(),
+            actions: Vec::new(),
+            skipped: Vec::new(),
+        };
+        plan.save(&path).unwrap();
+        let info = plan_info(&path).unwrap();
+        assert_eq!(info.kind, "Leere Ordner");
+        assert_eq!(
+            (info.root.as_str(), info.actions, info.bytes),
+            (r"D:\Daten", 0, 0)
+        );
+        let junk = dir.path().join("kein-plan.json");
+        std::fs::write(&junk, "{}").unwrap();
+        assert_eq!(plan_info(&junk), None);
+        // `recent_plans` hängt den Kopf an.
+        let found = recent_plans(&[dir.path().to_path_buf()], 5);
+        assert_eq!(found.iter().filter(|p| p.info.is_some()).count(), 1);
     }
 }

@@ -176,7 +176,14 @@ Stufen 1–4 lassen sich jeweils nach den Schritten 7, 10, 15 und 20 mergen.
 
 **Stufe 2 (Schritte 8–10) ist umgesetzt.** Lauf-Tabelle (`format::run_row`, `run_kind`) in Übersicht und Verlauf, Wurzel- und Profil-Tabellen ohne Debug-Text, Kennzahl-Kacheln für Scan und Klassifizieren (`gui/result.rs`), Quarantäne-Zeile, „Öffnen“ und anklickbares „Zum Prüfen“, „Rückgängig …“ direkt in der Übersicht. Volle Suite grün (1633 Tests), Handtests in `docs/manual-tests.md`, Abschnitt 5b. Stufen 3 und 4 (Schritte 11–20) stehen aus.
 
+**Stufe 3 (Schritte 11–15) ist umgesetzt.** `views/cleanup_cards.rs` (Karten, `CardFacts`, Dauer-Felder, Regel-Häkchen, Regelnamen laden), Karten-Ansicht in `cleanup.rs`, lesbare Plan-Liste. Rauchtests in `tests/gui_cleanup_cards.rs`, Handtests in `docs/manual-tests.md`, Abschnitt 5c. Stufe 4 (Schritte 16–20) steht aus.
+
 Abweichungen vom Plan:
+
+- **Stufe 3, Karten-Layout:** `egui::Grid` mit breitenabhängiger Spaltenzahl statt `horizontal_wrapped` (Frames brechen dort nicht um); Karten-Labels sind nicht auswählbar, sonst fängt der Text den Klick ab. Karten tragen die Button-Rolle (Barrierefreiheit, Tests).
+- **Stufe 3, Zahlen:** `CardsData` (Report-Zahlen plus Config-Werte für die Platzhalter) lädt `CleanupView` selbst als Read-Task, neu bei Wechsel von Ziel oder `shell.generation`. Ohne Scan erscheinen die Karten ohne Zahl. Für Profile kommen die Platzhalter aus dem Profil.
+- **Stufe 3, Regeln:** Die Regeldatei wird beim Öffnen der Karte „Nach Regeln“ bzw. nach der Dateiwahl in einem Worker-Task gelesen (Standardpfad wie `plan rules`). `only` bleibt leer, wenn alle Regeln angehakt sind.
+- **Stufe 3, Plan-Liste:** `recent_plans` liest den Kopf (`PlanInfo`) der angezeigten Pläne im Worker, höchstens 12 Dateien.
 
 - **Stufe 2, `ScanReport`:** bekommt das Feld `score: Option<u8>` (`ops/scan.rs`), weil die Einordnung „72 – mittel“ die Zahl braucht und `score_line` nur Text ist. Die CLI ist davon nicht berührt.
 - **Stufe 2, `Goto`:** neues Feld `analysis_tab` (`problems`/`content`) und `AnalysisView::preselect_tab`, für „Fehler anzeigen“ und das „Zum Prüfen“-Badge.
