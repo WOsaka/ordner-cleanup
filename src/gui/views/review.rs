@@ -15,6 +15,19 @@ pub const ID_DEPENDENTS: &str = "cleanup.dependents";
 const ROW_H: f32 = 20.0;
 const SEARCH_ID: &str = "review-search";
 
+/// Abstand zwischen Trennlinie und Zellinhalt.
+fn cell_padding(ui: &mut egui::Ui) {
+    ui.add_space(6.0);
+}
+
+/// Dünne Trennlinie am rechten Zellrand, in der Theme-Farbe.
+fn cell_rule(ui: &egui::Ui) {
+    let rect = ui.max_rect();
+    let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+    ui.painter()
+        .vline(rect.right() - 0.5, rect.y_range(), stroke);
+}
+
 pub struct ReviewState {
     pub model: ReviewModel,
     pub plan_path: Option<std::path::PathBuf>,
@@ -273,9 +286,14 @@ impl ReviewState {
             .column(TCol::initial(110.0).resizable(true))
             .column(TCol::initial(380.0).resizable(true).clip(true))
             .column(TCol::initial(260.0).resizable(true).clip(true))
-            .column(TCol::initial(80.0))
+            .column(
+                TCol::initial(90.0)
+                    .at_least(70.0)
+                    .resizable(true)
+                    .clip(true),
+            )
             .column(TCol::remainder().clip(true))
-            .column(TCol::initial(80.0));
+            .column(TCol::initial(80.0).at_least(60.0));
         if let Some(row) = self.scroll_to.take() {
             builder = builder.scroll_to_row(row, None);
         }
@@ -294,6 +312,10 @@ impl ReviewState {
                             }
                             _ => "",
                         };
+                        if column != Column::Age {
+                            cell_rule(ui);
+                        }
+                        cell_padding(ui);
                         if ui.button(format!("{title}{mark}")).clicked() {
                             header_click = Some(column);
                         }
@@ -314,22 +336,32 @@ impl ReviewState {
                         }
                     });
                     row.col(|ui| {
+                        cell_rule(ui);
+                        cell_padding(ui);
                         ui.label(action_label(r.action));
                     });
                     row.col(|ui| {
+                        cell_rule(ui);
+                        cell_padding(ui);
                         ui.label(egui::RichText::new(&r.path).monospace());
                     });
                     row.col(|ui| {
+                        cell_rule(ui);
+                        cell_padding(ui);
                         ui.label(
                             egui::RichText::new(r.target.as_deref().unwrap_or("")).monospace(),
                         );
                     });
                     row.col(|ui| {
+                        cell_rule(ui);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.add_space(8.0);
                             ui.label(texts::bytes(r.size));
                         });
                     });
                     row.col(|ui| {
+                        cell_rule(ui);
+                        cell_padding(ui);
                         let text = match &r.rule {
                             Some(rule) => format!("{rule}: {}", r.reason),
                             None => r.reason.clone(),
@@ -337,6 +369,7 @@ impl ReviewState {
                         ui.label(text);
                     });
                     row.col(|ui| {
+                        cell_padding(ui);
                         ui.label(age_text(r.mtime_ticks));
                     });
                     let response = row.response();

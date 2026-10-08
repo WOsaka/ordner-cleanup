@@ -264,7 +264,10 @@ mod tests {
             let (columns, width) = card_layout(avail, CHROME, SPACING);
             let row = columns as f32 * (width + CHROME) + (columns - 1) as f32 * SPACING;
             let one_column_too_narrow = columns == 1 && avail < CARD_MIN_WIDTH + CHROME;
-            assert!(row <= avail || one_column_too_narrow, "avail {avail}: {row}");
+            assert!(
+                row <= avail || one_column_too_narrow,
+                "avail {avail}: {row}"
+            );
             assert!((CARD_MIN_WIDTH..=CARD_MAX_WIDTH).contains(&width));
             avail += 7.0;
         }

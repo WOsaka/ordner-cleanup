@@ -407,43 +407,50 @@ impl CleanupView {
         let spacing = 8.0;
         let chrome = egui::Frame::group(ui.style()).total_margin().sum().x;
         let (columns, card_width) = card_layout(ui.available_width(), chrome, spacing);
-        egui::Grid::new("cards").spacing([spacing, spacing]).show(ui, |ui| {
-            for (index, card) in CARDS.iter().enumerate() {
-                let selected = self.kind == card.key;
-                let color = if selected {
-                    palette.accent
-                } else {
-                    ui.visuals().widgets.noninteractive.bg_stroke.color
-                };
-                let frame = egui::Frame::group(ui.style())
-                    .stroke(egui::Stroke::new(if selected { 2.0 } else { 1.0 }, color));
-                let response = frame
-                    .show(ui, |ui| {
-                        // Auswählbarer Text finge den Klick ab, der die Karte wählen soll.
-                        ui.style_mut().interaction.selectable_labels = false;
-                        ui.set_width(card_width);
-                        ui.set_min_height(CARD_HEIGHT);
-                        ui.label(egui::RichText::new(card.title).strong());
-                        ui.add(egui::Label::new(card.text).wrap());
-                        if let Some(n) = facts.and_then(|f| f.number_text(card.key)) {
-                            ui.label(egui::RichText::new(n).strong());
-                        }
-                    })
-                    .response;
-                let click = response
-                    .interact(egui::Sense::click())
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                click.widget_info(|| {
-                    egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, card.title)
-                });
-                if click.clicked() {
-                    chosen = Some(card.key);
+        egui::Grid::new("cards")
+            .spacing([spacing, spacing])
+            .show(ui, |ui| {
+                for (index, card) in CARDS.iter().enumerate() {
+                    let selected = self.kind == card.key;
+                    let color = if selected {
+                        palette.accent
+                    } else {
+                        ui.visuals().widgets.noninteractive.bg_stroke.color
+                    };
+                    let frame = egui::Frame::group(ui.style())
+                        .stroke(egui::Stroke::new(if selected { 2.0 } else { 1.0 }, color));
+                    let response = frame
+                        .show(ui, |ui| {
+                            // Auswählbarer Text finge den Klick ab, der die Karte wählen soll.
+                            ui.style_mut().interaction.selectable_labels = false;
+                            ui.set_width(card_width);
+                            ui.set_min_height(CARD_HEIGHT);
+                            ui.label(egui::RichText::new(card.title).strong());
+                            ui.add(egui::Label::new(card.text).wrap());
+                            if let Some(n) = facts.and_then(|f| f.number_text(card.key)) {
+                                ui.label(egui::RichText::new(n).strong());
+                            }
+                        })
+                        .response;
+                    let click = response
+                        .interact(egui::Sense::click())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    click.widget_info(|| {
+                        egui::WidgetInfo::selected(
+                            egui::WidgetType::Button,
+                            true,
+                            selected,
+                            card.title,
+                        )
+                    });
+                    if click.clicked() {
+                        chosen = Some(card.key);
+                    }
+                    if (index + 1) % columns == 0 {
+                        ui.end_row();
+                    }
                 }
-                if (index + 1) % columns == 0 {
-                    ui.end_row();
-                }
-            }
-        });
+            });
         if let Some(key) = chosen {
             self.kind = key;
         }
