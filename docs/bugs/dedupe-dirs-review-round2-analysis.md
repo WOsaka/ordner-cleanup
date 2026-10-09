@@ -1,6 +1,6 @@
 ---
 title: "Analyse: dedupe-dirs — Code-Review Runde 2 (PR #8)"
-status: analysed
+status: fixed
 created: 2026-10-09
 updated: 2026-10-09
 previous: dedupe-dirs-review-findings-analysis.md

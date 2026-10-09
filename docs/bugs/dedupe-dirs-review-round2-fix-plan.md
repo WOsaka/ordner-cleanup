@@ -1,6 +1,7 @@
 ---
 title: "Fix-Plan: dedupe-dirs — Review Runde 2 (PR #8)"
-status: approved
+status: fixed
+fixed_at: 2026-10-09
 created: 2026-10-09
 updated: 2026-10-09
 analysis: dedupe-dirs-review-round2-analysis.md
