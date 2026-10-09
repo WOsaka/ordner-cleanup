@@ -123,7 +123,7 @@ fn obergrenze_dialog_braucht_den_haken() {
 fn alle_seiten_lassen_sich_ohne_daten_zeichnen() {
     use ordner_cleanup::gui::views::{
         analysis::AnalysisView, cleanup::CleanupView, history::HistoryView, overview::OverviewView,
-        settings::SettingsView,
+        quarantine::QuarantineView, settings::SettingsView,
     };
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let home = tempfile::tempdir().unwrap();
@@ -134,6 +134,7 @@ fn alle_seiten_lassen_sich_ohne_daten_zeichnen() {
         analysis: AnalysisView,
         cleanup: CleanupView,
         history: HistoryView,
+        quarantine: QuarantineView,
         settings: SettingsView,
     }
     let pages = Pages {
@@ -142,6 +143,7 @@ fn alle_seiten_lassen_sich_ohne_daten_zeichnen() {
         analysis: AnalysisView::default(),
         cleanup: CleanupView::default(),
         history: HistoryView::default(),
+        quarantine: QuarantineView::default(),
         settings: SettingsView::default(),
     };
     let mut harness = Harness::new_ui_state(
@@ -150,6 +152,7 @@ fn alle_seiten_lassen_sich_ohne_daten_zeichnen() {
             p.analysis.ui(ui, &mut p.shell);
             p.cleanup.ui(ui, &mut p.shell);
             p.history.ui(ui, &mut p.shell);
+            p.quarantine.ui(ui, &mut p.shell);
             p.settings.ui(ui, &mut p.shell);
         },
         pages,
@@ -247,4 +250,79 @@ fn review_laesst_sich_mit_der_tastatur_bedienen_und_anwenden_oeffnet_nur_den_dia
     // Nur das gemeldete Anwenden aus dem zweiten Strg+Enter kommt an; es startet nichts selbst.
     assert!(harness.state().apply_clicked);
     assert!(harness.state().shell.dialogs.is_empty());
+}
+
+fn quarantine_list(count: usize) -> ordner_cleanup::ops::quarantine::QuarantineList {
+    use ordner_cleanup::change::restore::QuarantineItem;
+    use ordner_cleanup::change::RunId;
+    use ordner_cleanup::ops::quarantine::{QuarantineList, RootItems};
+    let run = RunId::parse("20261003-120000-ab12").unwrap();
+    let items = (0..count)
+        .map(|i| QuarantineItem {
+            run: run.clone(),
+            action: i as u32 + 1,
+            origin: format!(r"D:\Daten\ordner{}\datei{i}.tmp", i % 50),
+            stored: format!(r"D:\Daten\.ordner-cleanup\quarantine\{run}\datei{i}.tmp"),
+            size: 1000,
+            hash: None,
+            is_dir: false,
+            file_count: None,
+            started: Some("2026-10-03T12:00:00Z".into()),
+            expires: None,
+            present: true,
+            cloud_only: false,
+        })
+        .collect();
+    QuarantineList {
+        roots: vec![RootItems {
+            root: r"D:\Daten".into(),
+            items,
+        }],
+        unreadable: 0,
+        unreachable: vec![],
+    }
+}
+
+#[test]
+fn quarantaene_zeigt_summe_und_zeilen_auch_bei_100000_eintraegen() {
+    use ordner_cleanup::gui::views::quarantine::QuarantineView;
+    struct State {
+        shell: Shell,
+        view: QuarantineView,
+    }
+    let mut view = QuarantineView::default();
+    let shell = Shell::new(eframe::egui::Context::default());
+    view.set_list(quarantine_list(100_000), shell.generation);
+    let mut harness = Harness::new_ui_state(
+        |ui, s: &mut State| s.view.ui(ui, &mut s.shell),
+        State { shell, view },
+    );
+    let started = std::time::Instant::now();
+    harness.run();
+    harness.get_by_label_contains("100.000 Einträge");
+    assert!(harness.query_all_by_label_contains("datei0.tmp").count() >= 1);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "nur sichtbare Zeilen werden gezeichnet: {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn leere_quarantaene_sagt_es() {
+    use ordner_cleanup::gui::views::quarantine::QuarantineView;
+    use ordner_cleanup::ops::quarantine::QuarantineList;
+    struct State {
+        shell: Shell,
+        view: QuarantineView,
+    }
+    let mut view = QuarantineView::default();
+    let shell = Shell::new(eframe::egui::Context::default());
+    view.set_list(QuarantineList::default(), shell.generation);
+    let mut harness = Harness::new_ui_state(
+        |ui, s: &mut State| s.view.ui(ui, &mut s.shell),
+        State { shell, view },
+    );
+    harness.run();
+    harness.get_by_label("Die Quarantäne ist leer.");
 }
