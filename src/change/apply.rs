@@ -2467,6 +2467,9 @@ mod tests {
 
     // --- dedupe-dirs: ganze Ordner in die Quarantäne ---
 
+    /// Änderung am Dateisystem samt Beschreibung für die Fehlermeldung.
+    type FxChange = (fn(&Fx), &'static str);
+
     fn dup_dirs(fx: &Fx) {
         for dir in ["Projekt", "Kopie von Projekt"] {
             fx.write(&format!("{dir}/a.txt"), "eins");
@@ -2503,7 +2506,7 @@ mod tests {
 
     #[test]
     fn neue_oder_geaenderte_datei_im_entfernten_ordner_ist_stale() {
-        let changes: [(fn(&Fx), &str); 3] = [
+        let changes: [FxChange; 3] = [
             (
                 |fx| drop(fx.write("Kopie von Projekt/neu.txt", "x")),
                 "neue Datei",
@@ -2537,7 +2540,7 @@ mod tests {
 
     #[test]
     fn geaenderter_behaltener_ordner_verhindert_das_entfernen() {
-        let changes: [(fn(&Fx), &str); 3] = [
+        let changes: [FxChange; 3] = [
             (|fx| drop(fx.write("Projekt/neu.txt", "x")), "neue Datei"),
             (
                 |fx| drop(fx.write("Projekt/a.txt", "anders lang")),
