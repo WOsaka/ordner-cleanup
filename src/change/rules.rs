@@ -613,6 +613,7 @@ pub fn plan_rules(
                 reason: format!("rule:{}", rule.name),
                 target: Some(paths::display(&target)),
                 is_dir: false,
+                keep_fingerprint: None,
                 files: None,
                 rule: Some(rule.name.clone()),
             },

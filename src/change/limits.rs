@@ -70,6 +70,7 @@ mod tests {
             reason: "test".into(),
             target: None,
             is_dir: false,
+            keep_fingerprint: None,
             files: None,
             rule: None,
         }

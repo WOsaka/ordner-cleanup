@@ -65,6 +65,7 @@ impl Fx {
                     reason: "exact-duplicate".into(),
                     target: None,
                     is_dir: false,
+                    keep_fingerprint: None,
                     files: None,
                     rule: None,
                 }
@@ -105,6 +106,7 @@ impl Fx {
                     reason: "junk:temp".into(),
                     target: None,
                     is_dir: false,
+                    keep_fingerprint: None,
                     files: None,
                     rule: None,
                 }
@@ -150,6 +152,7 @@ impl Fx {
                     reason: "empty-dir".into(),
                     target: None,
                     is_dir: true,
+                    keep_fingerprint: None,
                     files: None,
                     rule: None,
                 }
@@ -193,6 +196,7 @@ impl Fx {
                     reason: "archive:older-than-2y".into(),
                     target: Some(paths::display(&target)),
                     is_dir: true,
+                    keep_fingerprint: None,
                     files: Some(files),
                     rule: None,
                 }
@@ -232,6 +236,7 @@ impl Fx {
                     reason: "older-version".into(),
                     target: Some(paths::display(&self.root.join("_Archiv").join(target))),
                     is_dir: false,
+                    keep_fingerprint: None,
                     files: None,
                     rule: None,
                 }
@@ -272,6 +277,7 @@ impl Fx {
                     reason: "rule:r".into(),
                     target: Some(paths::display(&self.root.join(target))),
                     is_dir: false,
+                    keep_fingerprint: None,
                     files: None,
                     rule: Some("r".into()),
                 }

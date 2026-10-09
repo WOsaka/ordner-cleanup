@@ -90,6 +90,7 @@ pub struct PlanInfo {
 pub fn kind_title(kind: PlanKind) -> &'static str {
     let key = match kind {
         PlanKind::Dedupe => "dedupe",
+        PlanKind::DedupeDirs => "dedupe-dirs",
         PlanKind::Junk => "junk",
         PlanKind::EmptyDirs => "empty-dirs",
         PlanKind::Archive => "archive",

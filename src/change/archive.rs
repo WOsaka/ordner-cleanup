@@ -151,6 +151,7 @@ pub fn plan_archive(
                 reason: format!("archive:older-than-{}", options.older_than),
                 target: Some(paths::display(&target)),
                 is_dir: true,
+                keep_fingerprint: None,
                 files: Some(stats.files),
                 rule: None,
             },

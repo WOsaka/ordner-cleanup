@@ -217,6 +217,7 @@ pub fn plan_junk(
                 reason: format!("junk:{}", cat.name),
                 target: None,
                 is_dir: false,
+                keep_fingerprint: None,
                 files: None,
                 rule: None,
             },

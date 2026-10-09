@@ -57,6 +57,8 @@ pub struct ActionResult {
     pub id: u32,
     pub path: String,
     pub kind: ActionType,
+    /// Aktion auf einem ganzen Ordner (`quarantine` in `dedupe-dirs`).
+    pub is_dir: bool,
     /// `move` einer Regel (Einsortieren oder Umbenennen).
     pub sorted: bool,
     pub status: ActionStatus,
@@ -86,7 +88,7 @@ impl ApplyOutcome {
             if r.sorted {
                 counts.count_sorted();
             } else {
-                counts.count(r.kind);
+                counts.count(r.kind, r.is_dir);
             }
         }
         counts
@@ -796,6 +798,7 @@ pub fn apply_plan(plan: &Plan, env: &ApplyEnv) -> Result<ApplyOutcome, ApplyErro
             id: action.id,
             path: action.path.clone(),
             kind: action.action,
+            is_dir: action.is_dir,
             sorted: plan.kind == PlanKind::Rules && action.action == ActionType::Move,
             status,
         };
@@ -2094,6 +2097,7 @@ mod tests {
                     id: 1,
                     path: String::new(),
                     kind: ActionType::Quarantine,
+                    is_dir: false,
                     sorted: false,
                     status,
                 })

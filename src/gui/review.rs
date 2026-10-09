@@ -465,6 +465,7 @@ mod tests {
             reason: "junk:temp".into(),
             target: None,
             is_dir: kind == ActionType::RemoveDir,
+            keep_fingerprint: None,
             files: None,
             rule: None,
         }

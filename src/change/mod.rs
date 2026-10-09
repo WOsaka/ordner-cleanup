@@ -100,11 +100,14 @@ pub struct ActionCounts {
     pub dirs_removed: usize,
     /// Einsortierte bzw. umbenannte Dateien (`move` in Plänen der Art `rules`).
     pub sorted: usize,
+    /// Ganze Ordner in der Quarantäne (`quarantine` mit `is_dir`, Plan `dedupe-dirs`).
+    pub dirs_quarantined: usize,
 }
 
 impl ActionCounts {
-    pub fn count(&mut self, action: plan::ActionType) {
+    pub fn count(&mut self, action: plan::ActionType, is_dir: bool) {
         match action {
+            plan::ActionType::Quarantine if is_dir => self.dirs_quarantined += 1,
             plan::ActionType::Quarantine => self.quarantined += 1,
             plan::ActionType::Move => self.archived += 1,
             plan::ActionType::RemoveDir => self.dirs_removed += 1,
@@ -122,14 +125,14 @@ impl ActionCounts {
             if plan.kind == plan::PlanKind::Rules && a.action == plan::ActionType::Move {
                 counts.count_sorted();
             } else {
-                counts.count(a.action);
+                counts.count(a.action, a.is_dir);
             }
         }
         counts
     }
 
     pub fn total(&self) -> usize {
-        self.quarantined + self.archived + self.dirs_removed + self.sorted
+        self.quarantined + self.dirs_quarantined + self.archived + self.dirs_removed + self.sorted
     }
 
     fn join(parts: Vec<String>, empty: &str) -> String {
@@ -147,6 +150,12 @@ impl ActionCounts {
             parts.push(format!(
                 "{} Dateien in die Quarantäne verschieben",
                 self.quarantined
+            ));
+        }
+        if self.dirs_quarantined > 0 {
+            parts.push(format!(
+                "{} Ordner in die Quarantäne verschieben",
+                self.dirs_quarantined
             ));
         }
         if self.archived > 0 {
@@ -170,6 +179,12 @@ impl ActionCounts {
         if self.quarantined > 0 {
             parts.push(format!("{} in die Quarantäne verschoben", self.quarantined));
         }
+        if self.dirs_quarantined > 0 {
+            parts.push(format!(
+                "{} Ordner in die Quarantäne verschoben",
+                self.dirs_quarantined
+            ));
+        }
         if self.archived > 0 {
             parts.push(format!("{} nach _Archiv verschoben", self.archived));
         }
@@ -191,6 +206,9 @@ impl ActionCounts {
                 self.quarantined,
                 bytesize::ByteSize::b(quarantine_bytes)
             ));
+        }
+        if self.dirs_quarantined > 0 {
+            parts.push(format!("{} Ordner (Quarantäne)", self.dirs_quarantined));
         }
         if self.archived > 0 {
             parts.push(format!("{} Archiv", self.archived));
@@ -250,6 +268,10 @@ pub enum SkipReason {
     MissingField,
     /// `rules`: `min_dwell` ist noch nicht erreicht (Zeit seit Ankunft im Ordner).
     TooRecentArrival,
+    /// `dedupe-dirs`: Der behaltene Ordner hat sich seit dem Plan geändert.
+    KeepChanged,
+    /// `dedupe-dirs`: Inhalt nicht prüfbar (Cloud-only oder ohne Hash).
+    Unverifiable,
 }
 
 impl fmt::Display for SkipReason {
@@ -279,6 +301,8 @@ impl fmt::Display for SkipReason {
             Self::NotClassified => "Inhalt noch nicht klassifiziert",
             Self::MissingField => "Feld für das Ziel fehlt",
             Self::TooRecentArrival => "zu kurz im Ordner (Wartezeit nicht erreicht)",
+            Self::KeepChanged => "behaltener Ordner seit dem Plan geändert",
+            Self::Unverifiable => "Inhalt nicht prüfbar (Cloud-only oder ohne Hash)",
         })
     }
 }
@@ -334,7 +358,50 @@ mod tests {
             archived,
             dirs_removed,
             sorted: 0,
+            dirs_quarantined: 0,
         }
+    }
+
+    #[test]
+    fn ordner_quarantaene_hat_eigene_zaehlung_und_texte() {
+        let mut c = ActionCounts::default();
+        c.count(plan::ActionType::Quarantine, true);
+        c.count(plan::ActionType::Quarantine, true);
+        c.count(plan::ActionType::Quarantine, false);
+        c.count(plan::ActionType::RemoveDir, true);
+        assert_eq!(
+            (c.dirs_quarantined, c.quarantined, c.dirs_removed),
+            (2, 1, 1)
+        );
+        assert_eq!(c.total(), 4);
+        let only_dirs = ActionCounts {
+            dirs_quarantined: 2,
+            ..ActionCounts::default()
+        };
+        assert_eq!(
+            only_dirs.plan_text(),
+            "2 Ordner in die Quarantäne verschieben"
+        );
+        assert_eq!(
+            only_dirs.done_text(),
+            "2 Ordner in die Quarantäne verschoben"
+        );
+        assert_eq!(only_dirs.short_text(0), "2 Ordner (Quarantäne)");
+    }
+
+    #[rstest]
+    #[case(SkipReason::KeepChanged, "keep-changed", "behaltener Ordner")]
+    #[case(SkipReason::Unverifiable, "unverifiable", "nicht prüfbar")]
+    fn skip_reasons_dedupe_dirs(
+        #[case] reason: SkipReason,
+        #[case] json: &str,
+        #[case] text: &str,
+    ) {
+        assert_eq!(
+            serde_json::to_string(&reason).unwrap(),
+            format!("\"{json}\"")
+        );
+        assert!(reason.to_string().contains(text), "{reason}");
     }
 
     #[rstest]
@@ -397,6 +464,7 @@ mod tests {
                 reason: String::new(),
                 target: Some(r"D:\Daten\F\a".into()),
                 is_dir: false,
+                keep_fingerprint: None,
                 files: None,
                 rule: Some("r".into()),
             }],
@@ -409,10 +477,10 @@ mod tests {
     #[test]
     fn aktionen_werden_nach_typ_gezaehlt() {
         let mut c = ActionCounts::default();
-        c.count(plan::ActionType::Quarantine);
-        c.count(plan::ActionType::Quarantine);
-        c.count(plan::ActionType::Move);
-        c.count(plan::ActionType::RemoveDir);
+        c.count(plan::ActionType::Quarantine, false);
+        c.count(plan::ActionType::Quarantine, false);
+        c.count(plan::ActionType::Move, false);
+        c.count(plan::ActionType::RemoveDir, true);
         assert_eq!(c, counts(2, 1, 1));
         assert_eq!(c.total(), 4);
         assert_eq!(ActionCounts::default().total(), 0);
@@ -476,6 +544,7 @@ mod tests {
             reason: String::new(),
             target: None,
             is_dir: false,
+            keep_fingerprint: None,
             files: None,
             rule: None,
         };

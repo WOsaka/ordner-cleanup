@@ -263,6 +263,9 @@ pub fn run_kind(counts: &ActionCounts) -> String {
     if counts.quarantined > 0 {
         parts.push(format!("{} in Quarantäne", counts.quarantined));
     }
+    if counts.dirs_quarantined > 0 {
+        parts.push(format!("{} Ordner in Quarantäne", counts.dirs_quarantined));
+    }
     if counts.archived > 0 {
         parts.push(format!("{} archiviert", counts.archived));
     }
@@ -531,7 +534,22 @@ mod tests {
             archived,
             dirs_removed: dirs,
             sorted,
+            dirs_quarantined: 0,
         }
+    }
+
+    #[test]
+    fn laufart_nennt_ordner_in_quarantaene() {
+        let c = ActionCounts {
+            dirs_quarantined: 2,
+            ..counts(0, 0, 0, 0)
+        };
+        assert_eq!(run_kind(&c), "2 Ordner in Quarantäne");
+        let one = ActionCounts {
+            dirs_quarantined: 1,
+            ..counts(0, 0, 0, 0)
+        };
+        assert_eq!(run_kind(&one), "1 Ordner in Quarantäne");
     }
 
     #[test]

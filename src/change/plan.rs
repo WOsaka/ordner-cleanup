@@ -34,6 +34,7 @@ pub enum PlanError {
 #[serde(rename_all = "kebab-case")]
 pub enum PlanKind {
     Dedupe,
+    DedupeDirs,
     Junk,
     EmptyDirs,
     Archive,
@@ -97,6 +98,9 @@ pub struct PlannedAction {
     /// `move` eines ganzen Ordners; `size`/`mtime_ticks` sind dann Summe bzw. jüngste mtime.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_dir: bool,
+    /// Metadaten-Fingerabdruck des behaltenen Ordners (nur `dedupe-dirs`, 32 Hex).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_fingerprint: Option<String>,
     /// Dateianzahl eines verschobenen Ordners.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<u64>,
@@ -321,8 +325,30 @@ impl Plan {
                 "rule gibt es nur in Plänen der Art rules".into()
             });
         }
+        let is_dir_dedupe = self.kind == PlanKind::DedupeDirs;
+        if a.keep_fingerprint.is_some() && !(is_dir_dedupe && a.action == ActionType::Quarantine) {
+            return invalid("keep_fingerprint gibt es nur bei dedupe-dirs".into());
+        }
         match a.action {
             ActionType::Quarantine => {
+                if a.is_dir && !is_dir_dedupe {
+                    return invalid(
+                        "Ordner-Quarantäne gibt es nur in Plänen der Art dedupe-dirs".into(),
+                    );
+                }
+                if is_dir_dedupe {
+                    if !a.is_dir {
+                        return invalid(
+                            "ein dedupe-dirs-Plan enthält nur Ordner-Quarantänen".into(),
+                        );
+                    }
+                    if a.files.is_none() {
+                        return invalid("Ordner braucht die Dateianzahl (files)".into());
+                    }
+                    if !a.keep_fingerprint.as_deref().is_some_and(is_hash) {
+                        return invalid("Ordner braucht keep_fingerprint (xxh3-128-Hex)".into());
+                    }
+                }
                 let present = [&a.hash, &a.keep, &a.keep_hash]
                     .iter()
                     .filter(|f| f.is_some())
@@ -330,7 +356,7 @@ impl Plan {
                 if present != 0 && present != 3 {
                     return invalid("hash, keep und keep_hash gelten nur gemeinsam".into());
                 }
-                if self.kind == PlanKind::Dedupe && present == 0 {
+                if matches!(self.kind, PlanKind::Dedupe | PlanKind::DedupeDirs) && present == 0 {
                     return invalid("Hash der Aktion fehlt".into());
                 }
                 if let (Some(hash), Some(keep_hash), Some(keep)) = (&a.hash, &a.keep_hash, &a.keep)
@@ -341,8 +367,14 @@ impl Plan {
                     if hash != keep_hash {
                         return invalid("Hash und keep_hash weichen ab".into());
                     }
-                    if paths::path_key(Path::new(keep)) == key {
+                    let keep_key = paths::path_key(Path::new(keep));
+                    if keep_key == key {
                         return invalid("Pfad entspricht der behaltenen Datei".into());
+                    }
+                    if a.is_dir
+                        && (paths::is_under(&key, &keep_key) || paths::is_under(&keep_key, &key))
+                    {
+                        return invalid("Ordner liegt im oder über dem behaltenen Ordner".into());
                     }
                 }
                 if a.target.is_some() {
@@ -467,6 +499,7 @@ mod tests {
             reason: "exact-duplicate".into(),
             target: None,
             is_dir: false,
+            keep_fingerprint: None,
             files: None,
             rule: None,
         }
@@ -1096,5 +1129,105 @@ mod tests {
         let loaded = Plan::from_json(&json).unwrap();
         assert_eq!(loaded.actions[0].rule, None);
         assert_eq!(loaded.version, PLAN_VERSION);
+    }
+
+    const FP: &str = "fedcba9876543210fedcba9876543210";
+
+    fn dir_action(id: u32, path: &str, keep: &str) -> PlannedAction {
+        PlannedAction {
+            reason: "exact-duplicate-dir".into(),
+            is_dir: true,
+            files: Some(3),
+            keep_fingerprint: Some(FP.into()),
+            ..action(id, path, keep)
+        }
+    }
+
+    fn dirs_plan(actions: Vec<PlannedAction>) -> Plan {
+        plan_of(PlanKind::DedupeDirs, actions)
+    }
+
+    fn invalid_message(p: &Plan) -> String {
+        match p.validate() {
+            Err(PlanError::Invalid(msg)) => msg,
+            other => panic!("erwartet Invalid, bekam {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dedupe_dirs_plan_ist_verlustfrei_serialisierbar() {
+        let p = dirs_plan(vec![dir_action(1, r"D:\Daten\Kopie von P", r"D:\Daten\P")]);
+        assert!(p.validate().is_ok());
+        let json = p.to_json();
+        assert!(json.contains("\"dedupe-dirs\""));
+        assert!(json.contains("keep_fingerprint"));
+        assert_eq!(Plan::from_json(&json).unwrap(), p);
+    }
+
+    #[test]
+    fn ordner_quarantaene_braucht_alle_pflichtfelder() {
+        let base = || dir_action(1, r"D:\Daten\B", r"D:\Daten\A");
+        let mut no_fp = base();
+        no_fp.keep_fingerprint = None;
+        assert!(invalid_message(&dirs_plan(vec![no_fp])).contains("keep_fingerprint"));
+        let mut no_files = base();
+        no_files.files = None;
+        assert!(invalid_message(&dirs_plan(vec![no_files])).contains("files"));
+        let mut no_hash = base();
+        (no_hash.hash, no_hash.keep, no_hash.keep_hash) = (None, None, None);
+        assert!(!invalid_message(&dirs_plan(vec![no_hash])).is_empty());
+        let mut bad_fp = base();
+        bad_fp.keep_fingerprint = Some("zz".into());
+        assert!(invalid_message(&dirs_plan(vec![bad_fp])).contains("keep_fingerprint"));
+    }
+
+    #[test]
+    fn dedupe_dirs_plan_enthaelt_nur_ordner_quarantaenen() {
+        let file_action = action(1, r"D:\Daten\B\x.txt", r"D:\Daten\A\x.txt");
+        assert!(!invalid_message(&dirs_plan(vec![file_action])).is_empty());
+    }
+
+    #[test]
+    fn ordner_quarantaene_gibt_es_nur_in_dedupe_dirs() {
+        let p = plan(vec![dir_action(1, r"D:\Daten\B", r"D:\Daten\A")]);
+        assert!(invalid_message(&p).contains("dedupe-dirs"));
+    }
+
+    #[test]
+    fn keep_fingerprint_ist_ausserhalb_von_dedupe_dirs_verboten() {
+        let mut a = action(1, r"D:\Daten\b\x.txt", r"D:\Daten\a\x.txt");
+        a.keep_fingerprint = Some(FP.into());
+        assert!(invalid_message(&plan(vec![a])).contains("keep_fingerprint"));
+    }
+
+    #[test]
+    fn ordner_aktion_darf_nicht_in_oder_ueber_dem_behaltenen_ordner_liegen() {
+        let inside = dirs_plan(vec![dir_action(1, r"D:\Daten\A\sub", r"D:\Daten\A")]);
+        assert!(invalid_message(&inside).contains("behalten"));
+        let above = dirs_plan(vec![dir_action(1, r"D:\Daten", r"D:\Daten\A")]);
+        assert!(!invalid_message(&above).is_empty());
+        let same = dirs_plan(vec![dir_action(1, r"D:\Daten\A", r"D:\Daten\A")]);
+        assert!(!invalid_message(&same).is_empty());
+        let sibling_prefix = dirs_plan(vec![dir_action(1, r"D:\Daten\AB", r"D:\Daten\A")]);
+        assert!(
+            sibling_prefix.validate().is_ok(),
+            "A und AB sind Geschwister"
+        );
+    }
+
+    #[test]
+    fn ordner_quarantaene_ist_abhaengigkeit_der_darin_liegenden_aktion() {
+        let outer = dir_action(1, r"D:\Daten\B", r"D:\Daten\A");
+        let inner = dir_action(2, r"D:\Daten\B\sub", r"D:\Daten\A\sub");
+        let p = dirs_plan(vec![outer, inner]);
+        assert_eq!(dependents(&p, 2), vec![1]);
+        assert!(dependents(&p, 1).is_empty());
+    }
+
+    #[test]
+    fn plan_ohne_keep_fingerprint_bleibt_gueltig_und_schreibt_das_feld_nicht() {
+        let json = ok_plan().to_json();
+        assert!(!json.contains("keep_fingerprint"));
+        assert!(Plan::from_json(&json).is_ok());
     }
 }

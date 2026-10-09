@@ -123,6 +123,7 @@ enum OpKind {
         to: String,
         size: u64,
         dest: Dest,
+        is_dir: bool,
     },
     RemoveDir {
         path: String,
@@ -174,6 +175,7 @@ fn collect_ops(entries: &[Entry]) -> Vec<Op> {
                 to,
                 size,
                 dest,
+                is_dir,
                 ..
             } => Some((
                 *action,
@@ -182,6 +184,7 @@ fn collect_ops(entries: &[Entry]) -> Vec<Op> {
                     to: to.clone(),
                     size: *size,
                     dest: *dest,
+                    is_dir: *is_dir,
                 },
             )),
             Entry::IntentRemoveDir {
@@ -609,6 +612,11 @@ fn summarize(run: RunId, entries: &[Entry], quarantine_days: u32) -> RunSummary 
             ActionCounts::default(),
             |mut counts, o| {
                 match o.kind {
+                    OpKind::Move {
+                        dest: Dest::Quarantine,
+                        is_dir: true,
+                        ..
+                    } => counts.dirs_quarantined += 1,
                     OpKind::Move {
                         dest: Dest::Quarantine,
                         ..

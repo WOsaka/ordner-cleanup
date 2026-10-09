@@ -481,6 +481,7 @@ mod confirm_tests {
             reason: String::new(),
             target: None,
             is_dir: false,
+            keep_fingerprint: None,
             files: None,
             rule: None,
         };
