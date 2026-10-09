@@ -74,7 +74,7 @@ Alle Phasen 1 bis 6d sind im Code umgesetzt. Die folgenden Ideen stammen aus den
 
 ### 7.0 Konsolidieren vor neuen Features
 - Offene Handtests abarbeiten (GUI 5a bis 5e, geplante Läufe mit Toast, LLM-Spikes, VM/RDP), vor allem den **echten Cloud-only-Platzhalter**
-- Rundreise-Property-Tests: zufälliger Baum → Plan → Apply → Undo ergibt den Ausgangsbaum bitgleich
+- ~~Rundreise-Property-Tests: zufälliger Baum → Plan → Apply → Undo ergibt den Ausgangsbaum bitgleich~~ erledigt: `tests/roundtrip_random.rs` (alle sechs Planer in zufälliger Reihenfolge, Idempotenz je Planer, Undo rückwärts; 8 Seeds in `cargo test`, weitere per `--ignored`)
 - Lasttest mit ca. 1 Mio. Dateien (Index-Größe, Speicher der GUI-Tabellen, inkrementeller Scan)
 - Plan-Integrität: Hash der Plan-Datei, vor dem Apply geprüft
 - Release 1.0 taggen
