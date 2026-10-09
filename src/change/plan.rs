@@ -314,8 +314,9 @@ impl Plan {
     /// SHA-256 der kanonischen Form (kompaktes JSON in Feldreihenfolge der Struktur, ohne
     /// `integrity`) als `sha256:<hex>`.
     pub fn integrity(&self) -> String {
-        // Reine Strukturen mit String-Schlüsseln: Serialisieren kann nicht fehlschlagen.
-        let canonical = serde_json::to_string(self).unwrap_or_default();
+        // Reine Strukturen mit String-Schlüsseln: Serialisieren kann nicht fehlschlagen. Lieber
+        // laut scheitern, als jeden Plan mit dem Hash des leeren Strings zu „schützen“.
+        let canonical = serde_json::to_string(self).expect("Plan ist serialisierbar");
         format!(
             "{INTEGRITY_PREFIX}{}",
             hex(&Sha256::digest(canonical.as_bytes()))
@@ -355,11 +356,15 @@ impl Plan {
         let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
         tmp_name.push(".tmp");
         let tmp = path.with_file_name(tmp_name);
+        // `create_new`: eine vorhandene Datei (fremde `.tmp`, parallel laufendes `plan seal`)
+        // wird weder überschrieben noch von uns aufgeräumt.
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(paths::extended(&tmp))?;
         let written = (|| {
-            let mut file = std::fs::File::create(paths::extended(&tmp))?;
             file.write_all(self.to_json().as_bytes())?;
             file.sync_all()?;
-            drop(file);
             std::fs::rename(paths::extended(&tmp), paths::extended(path))
         })();
         if written.is_err() {

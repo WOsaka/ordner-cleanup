@@ -636,8 +636,6 @@ fn plan_rules_kind(
     Ok(outcome)
 }
 
-/// Teilplan neben dem Original speichern: `<stem>-auswahl-<Zeitstempel>.json`, sonst im
-/// GUI-Planordner. Das Original bleibt unverändert; `params` nennt Herkunft und Anzahl.
 /// Vorschau für `plan seal`: der gelesene Plan, der Zustand seiner Prüfsumme und die Prüfsumme
 /// nach dem Versiegeln.
 #[derive(Debug)]
@@ -669,6 +667,8 @@ pub fn seal_write(path: &Path, plan: &Plan) -> Result<()> {
         .with_context(|| format!("Plan-Datei {} nicht schreibbar", paths::display(path)))
 }
 
+/// Teilplan neben dem Original speichern: `<stem>-auswahl-<Zeitstempel>.json`, sonst im
+/// GUI-Planordner. Das Original bleibt unverändert; `params` nennt Herkunft und Anzahl.
 pub fn save_subset(
     original: &Path,
     plan: &Plan,
