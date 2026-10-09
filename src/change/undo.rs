@@ -117,7 +117,7 @@ pub struct RunSummary {
 }
 
 /// Was eine Aktion laut Journal bewirkt hat.
-enum OpKind {
+pub(super) enum OpKind {
     Move {
         from: String,
         to: String,
@@ -134,18 +134,18 @@ enum OpKind {
 }
 
 /// Eine Aktion aus dem Journal mit ihrem bekannten Ausgang.
-struct Op {
-    action: u32,
-    kind: OpKind,
-    done: bool,
+pub(super) struct Op {
+    pub(super) action: u32,
+    pub(super) kind: OpKind,
+    pub(super) done: bool,
     /// Fehlgeschlagen oder nach dem `intent` übersprungen: es wurde nichts verändert.
-    failed: bool,
-    undone: bool,
+    pub(super) failed: bool,
+    pub(super) undone: bool,
 }
 
 impl Op {
     /// Ursprungspfad: dorthin führt Undo zurück.
-    fn origin(&self) -> &str {
+    pub(super) fn origin(&self) -> &str {
         match &self.kind {
             OpKind::Move { from, .. } => from,
             OpKind::RemoveDir { path, .. } => path,
@@ -154,7 +154,7 @@ impl Op {
 
     /// Nach `purge` ist nur der Inhalt der Quarantäne verloren; Archiv-Moves und entfernte
     /// leere Ordner bleiben wiederherstellbar.
-    fn lives_in_quarantine(&self) -> bool {
+    pub(super) fn lives_in_quarantine(&self) -> bool {
         matches!(
             self.kind,
             OpKind::Move {
@@ -165,7 +165,7 @@ impl Op {
     }
 }
 
-fn collect_ops(entries: &[Entry]) -> Vec<Op> {
+pub(super) fn collect_ops(entries: &[Entry]) -> Vec<Op> {
     let mut ops: Vec<Op> = Vec::new();
     for entry in entries {
         let started = match entry {
@@ -230,8 +230,22 @@ fn collect_ops(entries: &[Entry]) -> Vec<Op> {
     ops
 }
 
+/// Prüft einen Journal-Move vor jeder Dateioperation: `from` liegt echt unter der Wurzel,
+/// `to` echt unter `stop` (Quarantäne- bzw. Archivordner des Laufs), keine `.`/`..`-Teile.
+pub(super) fn move_is_sane(root_key: &str, stop: &Path, from: &str, to: &str) -> bool {
+    let stop_key = paths::path_key(stop);
+    let (from, to) = (Path::new(from), Path::new(to));
+    let (from_key, to_key) = (paths::path_key(from), paths::path_key(to));
+    !has_dot_component(&paths::display(from))
+        && !has_dot_component(&paths::display(to))
+        && from_key != root_key
+        && paths::is_under(&from_key, root_key)
+        && to_key != stop_key
+        && paths::is_under(&to_key, &stop_key)
+}
+
 /// Lädt und prüft das Journal: gehört es zu dieser Wurzel und zu diesem Lauf?
-fn load(root: &Path, run: &RunId) -> Result<Vec<Entry>, UndoError> {
+pub(super) fn load(root: &Path, run: &RunId) -> Result<Vec<Entry>, UndoError> {
     let path = quarantine::journal_path(root, run);
     if std::fs::metadata(paths::extended(&path)).is_err() {
         return Err(UndoError::NotFound(run.clone()));
@@ -295,22 +309,13 @@ impl Restore<'_> {
         stop: &Path,
         cleanup: bool,
     ) -> Result<RestoreStatus, UndoError> {
-        let allowed_key = paths::path_key(stop);
-        let allowed_key = allowed_key.as_str();
-        let (from, to) = (Path::new(from), Path::new(to));
-        let (from_key, to_key) = (paths::path_key(from), paths::path_key(to));
-        let sane = !has_dot_component(&paths::display(from))
-            && !has_dot_component(&paths::display(to))
-            && from_key != self.root_key
-            && paths::is_under(&from_key, self.root_key)
-            && to_key != allowed_key
-            && paths::is_under(&to_key, allowed_key);
-        if !sane {
+        if !move_is_sane(self.root_key, stop, from, to) {
             return Ok(RestoreStatus::Failed(
                 "Journal-Eintrag verweist außerhalb von Wurzel oder Quarantäne".into(),
             ));
         }
-        if from_key == to_key {
+        let (from, to) = (Path::new(from), Path::new(to));
+        if paths::path_key(from) == paths::path_key(to) {
             return self.rename_back_case(action, from, to);
         }
         let (in_quarantine, at_origin) = (self.env.fs.exists(to), self.env.fs.exists(from));
@@ -756,6 +761,26 @@ mod tests {
 
     fn run_id() -> RunId {
         RunId::parse(RUN).unwrap()
+    }
+
+    #[test]
+    fn move_is_sane_prueft_wurzel_und_quarantaene() {
+        let root = paths::path_key(Path::new(r"D:\Daten"));
+        let stop = Path::new(r"D:\Daten\.ordner-cleanup\quarantine\r");
+        let ok = |from: &str, to: &str| move_is_sane(&root, stop, from, to);
+        let q = r"D:\Daten\.ordner-cleanup\quarantine\r\a.txt";
+        assert!(ok(r"D:\Daten\a.txt", q));
+        assert!(!ok(r"D:\Anders\a.txt", q), "Ursprung außerhalb der Wurzel");
+        assert!(!ok(r"D:\Daten", q), "Ursprung ist die Wurzel selbst");
+        assert!(!ok(r"D:\Daten\..\a.txt", q), "Punkt-Komponente");
+        assert!(
+            !ok(r"D:\Daten\a.txt", r"D:\Daten\x\a.txt"),
+            "Ziel außerhalb der Quarantäne"
+        );
+        assert!(
+            !ok(r"D:\Daten\a.txt", r"D:\Daten\.ordner-cleanup\quarantine\r"),
+            "Ziel gleich Stop-Ordner"
+        );
     }
 
     fn undo(fx: &Fx) -> UndoOutcome {
