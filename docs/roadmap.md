@@ -109,6 +109,8 @@ Alle Phasen 1 bis 6d sind im Code umgesetzt. Die folgenden Ideen stammen aus den
 - Explorer-Kontextmenü (HKCU, ohne Admin) und Tray-Icon mit Score
 - Quarantäne-Ansicht: Inhalt, Größe, Ablauf, einzelne Dateien zurückholen
 - Monatsbilanz („12,4 GB frei geräumt, Score 61 → 78“)
+- Vorher/Nachher-Bilanz pro Lauf: direkt nach `apply` zeigen, wie viel Platz frei wurde und wie sich der Health-Score verändert hat (kleinere Vorstufe der Monatsbilanz)
+- Plan-Vorschau als Baumvergleich: im Review die Ordnerstruktur vor und nach dem Plan nebeneinander, vor allem für Regel-Engine und Neuorganisation
 
 ### 7.5 Weitergabe
 - Erststart-Assistent (Ordner → Profil → Scan → Ergebnis)
@@ -160,3 +162,4 @@ Kleine Sofortgewinne zwischendurch: Explorer-Kontextmenü, Inhalts-Hash als Cach
 | Phase 6d: GUI-Hilfe (Kurztexte zu Seiten, Karten und Review, F1, Link zur Doku) | [`features/gui-hilfe.md`](features/gui-hilfe.md), Plan: [`implementation-plans/gui-hilfe.md`](implementation-plans/gui-hilfe.md) | Im Code umgesetzt (Schritte 1 bis 9); Handtests in `manual-tests.md` 5e offen |
 | 7.1: Duplikate ganzer Ordner (`plan dedupe-dirs`) | [`features/ordner-duplikate.md`](features/ordner-duplikate.md), Plan: [`implementation-plans/ordner-duplikate.md`](implementation-plans/ordner-duplikate.md) | Umgesetzt (`plan dedupe-dirs`, Bericht, GUI-Karte, Rundreise-Test); offen: Handtest auf echten Ordnern (`manual-tests.md` 1a) |
 | 7.0: Plan-Integrität (Prüfsumme der Plan-Datei, `plan seal`, Exit-Code 3) | [`features/plan-integritaet.md`](features/plan-integritaet.md), Plan: [`implementation-plans/plan-integritaet.md`](implementation-plans/plan-integritaet.md) | Umgesetzt (Plan-Format v3, Prüfung in CLI und GUI, `plan seal`); offen: Handtest mit Notepad und GUI (`manual-tests.md` 1b) |
+| 7.4: Quarantäne-Ansicht (Inhalt, Größe, Ablauf, einzelne Einträge zurückholen; nur GUI) | [`features/quarantaene-ansicht.md`](features/quarantaene-ansicht.md) | Spec-Entwurf (draft) |
