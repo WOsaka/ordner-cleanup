@@ -1,7 +1,7 @@
 ---
 title: "Implementation Plan: Duplikate ganzer Ordner (plan dedupe-dirs)"
 feature_spec: docs/features/ordner-duplikate.md
-status: pending-approval   # pending-approval | approved | implemented
+status: approved
 created: 2026-10-09
 updated: 2026-10-09
 ---
