@@ -45,6 +45,7 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Schedule(cmd) => schedule::schedule_command(&cmd),
         Command::Index(cmd) => index_command(&cmd),
         Command::Plan(PlanCommand::Dedupe(args)) => plan::plan_dedupe_command(&args),
+        Command::Plan(PlanCommand::DedupeDirs(args)) => plan::plan_dedupe_dirs_command(&args),
         Command::Plan(PlanCommand::Junk(args)) => plan::plan_junk_command(&args),
         Command::Plan(PlanCommand::EmptyDirs(args)) => plan::plan_empty_dirs_command(&args),
         Command::Plan(PlanCommand::Archive(args)) => plan::plan_archive_command(&args),

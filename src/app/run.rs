@@ -11,8 +11,8 @@ use super::{now_rfc3339, plan, print_scan_result, resolve_root};
 use crate::change::dedupe::KeepStrategy;
 use crate::change::plan::Plan;
 use crate::cli::{
-    PlanArchiveArgs, PlanDedupeArgs, PlanEmptyDirsArgs, PlanJunkArgs, PlanRulesArgs,
-    PlanVersionsArgs, RunArgs,
+    PlanArchiveArgs, PlanDedupeArgs, PlanDedupeDirsArgs, PlanEmptyDirsArgs, PlanJunkArgs,
+    PlanRulesArgs, PlanVersionsArgs, RunArgs,
 };
 use crate::notify::{self, OpenTarget};
 use crate::ops::report::{build_report, missed_runs_notes};
@@ -286,6 +286,13 @@ fn make_plan(name: &str, kind: &str, stamp: &str) -> PlanRecord {
             path: None,
             profile,
             keep: KeepStrategy::Oldest,
+            out: out_arg,
+        }),
+        "dedupe-dirs" => plan::plan_dedupe_dirs_command(&PlanDedupeDirsArgs {
+            path: None,
+            profile,
+            keep: KeepStrategy::Oldest,
+            min_size: None,
             out: out_arg,
         }),
         other => return fail(format!("unbekannter Plan '{other}'")),

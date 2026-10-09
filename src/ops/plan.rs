@@ -17,6 +17,7 @@ use super::{
 use crate::analysis::age::parse_old_after;
 use crate::change::archive::{plan_archive, ArchiveOptions};
 use crate::change::dedupe::{plan_dedupe, KeepStrategy};
+use crate::change::dedupe_dirs::{plan_dedupe_dirs, DedupeDirsOptions};
 use crate::change::empty_dirs::plan_empty_dirs;
 use crate::change::junk::{plan_junk, JunkOptions};
 use crate::change::limits;
@@ -38,6 +39,11 @@ use crate::rules::{KnownCategories, RuleSet};
 pub enum PlanKindRequest {
     Dedupe {
         keep: KeepStrategy,
+    },
+    DedupeDirs {
+        keep: KeepStrategy,
+        /// Nur Gruppen ab dieser Größe
+        min_size: Option<u64>,
     },
     Junk {
         /// Leer = `junk_categories` der Config
@@ -256,6 +262,40 @@ fn plan_cleanup(
                 headline,
                 result.freed_bytes,
                 Vec::new(),
+                prep,
+            )
+        }
+        PlanKindRequest::DedupeDirs { keep, min_size } => {
+            let result = plan_dedupe_dirs(
+                &p.index,
+                &p.root,
+                keep,
+                &p.protector,
+                &now_rfc3339(),
+                &DedupeDirsOptions {
+                    min_size: *min_size,
+                    copy_patterns: p.config.dedupe_dirs_copy_patterns.clone(),
+                },
+            )?;
+            let plan = result.plan;
+            let headline = format!(
+                "{} doppelte Ordner, {} freiwerdend, {} übersprungen (Strategie: {})",
+                plan.actions.len(),
+                ByteSize::b(result.freed_bytes),
+                plan.skipped.len(),
+                plan.keep_strategy.as_deref().unwrap_or("-")
+            );
+            let notes = vec![
+                "Erst doppelte Ordner bereinigen, dann einzelne Duplikate (`plan dedupe`)."
+                    .to_string(),
+            ];
+            finish(
+                plan,
+                &p.config,
+                &req.out,
+                headline,
+                result.freed_bytes,
+                notes,
                 prep,
             )
         }

@@ -174,6 +174,8 @@ pub struct PurgeArgs {
 pub enum PlanCommand {
     /// Exakte Duplikate in die Quarantäne planen
     Dedupe(PlanDedupeArgs),
+    /// Doppelte ganze Ordner (gleicher Inhalt an gleichen Pfaden) in die Quarantäne planen
+    DedupeDirs(PlanDedupeDirsArgs),
     /// Müll (Temp-, Lock- und Download-Reste, alte Installer) in die Quarantäne planen
     Junk(PlanJunkArgs),
     /// Leere Ordner (rekursiv, von unten nach oben) zum Entfernen planen
@@ -223,6 +225,31 @@ pub struct PlanDedupeArgs {
     /// Zieldatei für den Plan (Default: plan-<Zeitstempel>.json im aktuellen Ordner)
     #[arg(long)]
     pub out: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct PlanDedupeDirsArgs {
+    /// Bereits gescannter Ordner (oder `--profile`)
+    #[arg(required_unless_present = "profile", conflicts_with = "profile")]
+    pub path: Option<PathBuf>,
+    /// Profil aus der Config statt Pfad und Optionen
+    #[arg(long)]
+    pub profile: Option<String>,
+    /// Welcher Ordner bleibt (nach der Namens-Heuristik): oldest, newest oder path:<absoluter Ordner>
+    #[arg(long, default_value = "oldest")]
+    pub keep: KeepStrategy,
+    /// Nur Ordner ab dieser Größe (z. B. 10MB)
+    #[arg(long, value_parser = parse_min_size)]
+    pub min_size: Option<u64>,
+    /// Zieldatei für den Plan (Default: plan-<Zeitstempel>.json im aktuellen Ordner)
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+}
+
+fn parse_min_size(text: &str) -> Result<u64, String> {
+    text.parse::<bytesize::ByteSize>()
+        .map(|b| b.as_u64())
+        .map_err(|_| format!("Ungültige Größe '{text}' (erwartet z. B. 10MB, 1GB)"))
 }
 
 #[derive(Debug, Args)]

@@ -7,8 +7,8 @@ use anyhow::Result;
 
 use super::global_cancel_flag;
 use crate::cli::{
-    PlanArchiveArgs, PlanDedupeArgs, PlanEmptyDirsArgs, PlanJunkArgs, PlanRulesArgs,
-    PlanVersionsArgs,
+    PlanArchiveArgs, PlanDedupeArgs, PlanDedupeDirsArgs, PlanEmptyDirsArgs, PlanJunkArgs,
+    PlanRulesArgs, PlanVersionsArgs,
 };
 use crate::ops::plan::{plan, PlanKindRequest, PlanOut, PlanOutcome, PlanRequest};
 use crate::ops::target::TargetSpec;
@@ -79,6 +79,18 @@ pub(super) fn plan_dedupe_command(args: &PlanDedupeArgs) -> Result<i32> {
         args.profile.as_deref(),
         PlanKindRequest::Dedupe {
             keep: args.keep.clone(),
+        },
+        args.out.as_ref(),
+    )
+}
+
+pub(super) fn plan_dedupe_dirs_command(args: &PlanDedupeDirsArgs) -> Result<i32> {
+    run_plan(
+        args.path.as_deref(),
+        args.profile.as_deref(),
+        PlanKindRequest::DedupeDirs {
+            keep: args.keep.clone(),
+            min_size: args.min_size,
         },
         args.out.as_ref(),
     )
