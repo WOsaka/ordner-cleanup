@@ -2,6 +2,7 @@
 
 pub mod age;
 pub mod filetypes;
+pub mod folder_dups;
 pub mod problems;
 pub mod similar;
 pub mod structure;

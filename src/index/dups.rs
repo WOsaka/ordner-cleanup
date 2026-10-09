@@ -49,6 +49,15 @@ pub struct DupGroup {
     pub files: Vec<DupFile>,
 }
 
+/// Voller Hash einer lokalen, nicht verlinkten Datei samt Identität (für Ordner-Duplikate).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileHash {
+    pub hash: Vec<u8>,
+    /// `(volume_serial, file_index)`; gleich bei Hardlinks derselben Datei.
+    pub identity: Option<(i64, i64)>,
+    pub nlinks: i64,
+}
+
 const LOCAL_FILE: &str = "cloud_only = 0 AND is_link = 0 AND size > 0";
 
 impl Index {
@@ -179,5 +188,88 @@ impl Index {
                 .then_with(|| a.files[0].path.cmp(&b.files[0].path))
         });
         Ok(result)
+    }
+
+    /// Volle Hashes aller Dateien unterhalb des Ordners, die einen gültigen Hash haben
+    /// (`hash_status = 'ok'`, lokal, kein Link), je Datei-Schlüssel.
+    pub fn file_hashes_under(&self, dir_key: &str) -> Result<HashMap<String, FileHash>> {
+        let (lo, hi) = paths::prefix_range(dir_key);
+        let mut stmt = self.conn().prepare(
+            "SELECT path_key, full_hash, volume_serial, file_index, nlinks FROM files
+             WHERE path_key >= ?1 AND path_key < ?2 AND full_hash IS NOT NULL
+               AND hash_status = 'ok' AND cloud_only = 0 AND is_link = 0",
+        )?;
+        let rows = stmt.query_map(params![lo, hi], |r| {
+            let volume: Option<i64> = r.get(2)?;
+            let index: Option<i64> = r.get(3)?;
+            Ok((
+                r.get::<_, String>(0)?,
+                FileHash {
+                    hash: r.get(1)?,
+                    identity: volume.zip(index),
+                    nlinks: r.get::<_, Option<i64>>(4)?.unwrap_or(1),
+                },
+            ))
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+    use crate::index::FileRecord;
+
+    #[test]
+    fn file_hashes_under_liefert_nur_gueltige_lokale_hashes() {
+        let mut idx = Index::open_in_memory().unwrap();
+        let root = r"D:\Daten";
+        let root_key = paths::dir_key(Path::new(root));
+        let run = idx.begin_root(root, &root_key, "t").unwrap();
+        let rec =
+            |name: &str, hash: Option<Vec<u8>>, status: Option<&str>, cloud: bool, link: bool| {
+                let path = format!(r"D:\Daten\{name}");
+                FileRecord {
+                    dir_key: root_key.clone(),
+                    path_key: paths::path_key(Path::new(&path)),
+                    path,
+                    name: name.into(),
+                    size: 5,
+                    full_hash: hash,
+                    hash_status: status.map(String::from),
+                    cloud_only: cloud,
+                    is_link: link,
+                    ..FileRecord::default()
+                }
+            };
+        idx.upsert_files(
+            &[
+                rec("ok.txt", Some(vec![1; 16]), Some("ok"), false, false),
+                rec("fehler.txt", Some(vec![2; 16]), Some("error"), false, false),
+                rec("ohne.txt", None, None, false, false),
+                rec("wolke.txt", Some(vec![3; 16]), Some("ok"), true, false),
+                rec("verweis.txt", Some(vec![4; 16]), Some("ok"), false, true),
+            ],
+            run.generation,
+        )
+        .unwrap();
+        idx.store_hash_updates(&[HashUpdate {
+            id: 1,
+            volume_serial: Some(7),
+            file_index: Some(9),
+            nlinks: Some(2),
+            full_hash: Some(vec![1; 16]),
+            hash_status: Some("ok".into()),
+            ..HashUpdate::default()
+        }])
+        .unwrap();
+
+        let hashes = idx.file_hashes_under(&root_key).unwrap();
+        assert_eq!(hashes.len(), 1);
+        let h = &hashes[&paths::path_key(Path::new(r"D:\Daten\ok.txt"))];
+        assert_eq!(h.hash, vec![1; 16]);
+        assert_eq!((h.identity, h.nlinks), (Some((7, 9)), 2));
     }
 }
