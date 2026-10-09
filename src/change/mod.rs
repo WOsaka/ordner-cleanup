@@ -467,6 +467,7 @@ mod tests {
                 target: Some(r"D:\Daten\F\a".into()),
                 is_dir: false,
                 keep_fingerprint: None,
+                source_fingerprint: None,
                 files: None,
                 rule: Some("r".into()),
             }],
@@ -547,6 +548,7 @@ mod tests {
             target: None,
             is_dir: false,
             keep_fingerprint: None,
+            source_fingerprint: None,
             files: None,
             rule: None,
         };

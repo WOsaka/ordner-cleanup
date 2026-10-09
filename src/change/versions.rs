@@ -125,6 +125,7 @@ pub fn plan_versions(
                         target: Some(paths::display(&target)),
                         is_dir: false,
                         keep_fingerprint: None,
+                        source_fingerprint: None,
                         files: None,
                         rule: None,
                     },

@@ -71,6 +71,7 @@ mod tests {
             target: None,
             is_dir: false,
             keep_fingerprint: None,
+            source_fingerprint: None,
             files: None,
             rule: None,
         }

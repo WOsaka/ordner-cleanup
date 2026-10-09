@@ -101,6 +101,10 @@ pub struct PlannedAction {
     /// Metadaten-Fingerabdruck des behaltenen Ordners (nur `dedupe-dirs`, 32 Hex).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep_fingerprint: Option<String>,
+    /// Metadaten-Fingerabdruck des entfernten Ordners (nur `dedupe-dirs`, 32 Hex). Fehlt er
+    /// (ältere Pläne), prüft `apply` die Quelle nur über Dateianzahl, Summe und jüngste mtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_fingerprint: Option<String>,
     /// Dateianzahl eines verschobenen Ordners.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<u64>,
@@ -364,6 +368,14 @@ impl Plan {
         if a.keep_fingerprint.is_some() && !(is_dir_dedupe && a.action == ActionType::Quarantine) {
             return invalid("keep_fingerprint gibt es nur bei dedupe-dirs".into());
         }
+        if let Some(print) = &a.source_fingerprint {
+            if !(is_dir_dedupe && a.action == ActionType::Quarantine) {
+                return invalid("source_fingerprint gibt es nur bei dedupe-dirs".into());
+            }
+            if !is_hash(print) {
+                return invalid("source_fingerprint ist kein xxh3-128-Hex".into());
+            }
+        }
         match a.action {
             ActionType::Quarantine => {
                 if a.is_dir && !is_dir_dedupe {
@@ -535,6 +547,7 @@ mod tests {
             target: None,
             is_dir: false,
             keep_fingerprint: None,
+            source_fingerprint: None,
             files: None,
             rule: None,
         }
@@ -1174,6 +1187,7 @@ mod tests {
             is_dir: true,
             files: Some(3),
             keep_fingerprint: Some(FP.into()),
+            source_fingerprint: None,
             ..action(id, path, keep)
         }
     }
@@ -1247,6 +1261,31 @@ mod tests {
             dir_action(2, r"D:\Daten\B\sub", r"D:\Daten\A\sub"),
         ]);
         assert!(invalid_message(&p).contains("selbst entfernt wird"));
+    }
+
+    #[test]
+    fn source_fingerprint_gibt_es_nur_bei_dedupe_dirs_und_muss_ein_hash_sein() {
+        let mut ok = dir_action(1, r"D:\Daten\B", r"D:\Daten\A");
+        ok.source_fingerprint = Some(FP.into());
+        assert!(dirs_plan(vec![ok.clone()]).validate().is_ok());
+        assert!(dirs_plan(vec![ok.clone()])
+            .to_json()
+            .contains("source_fingerprint"));
+
+        let mut bad = ok.clone();
+        bad.source_fingerprint = Some("zz".into());
+        assert!(invalid_message(&dirs_plan(vec![bad])).contains("source_fingerprint"));
+
+        let mut elsewhere = action(1, r"D:\Daten\B\x.txt", r"D:\Daten\A\x.txt");
+        elsewhere.source_fingerprint = Some(FP.into());
+        assert!(invalid_message(&plan(vec![elsewhere])).contains("source_fingerprint"));
+    }
+
+    #[test]
+    fn plan_ohne_source_fingerprint_bleibt_gueltig_und_schreibt_das_feld_nicht() {
+        let p = dirs_plan(vec![dir_action(1, r"D:\Daten\B", r"D:\Daten\A")]);
+        assert!(p.validate().is_ok());
+        assert!(!p.to_json().contains("source_fingerprint"));
     }
 
     #[test]

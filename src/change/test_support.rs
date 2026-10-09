@@ -66,6 +66,7 @@ impl Fx {
                     target: None,
                     is_dir: false,
                     keep_fingerprint: None,
+                    source_fingerprint: None,
                     files: None,
                     rule: None,
                 }
@@ -107,6 +108,7 @@ impl Fx {
                     target: None,
                     is_dir: false,
                     keep_fingerprint: None,
+                    source_fingerprint: None,
                     files: None,
                     rule: None,
                 }
@@ -153,6 +155,7 @@ impl Fx {
                     target: None,
                     is_dir: true,
                     keep_fingerprint: None,
+                    source_fingerprint: None,
                     files: None,
                     rule: None,
                 }
@@ -197,6 +200,7 @@ impl Fx {
                     target: Some(paths::display(&target)),
                     is_dir: true,
                     keep_fingerprint: None,
+                    source_fingerprint: None,
                     files: Some(files),
                     rule: None,
                 }
@@ -237,6 +241,7 @@ impl Fx {
                     target: Some(paths::display(&self.root.join("_Archiv").join(target))),
                     is_dir: false,
                     keep_fingerprint: None,
+                    source_fingerprint: None,
                     files: None,
                     rule: None,
                 }
@@ -278,6 +283,7 @@ impl Fx {
                     target: Some(paths::display(&self.root.join(target))),
                     is_dir: false,
                     keep_fingerprint: None,
+                    source_fingerprint: None,
                     files: None,
                     rule: Some("r".into()),
                 }
@@ -322,6 +328,12 @@ impl Fx {
                     target: None,
                     is_dir: true,
                     keep_fingerprint: Some(format!("{print:032x}")),
+                    source_fingerprint: Some(format!(
+                        "{:032x}",
+                        crate::analysis::folder_dups::meta_fingerprint(
+                            walk_entries(&dup).into_iter()
+                        )
+                    )),
                     files: Some(files),
                     rule: None,
                 }

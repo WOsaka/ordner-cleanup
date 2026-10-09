@@ -266,6 +266,7 @@ pub fn plan_dedupe_dirs(
                     target: None,
                     is_dir: true,
                     keep_fingerprint: Some(keep_print.clone()),
+                    source_fingerprint: Some(hex128(meta_print(&tree, key))),
                     files: Some(stats.files),
                     rule: None,
                 },
@@ -860,6 +861,31 @@ mod tests {
         assert_eq!(paths_of(&plan), [r"Z:\Root\P\Z", r"Z:\Root\W"]);
         assert_eq!(plan.actions[0].keep.as_deref(), Some(r"Z:\Root\P\Y"));
         assert_eq!(plan.actions[1].keep.as_deref(), Some(r"Z:\Root\P\Y\x"));
+    }
+
+    #[test]
+    fn jede_aktion_traegt_den_fingerabdruck_ihrer_quelle() {
+        let index = seed(&[
+            (r"Z:\Root\Projekt\a.txt", 100, 1),
+            (r"Z:\Root\Projekt\sub\b.txt", 100, 2),
+            (r"Z:\Root\Kopie von Projekt\a.txt", 200, 1),
+            (r"Z:\Root\Kopie von Projekt\sub\b.txt", 200, 2),
+        ]);
+        let root_key = paths::dir_key(Path::new(ROOT));
+        let tree = Tree::new(
+            index.dirs_under(&root_key).unwrap(),
+            index.files_under(&root_key).unwrap(),
+        );
+        let plan = plan_of(&index).plan;
+        assert_eq!(plan.actions.len(), 1);
+        let action = &plan.actions[0];
+        let key = paths::dir_key(Path::new(&action.path));
+        assert_eq!(
+            action.source_fingerprint.as_deref(),
+            Some(hex128(meta_print(&tree, &key)).as_str())
+        );
+        // Die Quelle hat andere mtimes als der behaltene Ordner.
+        assert_ne!(action.source_fingerprint, action.keep_fingerprint);
     }
 
     #[test]

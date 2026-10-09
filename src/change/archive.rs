@@ -128,6 +128,7 @@ pub fn plan_archive(
                 target: Some(paths::display(&target)),
                 is_dir: true,
                 keep_fingerprint: None,
+                source_fingerprint: None,
                 files: Some(stats.files),
                 rule: None,
             },

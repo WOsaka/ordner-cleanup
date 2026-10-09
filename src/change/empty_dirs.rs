@@ -136,6 +136,7 @@ pub fn plan_empty_dirs(
                 target: None,
                 is_dir: true,
                 keep_fingerprint: None,
+                source_fingerprint: None,
                 files: None,
                 rule: None,
             });

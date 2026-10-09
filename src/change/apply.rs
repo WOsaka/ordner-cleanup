@@ -618,6 +618,19 @@ fn read_problem(e: &io::Error) -> KeepProblem {
     }
 }
 
+/// `dedupe-dirs`: Der entfernte Ordner muss noch dieselben Dateien (relativer Pfad, Größe, mtime)
+/// haben wie beim Planen. Pläne ohne `source_fingerprint` bleiben bei der groben Prüfung.
+fn verify_source_fingerprint(a: &PlannedAction, env: &ApplyEnv) -> Result<(), Verdict> {
+    let Some(expected) = &a.source_fingerprint else {
+        return Ok(());
+    };
+    match dir_fingerprint(Path::new(&a.path), env) {
+        Ok(print) if format!("{print:032x}") == *expected => Ok(()),
+        Ok(_) | Err(KeepProblem::Missing) => Err(Verdict::Skip(SkipReason::Stale)),
+        Err(KeepProblem::Unusable) => Err(Verdict::Skip(SkipReason::Unverifiable)),
+    }
+}
+
 /// `dedupe-dirs`: Der behaltene Ordner muss noch so aussehen wie beim Planen (einmal je Ordner
 /// und Fingerabdruck, Ergebnis wird gemerkt).
 fn verify_keep_dir(
@@ -651,6 +664,7 @@ fn verify_quarantine_dir(
         return Err(Verdict::Skip(SkipReason::InArchive));
     }
     verify_dir_source(a, env)?;
+    verify_source_fingerprint(a, env)?;
     let (Some(keep), Some(expected)) = (&a.keep, &a.keep_fingerprint) else {
         return Err(Verdict::Fail("Ordner-Aktion ohne behaltenen Ordner".into()));
     };
@@ -2568,6 +2582,43 @@ mod tests {
             assert!(fx.exists("Kopie von Projekt"), "{what}");
             assert_eq!(dir_intents(&fx.journal(RUN)), 0, "{what}: kein intent");
         }
+    }
+
+    #[test]
+    fn umbenannte_datei_im_entfernten_ordner_ist_stale() {
+        let fx = fx();
+        dup_dirs(&fx);
+        let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+        // Anzahl, Summe und jüngste mtime bleiben gleich.
+        std::fs::rename(
+            fx.root.join("Kopie von Projekt/a.txt"),
+            fx.root.join("Kopie von Projekt/umbenannt.txt"),
+        )
+        .unwrap();
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::Stale)
+        );
+        assert!(fx.exists("Kopie von Projekt/umbenannt.txt"));
+        assert_eq!(dir_intents(&fx.journal(RUN)), 0, "kein intent");
+    }
+
+    #[test]
+    fn plan_ohne_source_fingerprint_wird_wie_bisher_grob_geprueft() {
+        let fx = fx();
+        dup_dirs(&fx);
+        let mut plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+        plan.actions[0].source_fingerprint = None;
+        std::fs::rename(
+            fx.root.join("Kopie von Projekt/a.txt"),
+            fx.root.join("Kopie von Projekt/umbenannt.txt"),
+        )
+        .unwrap();
+
+        assert_eq!(apply(&fx, &plan).executed(), 1);
     }
 
     #[test]

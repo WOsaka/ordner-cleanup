@@ -32,6 +32,7 @@ fn plan(n: u32) -> Plan {
                 target: None,
                 is_dir: false,
                 keep_fingerprint: None,
+                source_fingerprint: None,
                 files: None,
                 rule: None,
             })
