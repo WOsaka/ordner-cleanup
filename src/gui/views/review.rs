@@ -12,6 +12,7 @@ use crate::gui::shell::{Dialog, Shell};
 use crate::gui::texts;
 use crate::gui::widgets::help_button::help_button;
 use crate::gui::widgets::table::path_menu;
+use crate::ops::apply::unprotected_note;
 
 pub const ID_DEPENDENTS: &str = "cleanup.dependents";
 const ROW_H: f32 = 24.0;
@@ -36,6 +37,8 @@ pub struct ReviewState {
     pub notes: Vec<String>,
     /// Was mit den Dateien geschieht (Quarantäne, Verschieben), einmal beim Öffnen ermittelt
     safety: String,
+    /// Hinweis bei Plänen ohne Prüfsumme (Format 1 und 2)
+    unprotected: Option<String>,
     text: String,
     folder: String,
     min_mb: String,
@@ -94,12 +97,14 @@ impl ReviewState {
         notes: Vec<String>,
     ) -> Self {
         let safety = safety_for(model.plan());
+        let unprotected = unprotected_note(model.plan().version);
         Self {
             model,
             plan_path,
             headline,
             notes,
             safety,
+            unprotected,
             text: String::new(),
             folder: String::new(),
             min_mb: String::new(),
@@ -150,6 +155,9 @@ impl ReviewState {
                 shell.open_help(Topic::Review);
             }
         });
+        if let Some(note) = &self.unprotected {
+            ui.colored_label(crate::gui::theme::tone_color(ui, format::Tone::Warn), note);
+        }
         for n in &self.notes {
             ui.label(egui::RichText::new(format!("Hinweis: {n}")).weak());
         }
@@ -552,6 +560,16 @@ fn age_text(mtime_ticks: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alter_plan_bekommt_den_hinweis_ungeschuetzt() {
+        assert_eq!(
+            unprotected_note(2).as_deref(),
+            Some("Ungeschützter Plan (Format 2): Änderungen an der Datei werden nicht erkannt.")
+        );
+        assert!(unprotected_note(1).unwrap().contains("Format 1"));
+        assert_eq!(unprotected_note(crate::change::plan::PLAN_VERSION), None);
+    }
 
     #[test]
     fn megabyte_eingaben_werden_in_bytes_umgerechnet() {

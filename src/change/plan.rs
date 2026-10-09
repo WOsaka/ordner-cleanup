@@ -34,7 +34,8 @@ pub enum PlanError {
     #[error("Plan ist ungültig: {0}")]
     Invalid(String),
     #[error(
-        "Plan wurde nach dem Erstellen verändert (Prüfsumme erwartet {}…, gefunden {}…).          Bewusst geändert? Mit `ordner-cleanup plan seal <datei>` neu versiegeln.",
+        "Plan wurde nach dem Erstellen verändert (Prüfsumme erwartet {}…, gefunden {}…). \
+         Bewusst geändert? Mit `ordner-cleanup plan seal <datei>` neu versiegeln.",
         short_integrity(.stored),
         short_integrity(.actual)
     )]
@@ -1549,6 +1550,7 @@ mod tests {
                 let msg = e.to_string();
                 assert!(msg.contains("verändert"), "{msg}");
                 assert!(msg.contains("plan seal"), "{msg}");
+                assert!(msg.contains("…). Bewusst geändert?"), "{msg}");
                 assert!(!msg.contains("Daten"), "keine Pfade: {msg}");
             }
             other => panic!("erwartet Tampered, bekam {other:?}"),

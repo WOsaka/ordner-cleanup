@@ -7,7 +7,7 @@ use std::time::SystemTime;
 use eframe::egui;
 
 use super::analysis::request_for;
-use super::apply::{ApplyFlow, ID_APPLY};
+use super::apply::{ApplyFlow, ID_APPLY, ID_RELOAD};
 use super::cleanup_cards::{
     card_layout, duration_placeholder, only_from_checks, rule_names, CardFacts, DurationField,
     CARDS,
@@ -714,6 +714,11 @@ impl CleanupView {
     pub fn on_answer(&mut self, id: &str, answer: Answer, shell: &mut Shell) {
         match id {
             ID_APPLY => self.apply.on_answer(shell, answer),
+            ID_RELOAD => {
+                if let Some(path) = self.apply.reload.take().filter(|_| answer.ok) {
+                    self.open_plan(shell, path);
+                }
+            }
             ID_UNDO => self.undo.on_answer(shell, Route::Cleanup, answer),
             ID_DEPENDENTS => {
                 if let Some(r) = &mut self.review {

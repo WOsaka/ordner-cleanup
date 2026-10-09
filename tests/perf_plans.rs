@@ -383,11 +383,8 @@ fn plan_rules_mit_10000_jpegs_liest_beim_zweiten_lauf_aus_dem_cache() {
     );
 }
 
-/// `Plan::validate` bleibt bei vielen Aktionen schnell (Laden, Anwenden und Teilplan rufen es auf):
 /// 100.000 Datei-Verschiebungen und 1.000 Ordner-Verschiebungen ins Archiv.
-#[test]
-#[ignore = "Performance-Messung, siehe Modul-Dokumentation"]
-fn plan_validate_schafft_100000_aktionen_mit_1000_ordnern_in_unter_zwei_sekunden() {
+fn big_archive_plan() -> ordner_cleanup::change::plan::Plan {
     use ordner_cleanup::change::plan::{ActionType, Plan, PlanKind, PlannedAction, PLAN_VERSION};
 
     let root = r"Z:\Root";
@@ -426,7 +423,7 @@ fn plan_validate_schafft_100000_aktionen_mit_1000_ordnern_in_unter_zwei_sekunden
             false,
         ));
     }
-    let plan = Plan {
+    Plan {
         version: PLAN_VERSION,
         created: "t".into(),
         kind: PlanKind::Archive,
@@ -436,7 +433,14 @@ fn plan_validate_schafft_100000_aktionen_mit_1000_ordnern_in_unter_zwei_sekunden
         protected_paths: Vec::new(),
         actions,
         skipped: Vec::new(),
-    };
+    }
+}
+
+/// `Plan::validate` bleibt bei vielen Aktionen schnell (Laden, Anwenden und Teilplan rufen es auf).
+#[test]
+#[ignore = "Performance-Messung, siehe Modul-Dokumentation"]
+fn plan_validate_schafft_100000_aktionen_mit_1000_ordnern_in_unter_zwei_sekunden() {
+    let plan = big_archive_plan();
     let start = Instant::now();
     plan.validate().unwrap();
     let elapsed = start.elapsed();
@@ -444,6 +448,31 @@ fn plan_validate_schafft_100000_aktionen_mit_1000_ordnern_in_unter_zwei_sekunden
     assert!(
         elapsed < Duration::from_secs(2),
         "validate braucht {elapsed:?} (Grenze 2 s)"
+    );
+}
+
+/// Laden eines großen Plans samt Prüfsumme (parsen, kanonisch serialisieren, SHA-256, validate)
+/// und versiegeltes Schreiben.
+#[test]
+#[ignore = "Performance-Messung, siehe Modul-Dokumentation"]
+fn plan_laden_mit_pruefsumme_schafft_100000_aktionen_in_unter_drei_sekunden() {
+    use ordner_cleanup::change::plan::Plan;
+
+    let plan = big_archive_plan();
+    let start = Instant::now();
+    let json = plan.to_json();
+    let written = start.elapsed();
+    let start = Instant::now();
+    let loaded = Plan::from_json(&json).unwrap();
+    let elapsed = start.elapsed();
+    println!(
+        "to_json: {written:.2?}, from_json: {elapsed:.2?} ({} MB)",
+        json.len() / 1_000_000
+    );
+    assert_eq!(loaded.actions.len(), plan.actions.len());
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "Laden braucht {elapsed:?} (Grenze 3 s)"
     );
 }
 

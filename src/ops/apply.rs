@@ -9,7 +9,7 @@ use super::{onedrive_roots_from_env, onedrive_warning, Error, Notes, OpCtx};
 use crate::change::apply::{apply_plan, ApplyEnv, ApplyOutcome};
 use crate::change::fsops::RealFs;
 use crate::change::limits;
-use crate::change::plan::{Plan, PLAN_VERSION};
+use crate::change::plan::{Plan, PlanError, PLAN_VERSION};
 use crate::change::protect::{ProtectPaths, Protector};
 use crate::change::registry::{self, RunRecord};
 use crate::change::{ActionCounts, RunId};
@@ -39,6 +39,15 @@ pub struct ApplyResult {
     pub register_warning: Option<String>,
 }
 
+/// Warnung für Pläne ohne Prüfsumme (Format 1 und 2).
+pub fn unprotected_note(version: u32) -> Option<String> {
+    (version < PLAN_VERSION).then(|| {
+        format!(
+            "Ungeschützter Plan (Format {version}): Änderungen an der Datei werden nicht erkannt."
+        )
+    })
+}
+
 /// Prüft den Plan, ohne etwas zu verändern.
 pub fn apply_check(plan: &Plan) -> Result<ApplyCheck> {
     check_with(plan, &super::load_config()?, &onedrive_roots_from_env())
@@ -50,11 +59,8 @@ fn check_with(plan: &Plan, config: &Config, onedrive_roots: &[PathBuf]) -> Resul
         bail!("Wurzel {} des Plans existiert nicht", plan.root);
     }
     let mut notes = Notes::default();
-    if plan.version < PLAN_VERSION {
-        notes.warn(format!(
-            "Ungeschützter Plan (Format {}): Änderungen an der Datei werden nicht erkannt.",
-            plan.version
-        ));
+    if let Some(note) = unprotected_note(plan.version) {
+        notes.warn(note);
     }
     if let Some(warning) = onedrive_warning(&root, onedrive_roots) {
         notes.warn(warning);
@@ -144,6 +150,17 @@ fn register_run(run: &RunId, root: &str, at: &str) -> Result<()> {
 /// Lädt einen Plan aus einer Datei (für `apply` und „Plan öffnen“).
 pub fn load_plan(path: &Path) -> Result<Plan> {
     Ok(Plan::load(path)?)
+}
+
+/// Ist die Plan-Datei nicht mehr der geladene Plan? Vergleicht die Prüfsumme des Inhalts auf der
+/// Platte mit der des geladenen Plans (für die GUI vor dem Anwenden); reine Formatierung zählt
+/// nicht, ein veränderter Inhalt mit alter Prüfsumme schon.
+pub fn plan_file_changed(path: &Path, loaded: &Plan) -> Result<bool> {
+    match Plan::load(path) {
+        Ok(on_disk) => Ok(on_disk.integrity() != loaded.integrity()),
+        Err(PlanError::Tampered { .. }) => Ok(true),
+        Err(e) => Err(e.into()),
+    }
 }
 
 #[cfg(test)]

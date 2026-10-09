@@ -200,7 +200,8 @@ static REVIEW: HelpEntry = HelpEntry {
            einzelne Zeilen abwählen.",
     changes: "Erst „Anwenden“ (mit Rückfrage) verändert etwas. Dateien gehen in die Quarantäne \
               oder werden verschoben, nie sofort gelöscht. Wählst du Zeilen ab, entsteht eine \
-              neue Plan-Datei; der ursprüngliche Plan bleibt unverändert.",
+              neue Plan-Datei; der ursprüngliche Plan bleibt unverändert. Die Plan-Datei trägt \
+              eine Prüfsumme: Wurde sie nach dem Erstellen verändert, wird sie nicht angewendet.",
     undo: "Unter „Verlauf“ mit „Rückgängig“.",
     options: &[
         (
@@ -418,6 +419,13 @@ mod tests {
                 e.title
             );
         }
+    }
+
+    #[test]
+    fn plan_pruefen_nennt_die_pruefsumme() {
+        let changes = entry(Topic::Review).changes;
+        assert!(changes.contains("Prüfsumme"), "{changes}");
+        assert!(changes.contains("nicht angewendet"), "{changes}");
     }
 
     #[test]

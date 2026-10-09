@@ -8,8 +8,8 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 use assert_cmd::Command;
-use ordner_cleanup::change::plan::Plan;
-use ordner_cleanup::ops::apply::{apply_check, apply_execute};
+use ordner_cleanup::change::plan::{Plan, Seal};
+use ordner_cleanup::ops::apply::{apply_check, apply_execute, plan_file_changed};
 use ordner_cleanup::ops::plan::{plan, save_subset, PlanKindRequest, PlanOut, PlanRequest};
 use ordner_cleanup::ops::runs::{runs, undo_check, undo_execute};
 use ordner_cleanup::ops::scan::{scan, ScanRequest};
@@ -448,4 +448,54 @@ fn plan_preview_with_text(env: &Env, text: &str) -> ordner_cleanup::ops::plan::P
         &OpCtx::default(),
     )
     .unwrap()
+}
+
+#[test]
+fn veraenderte_plan_datei_wird_vor_dem_anwenden_erkannt() {
+    let env = Env::new();
+    three_copies(&env);
+    env.scan();
+    let file = env.plan_dedupe(PlanOut::GuiDir).saved.unwrap();
+    let loaded = Plan::load(&file).unwrap();
+    assert!(!plan_file_changed(&file, &loaded).unwrap());
+
+    // Ein Editor speichert unverändert mit CRLF: kein Fehlalarm.
+    let crlf = std::fs::read_to_string(&file)
+        .unwrap()
+        .replace('\n', "\r\n");
+    std::fs::write(&file, crlf).unwrap();
+    assert!(!plan_file_changed(&file, &loaded).unwrap());
+
+    // Aktion von Hand entfernt, nicht neu versiegelt.
+    let mut json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    json["actions"].as_array_mut().unwrap().pop();
+    std::fs::write(&file, json.to_string()).unwrap();
+    assert!(plan_file_changed(&file, &loaded).unwrap());
+
+    // Geändert und neu versiegelt: ebenfalls nicht mehr der geladene Plan.
+    let mut edited = loaded.clone();
+    edited.actions.pop();
+    edited.save_replacing(&file).unwrap();
+    assert!(plan_file_changed(&file, &loaded).unwrap());
+}
+
+#[test]
+fn teilplan_aus_der_review_hat_eine_eigene_gueltige_pruefsumme() {
+    let env = Env::new();
+    three_copies(&env);
+    env.scan();
+    let outcome = env.plan_dedupe(PlanOut::GuiDir);
+    let file = outcome.saved.clone().unwrap();
+    let keep: HashSet<u32> = [outcome.plan.actions[0].id].into();
+    let subset_file = save_subset(&file, &outcome.plan, &keep, &Default::default()).unwrap();
+
+    let text = std::fs::read_to_string(&subset_file).unwrap();
+    let (subset, seal) = Plan::parse(&text).unwrap();
+    assert_eq!(seal, Seal::Valid);
+    assert_eq!(subset.version, 3);
+    let original: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    let own: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_ne!(own["integrity"], original["integrity"]);
 }
