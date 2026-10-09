@@ -103,6 +103,15 @@ mod tests {
     }
 
     #[test]
+    fn ordner_in_der_quarantaene_zaehlen_mit_ihrer_dateianzahl() {
+        let mut dir = action(1, ActionType::Quarantine, 5_000);
+        dir.is_dir = true;
+        dir.files = Some(900);
+        let p = plan(vec![dir, action(2, ActionType::Quarantine, 10)]);
+        assert_eq!(move_volume(&p), (901, 5_010));
+    }
+
+    #[test]
     fn volumen_zaehlt_dateien_und_ordner_moves_aber_keine_remove_dir() {
         let mut dir_move = action(3, ActionType::Move, 700);
         dir_move.is_dir = true;
