@@ -8,8 +8,10 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 
 use super::fsops::FsOps;
+use super::journal::Entry;
 use super::journal::{self, Dest};
-use super::undo::{collect_ops, move_is_sane, summarize, OpKind, RunStatus, UndoError};
+use super::plan::hex;
+use super::undo::{collect_ops, load, move_is_sane, summarize, OpKind, RunStatus, UndoError};
 use super::{quarantine, RunId};
 use crate::paths;
 
@@ -55,7 +57,6 @@ pub fn list_quarantine(
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(QuarantineListing::default()),
         Err(e) => return Err(e.into()),
     };
-    let root_key = paths::path_key(root);
     let mut runs: Vec<(RunId, std::path::PathBuf)> = listing
         .flatten()
         .filter_map(|entry| {
@@ -75,30 +76,20 @@ pub fn list_quarantine(
         if summary.status == RunStatus::Purged {
             continue;
         }
-        let stop = quarantine::run_dir(root, &run);
-        for op in collect_ops(&entries) {
-            if !op.done || op.failed || op.undone {
-                continue;
-            }
-            let OpKind::Move {
-                from,
-                to,
-                size,
-                dest: Dest::Quarantine,
-                is_dir,
-                hash,
-            } = op.kind
-            else {
-                continue;
-            };
-            if !move_is_sane(&root_key, &stop, &from, &to) {
-                continue;
-            }
+        for MoveInfo {
+            action,
+            from,
+            to,
+            size,
+            is_dir,
+            hash,
+        } in restorable_moves(root, &run, &entries)
+        {
             let stored = Path::new(&to);
             let meta = fs.metadata(stored).ok();
             out.items.push(QuarantineItem {
                 run: run.clone(),
-                action: op.action,
+                action,
                 origin: from,
                 size,
                 hash,
@@ -119,6 +110,46 @@ pub fn list_quarantine(
     Ok(out)
 }
 
+/// Ein ausgeführter, noch nicht zurückgeholter Quarantäne-Move aus dem Journal.
+struct MoveInfo {
+    action: u32,
+    from: String,
+    to: String,
+    size: u64,
+    is_dir: bool,
+    hash: Option<String>,
+}
+
+/// Quarantäne-Moves eines Laufs, die ausgeführt und weder fehlgeschlagen noch zurückgedreht
+/// sind und deren Pfade `move_is_sane` bestehen. Gemeinsame Regel für Liste, Vorschau und
+/// Zurückholen.
+fn restorable_moves(root: &Path, run: &RunId, entries: &[Entry]) -> Vec<MoveInfo> {
+    let root_key = paths::path_key(root);
+    let stop = quarantine::run_dir(root, run);
+    collect_ops(entries)
+        .into_iter()
+        .filter(|op| op.done && !op.failed && !op.undone)
+        .filter_map(|op| match op.kind {
+            OpKind::Move {
+                from,
+                to,
+                size,
+                dest: Dest::Quarantine,
+                is_dir,
+                hash,
+            } if move_is_sane(&root_key, &stop, &from, &to) => Some(MoveInfo {
+                action: op.action,
+                from,
+                to,
+                size,
+                is_dir,
+                hash,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Dateien unterhalb von `dir`, nur über Verzeichniseinträge (nichts wird geöffnet).
 fn count_files(fs: &dyn FsOps, dir: &Path) -> Option<u64> {
     let mut count = 0;
@@ -133,6 +164,79 @@ fn count_files(fs: &dyn FsOps, dir: &Path) -> Option<u64> {
         }
     }
     Some(count)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HashCheck {
+    /// Kein Hash im Journal (nur `dedupe` schreibt einen) oder ein Ordner.
+    NotApplicable,
+    Match,
+    /// Der Inhalt in der Quarantäne weicht ab oder ließ sich nicht prüfen.
+    Mismatch,
+    /// Platzhalter: der Inhalt wird nicht gelesen, um keinen Download auszulösen.
+    CloudOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestorePreview {
+    pub run: RunId,
+    pub action: u32,
+    /// Ursprünglicher Pfad oder, wenn belegt, `name (2).ext`.
+    pub target: std::path::PathBuf,
+    pub renamed: bool,
+    pub hash: HashCheck,
+}
+
+/// Rechnet für eine Auswahl das Ziel aus und prüft bei Dateien aus `dedupe` den Hash.
+/// Ändert nichts. Einträge, die nicht (mehr) zurückholbar sind, fehlen im Ergebnis.
+pub fn preview_restore(
+    root: &Path,
+    selection: &[(RunId, u32)],
+    fs: &dyn FsOps,
+) -> Result<Vec<RestorePreview>, UndoError> {
+    let mut runs: Vec<&RunId> = selection.iter().map(|(run, _)| run).collect();
+    runs.sort();
+    runs.dedup();
+    let mut out = Vec::new();
+    for run in runs {
+        let entries = load(root, run)?;
+        if entries.iter().any(|e| matches!(e, Entry::Purged { .. })) {
+            continue;
+        }
+        let moves = restorable_moves(root, run, &entries);
+        for (_, action) in selection.iter().filter(|(r, _)| r == run) {
+            let Some(item) = moves.iter().find(|m| m.action == *action) else {
+                continue;
+            };
+            let origin = std::path::PathBuf::from(&item.from);
+            let target = quarantine::unique_target(fs, origin.clone()).ok_or_else(|| {
+                UndoError::Invalid(format!("kein freier Name für {}", paths::display(&origin)))
+            })?;
+            out.push(RestorePreview {
+                run: run.clone(),
+                action: *action,
+                renamed: target != origin,
+                target,
+                hash: check_hash(fs, item),
+            });
+        }
+    }
+    Ok(out)
+}
+
+fn check_hash(fs: &dyn FsOps, item: &MoveInfo) -> HashCheck {
+    let (Some(expected), false) = (&item.hash, item.is_dir) else {
+        return HashCheck::NotApplicable;
+    };
+    let stored = Path::new(&item.to);
+    match fs.metadata(stored) {
+        Ok(meta) if meta.is_cloud_only() => HashCheck::CloudOnly,
+        Ok(meta) => match fs.hash(stored, meta.size) {
+            Ok(actual) if hex(&actual) == *expected => HashCheck::Match,
+            _ => HashCheck::Mismatch,
+        },
+        Err(_) => HashCheck::NotApplicable,
+    }
 }
 
 #[cfg(test)]
@@ -326,5 +430,97 @@ mod tests {
             w.append(e).unwrap();
         }
         assert_eq!(origins(&list(&fx), &fx), ["c/sub/kopie2.txt"]);
+    }
+
+    fn sel(run: &str, actions: &[u32]) -> Vec<(RunId, u32)> {
+        actions.iter().map(|&a| (run_id(run), a)).collect()
+    }
+
+    fn preview(fx: &Fx, actions: &[u32]) -> Vec<RestorePreview> {
+        preview_restore(&fx.root, &sel(RUN, actions), &RealFs).unwrap()
+    }
+
+    #[test]
+    fn vorschau_freies_ziel_ist_der_ursprung() {
+        let fx = applied();
+        let p = preview(&fx, &[1, 2]);
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[0].target, fx.root.join("b/kopie.txt"));
+        assert_eq!(p[1].target, fx.root.join("c/sub/kopie2.txt"));
+        assert!(p.iter().all(|x| !x.renamed && x.hash == HashCheck::Match));
+        assert_eq!((p[0].run.clone(), p[0].action), (run_id(RUN), 1));
+        assert!(!fx.exists("b/kopie.txt"), "Vorschau ändert nichts");
+    }
+
+    #[test]
+    fn vorschau_belegtes_ziel_wird_nummeriert() {
+        let fx = applied();
+        fx.write("b/kopie.txt", "neu");
+        let p = preview(&fx, &[1]);
+        assert_eq!(p[0].target, fx.root.join("b/kopie (2).txt"));
+        assert!(p[0].renamed);
+        fx.write("b/kopie (2).txt", "noch neuer");
+        assert_eq!(
+            preview(&fx, &[1])[0].target,
+            fx.root.join("b/kopie (3).txt")
+        );
+    }
+
+    #[test]
+    fn vorschau_erkennt_veraenderten_inhalt() {
+        let fx = applied();
+        std::fs::write(fx.quarantined(RUN, "b/kopie.txt"), "verändert").unwrap();
+        let p = preview(&fx, &[1, 2]);
+        assert_eq!(p[0].hash, HashCheck::Mismatch);
+        assert_eq!(p[1].hash, HashCheck::Match);
+    }
+
+    #[test]
+    fn vorschau_ohne_hash_und_bei_ordnern_nicht_anwendbar() {
+        let fx = fx();
+        fx.write("tmp/x.tmp", "x");
+        let plan = fx.junk_plan(&["tmp/x.tmp"]);
+        run_with(&fx, &plan, &RealFs, &fx.protector(), RUN).unwrap();
+        assert_eq!(preview(&fx, &[1])[0].hash, HashCheck::NotApplicable);
+
+        let fx = self::fx();
+        fx.write("a/1.txt", "eins");
+        fx.write("b/1.txt", "eins");
+        let plan = fx.dir_dedupe_plan(&[("b", "a")]);
+        run_with(&fx, &plan, &RealFs, &fx.protector(), RUN).unwrap();
+        let p = preview(&fx, &[1]);
+        assert_eq!(p[0].hash, HashCheck::NotApplicable);
+        assert_eq!(p[0].target, fx.root.join("b"));
+    }
+
+    #[test]
+    fn vorschau_liest_cloud_only_nicht() {
+        let fx = applied();
+        let faulty = FaultyFs::new().cloud_only(&fx.quarantined(RUN, "b/kopie.txt"));
+        let p = preview_restore(&fx.root, &sel(RUN, &[1, 2]), &faulty).unwrap();
+        assert_eq!(p[0].hash, HashCheck::CloudOnly);
+        assert_eq!(p[1].hash, HashCheck::Match);
+        assert_eq!(
+            faulty.hashed().len(),
+            1,
+            "nur die lokale Datei wird gelesen"
+        );
+    }
+
+    #[test]
+    fn vorschau_laesst_unbekannte_und_erledigte_eintraege_weg() {
+        let fx = applied();
+        let path = quarantine::journal_path(&fx.root, &run_id(RUN));
+        JournalWriter::open_append(&path)
+            .unwrap()
+            .append(&Entry::UndoDone {
+                run: run_id(RUN),
+                action: 1,
+                to: None,
+            })
+            .unwrap();
+        let p = preview(&fx, &[1, 2, 99]);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].action, 2);
     }
 }
