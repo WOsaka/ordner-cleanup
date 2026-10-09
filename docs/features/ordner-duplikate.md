@@ -86,7 +86,7 @@ Betroffen ist zunächst der Entwickler selbst, später Familie und Kollegen (GUI
 ## Edge Cases & Error States
 | Scenario | Expected Behavior |
 |----------|-------------------|
-| Ordner enthält Cloud-only-Platzhalter oder ungehashte Datei | Kein Kandidat, Grund im Bericht (`skipped: unverifiable`); nie lesen oder hashen |
+| Ordner enthält Cloud-only-Platzhalter oder ungehashte Datei | Kein Kandidat, Grund im Bericht (`skipped: unverifiable`); nie lesen oder hashen; beim Apply gilt ein nicht prüfbarer behaltener Ordner (Platzhalter, Link, nicht lesbar) ebenso als `unverifiable` |
 | Ordner enthält geschützten Pfad (`.git`, `node_modules`, Konfig) | Weder entfernen noch behalten (`protected`) |
 | Ordner liegt in `_Archiv` (oder ist `_Archiv`) | Nimmt nicht teil: weder Duplikat noch behaltener Ordner, kein Skip-Eintrag; Apply meldet `in-archive` |
 | Alle Dateien des Kandidaten sind Hardlinks auf den behaltenen Ordner | Übersprungen (`hardlink`), kein Platzgewinn |

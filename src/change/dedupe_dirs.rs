@@ -3,8 +3,7 @@
 //! Die Erkennung liefert `analysis::folder_dups`. Hier wird je Gruppe der behaltene Ordner
 //! gewählt (Namens-Heuristik, dann `--keep`), von oben nach unten gearbeitet, damit Unterordner
 //! bereits entfernter Ordner entfallen und nichts innerhalb eines behaltenen Ordners (oder über
-//! einem) entfernt
-//! wird, und je entferntem Ordner eine `quarantine`-Aktion mit `is_dir` erzeugt.
+//! einem) entfernt wird, und je entferntem Ordner eine `quarantine`-Aktion mit `is_dir` erzeugt.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};

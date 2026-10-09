@@ -561,33 +561,61 @@ fn verify_dir_source(a: &PlannedAction, env: &ApplyEnv) -> Result<(), Verdict> {
 }
 
 /// Metadaten-Fingerabdruck eines Ordners (relativer Pfad, Größe, mtime der nicht ignorierten
-/// Dateien) ohne etwas zu öffnen. `None`, wenn der Ordner fehlt, ein Link/Platzhalter ist oder
-/// etwas darin nicht lesbar ist.
-fn dir_fingerprint(dir: &Path, env: &ApplyEnv) -> Option<u128> {
-    match env.fs.metadata(dir) {
-        Ok(m) if m.is_dir && !m.is_link && !m.is_reparse_point() && !m.is_cloud_only() => {}
-        _ => return None,
+/// Dateien) ohne etwas zu öffnen. Fehlt der Ordner oder ist er keiner, ist das
+/// [`KeepProblem::Missing`]; Link, Platzhalter oder etwas Nichtlesbares darin ist
+/// [`KeepProblem::Unusable`].
+fn dir_fingerprint(dir: &Path, env: &ApplyEnv) -> Result<u128, KeepProblem> {
+    let meta = env.fs.metadata(dir).map_err(|e| read_problem(&e))?;
+    if !meta.is_dir {
+        return Err(KeepProblem::Missing);
+    }
+    if meta.is_link || meta.is_reparse_point() || meta.is_cloud_only() {
+        return Err(KeepProblem::Unusable);
     }
     let mut entries = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(current) = stack.pop() {
-        for (path, meta) in env.fs.read_dir(&current).ok()? {
+        for (path, meta) in env.fs.read_dir(&current).map_err(|e| read_problem(&e))? {
             if meta.is_link || meta.is_reparse_point() || meta.is_cloud_only() {
-                return None;
+                return Err(KeepProblem::Unusable);
             }
             if meta.is_dir {
                 stack.push(path);
                 continue;
             }
-            let name = path.file_name()?.to_string_lossy().into_owned();
+            let name = path
+                .file_name()
+                .ok_or(KeepProblem::Unusable)?
+                .to_string_lossy()
+                .into_owned();
             if folder_dups::is_ignored_name(&name) {
                 continue;
             }
-            let rel = path.strip_prefix(dir).ok()?.to_string_lossy().into_owned();
+            let rel = path
+                .strip_prefix(dir)
+                .map_err(|_| KeepProblem::Unusable)?
+                .to_string_lossy()
+                .into_owned();
             entries.push((rel, meta.size as i64, meta.mtime_ticks));
         }
     }
-    Some(folder_dups::meta_fingerprint(entries.into_iter()))
+    Ok(folder_dups::meta_fingerprint(entries.into_iter()))
+}
+
+/// Warum sich der behaltene Ordner nicht fingerabdrucken lässt.
+enum KeepProblem {
+    /// Der Ordner fehlt (mehr) oder ist keiner.
+    Missing,
+    /// Link, Platzhalter oder etwas darin nicht lesbar.
+    Unusable,
+}
+
+fn read_problem(e: &io::Error) -> KeepProblem {
+    if e.kind() == io::ErrorKind::NotFound {
+        KeepProblem::Missing
+    } else {
+        KeepProblem::Unusable
+    }
 }
 
 /// `dedupe-dirs`: Der behaltene Ordner muss noch so aussehen wie beim Planen (einmal je Ordner
@@ -602,9 +630,10 @@ fn verify_keep_dir(
     *cache
         .entry(key)
         .or_insert_with(|| match dir_fingerprint(Path::new(keep_path), env) {
-            None => Some(SkipReason::KeepMissing),
-            Some(print) if format!("{print:032x}") == expected => None,
-            Some(_) => Some(SkipReason::KeepChanged),
+            Err(KeepProblem::Missing) => Some(SkipReason::KeepMissing),
+            Err(KeepProblem::Unusable) => Some(SkipReason::Unverifiable),
+            Ok(print) if format!("{print:032x}") == expected => None,
+            Ok(_) => Some(SkipReason::KeepChanged),
         })
 }
 
@@ -2602,6 +2631,57 @@ mod tests {
         );
         assert!(fx.exists("_Archiv/2019/Projekt/a.txt"));
         assert_eq!(dir_intents(&fx.journal(RUN)), 0, "kein intent");
+    }
+
+    #[test]
+    fn nicht_pruefbarer_behaltener_ordner_ist_unverifiable_und_nichts_wird_gelesen() {
+        type Setup = fn(&Fx, FaultyFs) -> FaultyFs;
+        let cases: [(Setup, &str); 3] = [
+            (
+                |fx, f| f.cloud_only(&fx.root.join("Projekt/a.txt")),
+                "Platzhalter im Ordner",
+            ),
+            (
+                |fx, f| f.cloud_only(&fx.root.join("Projekt")),
+                "Ordner selbst",
+            ),
+            (
+                |fx, f| f.fail(Op::ReadDir, &fx.root.join("Projekt/sub")),
+                "Unterordner nicht lesbar",
+            ),
+        ];
+        for (setup, what) in cases {
+            let fx = fx();
+            dup_dirs(&fx);
+            let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+            let faulty = setup(&fx, FaultyFs::new());
+
+            let out = run_with(&fx, &plan, &faulty, &fx.protector(), RUN).unwrap();
+
+            assert_eq!(
+                out.results[0].status,
+                ActionStatus::Skipped(SkipReason::Unverifiable),
+                "{what}"
+            );
+            assert!(fx.exists("Kopie von Projekt/a.txt"), "{what}");
+            assert!(faulty.hashed().is_empty(), "{what}");
+        }
+    }
+
+    #[test]
+    fn behaltener_ordner_der_jetzt_eine_datei_ist_gilt_als_fehlend() {
+        let fx = fx();
+        dup_dirs(&fx);
+        let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+        std::fs::remove_dir_all(fx.root.join("Projekt")).unwrap();
+        fx.write("Projekt", "jetzt eine Datei");
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::KeepMissing)
+        );
     }
 
     #[test]

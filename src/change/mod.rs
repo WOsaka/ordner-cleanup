@@ -271,7 +271,8 @@ pub enum SkipReason {
     TooRecentArrival,
     /// `dedupe-dirs`: Der behaltene Ordner hat sich seit dem Plan geändert.
     KeepChanged,
-    /// `dedupe-dirs`: Inhalt nicht prüfbar (Cloud-only oder ohne Hash).
+    /// `dedupe-dirs`: Inhalt nicht prüfbar (Cloud-only, Link oder nicht lesbar), auch beim
+    /// behaltenen Ordner im Apply.
     Unverifiable,
 }
 
@@ -303,7 +304,7 @@ impl fmt::Display for SkipReason {
             Self::MissingField => "Feld für das Ziel fehlt",
             Self::TooRecentArrival => "zu kurz im Ordner (Wartezeit nicht erreicht)",
             Self::KeepChanged => "behaltener Ordner seit dem Plan geändert",
-            Self::Unverifiable => "Inhalt nicht prüfbar (Cloud-only oder ohne Hash)",
+            Self::Unverifiable => "Inhalt nicht prüfbar (Cloud-only, Link oder nicht lesbar)",
         })
     }
 }
