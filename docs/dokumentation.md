@@ -129,6 +129,8 @@ Dateien wandern in eine **Quarantäne** (`<wurzel>\.ordner-cleanup\quarantine\<r
 
 Jeder `apply` ist ein **Lauf** mit einer Lauf-ID. Vor jeder Änderung schreibt das Programm einen Eintrag in ein Journal. Damit kann `undo` einen Lauf vollständig zurückdrehen, auch nach einem Absturz.
 
+In der Oberfläche lassen sich auf der Seite **Quarantäne** auch einzelne Einträge eines Laufs zurückholen. Das Zurückholen schreibt je Eintrag ein `undo_done` ins Journal des Laufs, aber kein `undo_start`/`undo_end`: Der Lauf behält seinen Status, nur die Größe in der Quarantäne sinkt. Ein späteres `undo` des ganzen Laufs überspringt die schon zurückgeholten Einträge.
+
 ### Wurzel
 
 Die „Wurzel“ ist der Ordner, den man an `scan` übergibt. Quarantäne, Archiv und Journal liegen immer unterhalb der Wurzel und damit auf demselben Volume, damit Verschieben ein schnelles Umbenennen bleibt.
@@ -376,6 +378,8 @@ Ein zweiter `apply` desselben Plans ändert nichts (Idempotenz). Ein belegtes Zi
 
 `undo` prüft den echten Dateizustand und überschreibt **nie**. Kollisionen (am Ursprungsort liegt inzwischen etwas anderes) werden gemeldet, die Datei bleibt in der Quarantäne. Das funktioniert auch nach einem Absturz mitten im `apply`, weil das Journal vor der Änderung geschrieben wurde.
 
+Einträge, die vorher in der GUI einzeln zurückgeholt wurden (Seite „Quarantäne“), meldet `undo` als „nichts zu tun“ und lässt sie, wo sie sind. Kam eine Datei dabei unter einem neuen Namen zurück (`name (2).ext`, weil der Ursprungspfad belegt war), bleibt auch dieser Name unangetastet und `undo` meldet dafür keine Kollision.
+
 Findet `undo` die Wurzel nicht im Lauf-Register, hilft `--root <wurzel>`. Auch `undo` fragt `j/N` (oder `--yes`).
 
 ### 6.4 runs
@@ -499,7 +503,7 @@ ordner-cleanup plan versions <pfad> [--min-age 30d]
 | **Bestätigung** | `apply`, `undo`, `purge` fragen `j/N`; ohne Terminal brechen sie ohne `--yes` ab |
 | **Stale-Prüfung** | Jede Aktion prüft unmittelbar vor der Ausführung, ob die Datei noch dem Plan entspricht |
 | **Quarantäne statt Löschen** | Verschieben per Rename auf demselben Volume; Zeitstempel und Inhalt bleiben erhalten; kein Verschieben über Laufwerksgrenzen |
-| **Kein Überschreiben** | Belegte Ziele bekommen ein Suffix (`datei (2).txt`); `undo` überschreibt nie |
+| **Kein Überschreiben** | Belegte Ziele bekommen ein Suffix (`datei (2).txt`); `undo` überschreibt nie, und das einzelne Zurückholen in der GUI auch nicht: ein belegter Ursprungspfad ergibt einen neuen Namen |
 | **Write-ahead-Journal** | `<wurzel>\.ordner-cleanup\journal\<run-id>.jsonl`, `fsync` je Eintrag, vor jeder Änderung |
 | **Lauf-Register** | `%LOCALAPPDATA%\ordner-cleanup\runs.jsonl`, damit `undo` die Wurzel findet (maßgeblich bleibt das Journal; sonst `--root`) |
 | **Idempotenz** | Ein zweiter `apply` desselben Plans ändert nichts |
@@ -595,6 +599,10 @@ dirs = ["D:\\Logs"]           # optional: nur direkt in diesen Ordnern
 
 `scan` erfasst den Ordner `.ordner-cleanup` nie.
 
+**Journal-Eintrag `undo_done`:** `{"t":"undo_done","run":…,"action":…}` markiert eine Aktion als zurückgeholt, sei es durch `undo` oder durch das einzelne Zurückholen in der GUI. Das optionale Feld `to` steht nur, wenn die Datei unter einem anderen Pfad als dem ursprünglichen zurückkam (Ursprungspfad belegt). Alte Journale ohne das Feld bleiben lesbar, ältere Programmversionen ignorieren es.
+
+**Bekannte Grenze:** Das Zurückholen prüft wie `undo` den direkten Elternordner des Ursprungspfads auf Datei oder Link, nicht jeden Ordner weiter oben. Liegt weiter oben eine Verknüpfung (Junction), kann die Datei über sie an einen anderen Ort geraten. Die Tool-Ordner (`.ordner-cleanup`, `quarantine`, Lauf-Ordner) dürfen keine Links sein; sonst lehnt das Zurückholen ab.
+
 **Neben den Programmdateien** (`ordner-cleanup.exe`, `ordner-cleanup-bg.exe`, `ordner-cleanup-gui.exe`) liegen `README.md` und `docs\dokumentation.md`. Die Hilfe der Oberfläche („?“ an Seiten und Karten, `F1`) öffnet sie über „Ausführliche Doku öffnen“. Fehlen die Dateien, zeigt die Oberfläche den erwarteten Pfad an; die Kurztexte funktionieren auch ohne sie.
 
 ---
@@ -676,6 +684,18 @@ Die CI (GitHub Actions, `windows-latest`) prüft `cargo fmt --check`, Clippy mit
 | Re-Scan ohne Änderungen | 5,6 s | 106 MB |
 | Report (alle Formate) | 0,6 s | 87 MB |
 | `plan junk` / `empty-dirs` / `archive` / `versions` | 0,33 s / 0,11 s / 2,2 s / 3,9 s | – |
+
+Quarantäne-Ansicht (Release, 2026-10-09, 100 Läufe à 1.000 Einträge = 100.000 echte Dateien; `cargo test --release --test perf_quarantine -- --ignored --nocapture`):
+
+| Schritt | Dauer | Ziel |
+|---|---|---|
+| Liste aus den Journalen laden (je Eintrag ein Metadaten-Zugriff, im Hintergrund-Task) | 5,2 s | < 10 s |
+| Zeilen mit Suchschlüsseln aufbauen | 76 ms | – |
+| Suchen (Name und Pfad) auf 100.000 Zeilen | 5 ms | < 100 ms |
+| Sortieren nach Name / Größe / Ablauf | 28 ms / 2 ms / 2 ms | < 100 ms |
+| Filter auf einen Lauf | 9 ms | < 100 ms |
+
+Die Tabelle zeichnet nur sichtbare Zeilen. Die Messung ist als ignorierter Test abgelegt.
 
 Die Planer-Messung ist als ignorierter Test abgelegt: `cargo test --release --test perf_plans -- --ignored --nocapture`. Einen Testbaum erzeugt `cargo run --release --example gen-tree -- <zielordner> [anzahl]`.
 

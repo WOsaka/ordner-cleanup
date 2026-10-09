@@ -1,6 +1,6 @@
 ---
 title: "Quarantäne-Ansicht (Inhalt, Größe, Ablauf, einzelne Dateien zurückholen)"
-status: approved       # draft | approved | implemented
+status: implemented    # draft | approved | implemented
 created: 2026-10-09
 updated: 2026-10-09
 ---

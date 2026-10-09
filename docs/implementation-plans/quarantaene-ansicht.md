@@ -1,7 +1,7 @@
 ---
 title: "Implementation Plan: Quarantäne-Ansicht (Inhalt, Größe, Ablauf, einzelne Dateien zurückholen)"
 feature_spec: docs/features/quarantaene-ansicht.md
-status: approved   # pending-approval | approved | implemented
+status: implemented   # pending-approval | approved | implemented
 created: 2026-10-09
 updated: 2026-10-09
 ---

@@ -33,6 +33,23 @@ Vorbereitung: `cargo build --release`, dann `target\release\ordner-cleanup.exe` 
 - [ ] GUI: Plan öffnen, Datei extern in Notepad ändern, „Anwenden“ drücken: Dialog „Plan wurde verändert“ mit „Plan neu laden“, nichts ausgeführt; „Plan neu laden“ zeigt den geänderten Plan bzw. eine Fehlermeldung.
 - [ ] Alter Plan aus einem früheren Release (Format 2): `apply` und GUI zeigen „Ungeschützter Plan (Format 2) …“, der Lauf geht weiter.
 
+## 1c. Quarantäne-Ansicht (Phase 7.4)
+
+- [ ] Nach einem echten Aufräumlauf (Duplikate, Müll) zeigt die Seite „Quarantäne“ (`Strg+6`, Seitenleiste) genau die verschobenen Dateien: Name, ursprünglicher Ort, Größe, Lauf, „Läuft ab“, Status „in Quarantäne“. Summenzeile (Anzahl, Größe, nächster Ablauf) stimmt mit „Verlauf“ überein.
+- [ ] Optik prüfen: hell und dunkel, 100 % und 150 % Skalierung, schmales Fenster (Spalten werden abgeschnitten, nichts überlappt), Tabelle scrollt flüssig.
+- [ ] Suche (Name und Pfadteil, Groß-/Kleinschreibung egal), Wurzel-Auswahl und Klick auf die Spaltenköpfe (Name, Größe, Lauf, Läuft ab; zweiter Klick kehrt um).
+- [ ] Eine Datei auswählen, **Zurückholen …**: Rückfrage nennt das Ziel; nach „Zurückholen“ liegt die Datei am alten Ort, der Eintrag verschwindet aus der Liste, „Verlauf“ zeigt die geringere Größe und unveränderten Status „Vollständig“.
+- [ ] Ursprungspfad vorher von Hand neu belegen (andere Datei mit demselben Namen): Rückfrage zeigt „→ name (2).ext“, die vorhandene Datei bleibt unverändert, die zurückgeholte hat den neuen Namen. In „Verlauf“ → Details steht „zurückgeholt als …“.
+- [ ] Ordner aus „Doppelte Ordner“ zurückholen: Der Ordner kommt als Ganzes zurück, in der Liste steht „(Ordner)“ und im Tooltip die Dateianzahl.
+- [ ] Datei in der Quarantäne im Explorer verändern, dann zurückholen: Die Rückfrage warnt („wurde in der Quarantäne verändert“), nur bei Dateien aus „Duplikate“.
+- [ ] Datei in der Quarantäne im Explorer löschen und „Neu laden“ (`Strg+R`): Eintrag zeigt „fehlt“ (Warnfarbe), ist nicht auswählbar, der Hinweis über der Liste nennt die Zahl.
+- [ ] Rechtsklick auf den Ort: „Im Explorer zeigen“ öffnet den Ablageort **in der Quarantäne**; „Pfad kopieren“ kopiert ihn.
+- [ ] „Verlauf“ → **Inhalt ansehen** bei einem Lauf: Sprung auf „Quarantäne“, Filter-Etikett „Nur Lauf …“ (Klick entfernt den Filter); bei einem Lauf ohne Quarantäne-Inhalt oder nach „Quarantäne leeren“ ist der Knopf deaktiviert.
+- [ ] Nach teilweisem Zurückholen: „Rückgängig“ des Laufs holt den Rest, die schon zurückgeholten Dateien bleiben unangetastet (auch die mit „(2)“).
+- [ ] Echte Cloud-only-Datei (OneDrive „Nur online“) in der Quarantäne: Status „nur online“, Zurückholen lädt nichts herunter (Datei bleibt „Nur online“), Rückfrage nennt den Hinweis.
+- [ ] `F1` auf der Seite öffnet den Hilfetext „Quarantäne“; `?` zeigt „Strg+1 … Strg+6“; während ein Scan oder Apply läuft, bleibt die Liste bedienbar, „Zurückholen …“ meldet bei laufendem Schreib-Task eine Meldung statt zu starten.
+- [ ] Mit vielen Einträgen (z. B. `purge`-Frist verlängern und mehrere Läufe sammeln) bleibt die Seite flüssig; Ladezeit bei sehr vielen Journalen notieren (Messung: `tests/perf_quarantine.rs`).
+
 ## 2. Geplante Läufe (Phase 5)
 
 - [ ] `schedule add <profil> --daily 09:00`, `schedule list` zeigt die Aufgabe, in der Windows-Aufgabenplanung ist sie sichtbar.
