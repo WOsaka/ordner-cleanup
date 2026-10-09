@@ -60,6 +60,17 @@ pub fn fits(root: &Path, source: &Path) -> Result<(), SkipReason> {
     target_for(root, &probe, source).map(|_| ())
 }
 
+/// Wie [`fits`] für einen ganzen Ordner: auch die Datei mit dem längsten relativen Pfad im
+/// Ordner (`longest_relative_len` Zeichen, ohne den Ordner selbst) muss noch passen.
+pub fn fits_dir(root: &Path, dir: &Path, longest_relative_len: usize) -> Result<(), SkipReason> {
+    let probe = RunId::parse("00000000-000000-0000").map_err(|_| SkipReason::OutsideRoot)?;
+    let target = target_for(root, &probe, dir)?;
+    if paths::display(&target).chars().count() + longest_relative_len > MAX_TARGET_LEN {
+        return Err(SkipReason::TooLong);
+    }
+    Ok(())
+}
+
 /// Liefert `target` oder, wenn es belegt ist, `name (2).ext`, `name (3).ext`, …
 pub fn unique_target(fs: &dyn FsOps, target: PathBuf) -> Option<PathBuf> {
     if !fs.exists(&target) {
@@ -131,6 +142,21 @@ mod tests {
 
     fn run() -> RunId {
         RunId::parse("20261003-120000-ab12").unwrap()
+    }
+
+    #[test]
+    fn fits_dir_beruecksichtigt_die_tiefste_datei_im_ordner() {
+        let root = Path::new(r"D:\Daten");
+        let dir = Path::new(r"D:\Daten\Projekt");
+        assert!(fits_dir(root, dir, 100).is_ok());
+        assert_eq!(
+            fits_dir(root, dir, MAX_TARGET_LEN),
+            Err(SkipReason::TooLong)
+        );
+        assert_eq!(
+            fits_dir(root, Path::new(r"E:\Fremd"), 0),
+            Err(SkipReason::OutsideRoot)
+        );
     }
 
     #[test]

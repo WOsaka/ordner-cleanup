@@ -6,6 +6,9 @@
 //! fälschlich leer oder alt aussehen lassen.
 
 use std::collections::HashMap;
+use std::path::Path;
+
+use super::protect::Protector;
 
 use crate::index::{DirRow, FileRow};
 
@@ -148,10 +151,32 @@ impl Tree {
     }
 }
 
+/// Schlüssel aller Ordner im Teilbaum (einschließlich `key`), ohne Rekursion.
+pub fn subtree_dirs<'a>(tree: &'a Tree, key: &'a str) -> Vec<&'a str> {
+    let mut found = Vec::new();
+    let mut stack = vec![key];
+    while let Some(dir) = stack.pop() {
+        found.push(dir);
+        stack.extend(tree.children(dir).iter().map(String::as_str));
+    }
+    found
+}
+
+/// Etwas im Teilbaum verbietet es, den Ordner als Ganzes zu verschieben: der Ordner selbst,
+/// ein Unterordner (Name, Marker, Config) oder eine Datei darin ist geschützt.
+pub fn contains_protected(tree: &Tree, protector: &Protector, key: &str) -> bool {
+    subtree_dirs(tree, key).into_iter().any(|dir| {
+        tree.row(dir)
+            .is_some_and(|row| protector.check_inside(Path::new(&row.path)).is_some())
+            || tree
+                .files(dir)
+                .iter()
+                .any(|f| protector.check(Path::new(&f.path)).is_some())
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::*;
     use crate::paths;
 

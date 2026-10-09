@@ -3,6 +3,7 @@
 pub mod apply;
 pub mod archive;
 pub mod dedupe;
+pub mod dedupe_dirs;
 pub mod empty_dirs;
 pub mod fsops;
 pub mod journal;
