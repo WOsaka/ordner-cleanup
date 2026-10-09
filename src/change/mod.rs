@@ -251,7 +251,7 @@ pub enum SkipReason {
     TargetExists,
     /// `remove-dir`: Ordner ist (inzwischen) nicht leer.
     NotEmpty,
-    /// Liegt bereits unter `_Archiv`.
+    /// Liegt bereits unter `_Archiv` (`move`, `dedupe-dirs`).
     InArchive,
     /// `rules`: kein (lesbares) EXIF-Datum und `exif_fallback = "skip"`.
     NoExifDate,

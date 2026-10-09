@@ -11,7 +11,7 @@ use std::path::Path;
 
 use super::dedupe::{DedupePlan, KeepStrategy};
 use super::plan::{
-    ticks_to_rfc3339, ActionType, Plan, PlanKind, PlannedAction, Skipped, PLAN_VERSION,
+    ticks_to_rfc3339, ActionType, Plan, PlanKind, PlannedAction, Skipped, ARCHIVE_DIR, PLAN_VERSION,
 };
 use super::protect::Protector;
 use super::quarantine;
@@ -135,6 +135,7 @@ pub fn plan_dedupe_dirs(
             .then_with(|| a.members.cmp(&b.members))
     });
 
+    let archive_key = paths::dir_key(&root.join(ARCHIVE_DIR));
     let mut removed: HashSet<String> = HashSet::new();
     let mut kept: HashSet<String> = HashSet::new();
     let mut keep_prints: HashMap<String, String> = HashMap::new();
@@ -163,7 +164,7 @@ pub fn plan_dedupe_dirs(
         let mut eligible: Vec<&str> = Vec::new();
         let mut had_protected = false;
         for key in group.members.iter().map(String::as_str) {
-            if within(&removed, key) {
+            if within(&removed, key) || paths::is_under(key, &archive_key) {
                 continue;
             }
             if contains_protected(&tree, protector, key) {
@@ -765,6 +766,41 @@ mod tests {
         let plan = plan_of(&index).plan;
         assert!(plan.actions.is_empty());
         assert!(plan.skipped.is_empty());
+    }
+
+    #[test]
+    fn ordner_unter_archiv_nehmen_nicht_teil() {
+        let index = seed(&[
+            (r"Z:\Root\Projekt\a.txt", 100, 1),
+            (r"Z:\Root\_Archiv\2019\Projekt\a.txt", 200, 1),
+        ]);
+        let plan = plan_of(&index).plan;
+        assert!(plan.actions.is_empty(), "{:?}", paths_of(&plan));
+        assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
+    }
+
+    #[test]
+    fn archiv_ordner_ist_weder_zu_entfernen_noch_behaltener_ordner() {
+        let index = seed(&[
+            (r"Z:\Root\Projekt\a.txt", 100, 1),
+            (r"Z:\Root\Kopie von Projekt\a.txt", 200, 1),
+            (r"Z:\Root\_Archiv\2019\Projekt\a.txt", 300, 1),
+        ]);
+        let plan = plan_with(&index, KeepStrategy::Newest).plan;
+        assert_eq!(paths_of(&plan), [r"Z:\Root\Kopie von Projekt"]);
+        // Das Archiv wäre das neueste, ist aber nie der behaltene Ordner.
+        assert_eq!(plan.actions[0].keep.as_deref(), Some(r"Z:\Root\Projekt"));
+        assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
+    }
+
+    #[test]
+    fn der_archivordner_selbst_nimmt_nicht_teil() {
+        let index = seed(&[
+            (r"Z:\Root\X\2019\Projekt\a.txt", 100, 1),
+            (r"Z:\Root\_Archiv\2019\Projekt\a.txt", 200, 1),
+        ]);
+        let plan = plan_of(&index).plan;
+        assert!(plan.actions.is_empty(), "{:?}", paths_of(&plan));
     }
 
     #[test]

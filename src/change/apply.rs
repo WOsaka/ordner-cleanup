@@ -618,6 +618,9 @@ fn verify_quarantine_dir(
     if env.protector.check(Path::new(&a.path)).is_some() {
         return Err(Verdict::Skip(SkipReason::Protected));
     }
+    if is_in_archive(root, Path::new(&a.path)) {
+        return Err(Verdict::Skip(SkipReason::InArchive));
+    }
     verify_dir_source(a, env)?;
     let (Some(keep), Some(expected)) = (&a.keep, &a.keep_fingerprint) else {
         return Err(Verdict::Fail("Ordner-Aktion ohne behaltenen Ordner".into()));
@@ -2582,6 +2585,23 @@ mod tests {
             ActionStatus::Skipped(SkipReason::KeepMissing)
         );
         assert!(fx.exists("Kopie von Projekt/a.txt"));
+    }
+
+    #[test]
+    fn ordner_quelle_unterhalb_von_archiv_wird_nicht_entfernt() {
+        let fx = fx();
+        fx.write("Projekt/a.txt", "eins");
+        fx.write("_Archiv/2019/Projekt/a.txt", "eins");
+        let plan = fx.dir_dedupe_plan(&[("_Archiv/2019/Projekt", "Projekt")]);
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::InArchive)
+        );
+        assert!(fx.exists("_Archiv/2019/Projekt/a.txt"));
+        assert_eq!(dir_intents(&fx.journal(RUN)), 0, "kein intent");
     }
 
     #[test]

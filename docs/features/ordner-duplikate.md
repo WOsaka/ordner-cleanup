@@ -88,6 +88,7 @@ Betroffen ist zunächst der Entwickler selbst, später Familie und Kollegen (GUI
 |----------|-------------------|
 | Ordner enthält Cloud-only-Platzhalter oder ungehashte Datei | Kein Kandidat, Grund im Bericht (`skipped: unverifiable`); nie lesen oder hashen |
 | Ordner enthält geschützten Pfad (`.git`, `node_modules`, Konfig) | Weder entfernen noch behalten (`protected`) |
+| Ordner liegt in `_Archiv` (oder ist `_Archiv`) | Nimmt nicht teil: weder Duplikat noch behaltener Ordner, kein Skip-Eintrag; Apply meldet `in-archive` |
 | Alle Dateien des Kandidaten sind Hardlinks auf den behaltenen Ordner | Übersprungen (`hardlink`), kein Platzgewinn |
 | Teilweise Hardlinks | Ordner wird geplant, Platzgewinn zählt nur echt freiwerdende Bytes |
 | Ordner enthält Symlink/Junction | Kein Kandidat (`skipped: link`); Links werden nie verfolgt |
