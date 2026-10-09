@@ -1329,6 +1329,113 @@ mod tests {
         );
     }
 
+    // --- dedupe-dirs: ganze Ordner aus der Quarantäne ---
+
+    /// Wurzel mit `Projekt` und seiner Kopie; Apply von `dedupe-dirs` ist gelaufen.
+    fn applied_dir_dedupe() -> Fx {
+        let fx = fx();
+        for dir in ["Projekt", "Kopie von Projekt"] {
+            fx.write(&format!("{dir}/a.txt"), "alpha");
+            fx.write(&format!("{dir}/sub/b.txt"), "bravo bravo");
+        }
+        let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+        let out = run_with(&fx, &plan, &RealFs, &fx.protector(), RUN).unwrap();
+        assert_eq!(out.executed(), 1);
+        assert!(!fx.exists("Kopie von Projekt"));
+        fx
+    }
+
+    #[test]
+    fn undo_stellt_den_doppelten_ordner_byteidentisch_her_und_raeumt_die_quarantaene_auf() {
+        let fx = fx();
+        for dir in ["Projekt", "Kopie von Projekt"] {
+            fx.write(&format!("{dir}/a.txt"), "alpha");
+            fx.write(&format!("{dir}/sub/b.txt"), "bravo bravo");
+        }
+        let (m_a, m_b) = (
+            mtime(&fx, "Kopie von Projekt/a.txt"),
+            mtime(&fx, "Kopie von Projekt/sub/b.txt"),
+        );
+        let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+        run_with(&fx, &plan, &RealFs, &fx.protector(), RUN).unwrap();
+
+        let out = undo(&fx);
+
+        assert_eq!((out.restored(), out.exit_code()), (1, 0));
+        assert_eq!(fx.read("Kopie von Projekt/a.txt"), "alpha");
+        assert_eq!(fx.read("Kopie von Projekt/sub/b.txt"), "bravo bravo");
+        assert_eq!(
+            (
+                mtime(&fx, "Kopie von Projekt/a.txt"),
+                mtime(&fx, "Kopie von Projekt/sub/b.txt")
+            ),
+            (m_a, m_b)
+        );
+        assert_eq!(fx.read("Projekt/a.txt"), "alpha");
+        assert!(
+            !quarantine::run_dir(&fx.root, &run_id()).exists(),
+            "unter quarantine bleibt nichts zurück"
+        );
+    }
+
+    #[test]
+    fn neuer_ordner_gleichen_namens_ist_ein_konflikt_und_die_quarantaene_bleibt() {
+        let fx = applied_dir_dedupe();
+        fx.write("Kopie von Projekt/neu.txt", "inzwischen angelegt");
+
+        let out = undo(&fx);
+
+        assert_eq!(
+            (out.restored(), out.conflicts(), out.exit_code()),
+            (0, 1, 2)
+        );
+        assert_eq!(fx.read("Kopie von Projekt/neu.txt"), "inzwischen angelegt");
+        assert!(fx.quarantined(RUN, "Kopie von Projekt/a.txt").exists());
+
+        std::fs::remove_dir_all(fx.root.join("Kopie von Projekt")).unwrap();
+        let retry = undo(&fx);
+        assert_eq!((retry.restored(), retry.exit_code()), (1, 0));
+        assert!(fx.exists("Kopie von Projekt/sub/b.txt"));
+    }
+
+    #[test]
+    fn purge_loescht_den_ordner_aus_der_quarantaene_und_undo_meldet_es() {
+        let fx = applied_dir_dedupe();
+        purge_run(&fx.root, &run_id(), &env()).unwrap();
+
+        assert!(!quarantine::run_dir(&fx.root, &run_id()).exists());
+        assert_eq!(fx.read("Projekt/a.txt"), "alpha");
+
+        let out = undo(&fx);
+
+        assert!(out.purged);
+        assert_eq!(out.restored(), 0);
+        assert!(!fx.exists("Kopie von Projekt"));
+    }
+
+    #[test]
+    fn runs_nennt_ordner_in_der_quarantaene() {
+        let fx = applied_dir_dedupe();
+        let runs = list_runs(&fx.root, 30).unwrap();
+        assert_eq!(runs[0].moved, 1);
+        assert_eq!(
+            runs[0].counts,
+            ActionCounts {
+                dirs_quarantined: 1,
+                ..ActionCounts::default()
+            }
+        );
+        assert_eq!(
+            runs[0].counts.short_text(runs[0].bytes),
+            "1 Ordner (Quarantäne)"
+        );
+        assert_eq!(
+            runs[0].bytes,
+            "alpha".len() as u64 + "bravo bravo".len() as u64
+        );
+        assert_eq!(runs[0].status, RunStatus::Complete);
+    }
+
     #[test]
     fn apply_und_undo_stellen_pfad_inhalt_und_zeit_wieder_her() {
         let fx = fx();
