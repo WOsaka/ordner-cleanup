@@ -17,7 +17,7 @@ Zweiter `/code-review 8` nach den Fixes aus `dedupe-dirs-review-findings-fix-pla
 | 1 | Gruppenreihenfolge: behaltener Ordner enthält entfernten Ordner | **bestätigt** (reproduziert, Planer und Apply) | mittel | ja |
 | 2 | Quelle wird nur über Anzahl/Summe/jüngste mtime geprüft | **bestätigt** (reproduziert: Umbenennen bleibt unbemerkt) | niedrig–mittel | ja |
 | 3 | Cache der Keep-Prüfung gilt für den ganzen Lauf | **teilweise**: wirkt nur über Befund 1 bzw. wie beim Datei-`dedupe` gewollt | niedrig | über Befund 1 mit |
-| 4 | `.ordner-cleanup` nur als Ordnername ausgeschlossen | **bestätigt für den Bericht**, Planer ist geschützt; Elternordner-Teil widerlegt | niedrig | ja (Bericht) |
+| 4 | `.ordner-cleanup` nur als Ordnername ausgeschlossen | **in der Praxis nicht erreichbar** (Korrektur beim Fix: der Scanner indiziert den Werkzeugordner nie); nur Absicherung der Analyse | – | Absicherung, kein Fehler |
 | 5 | Leere/Junk-Unterordner zählen nicht zur Gleichheit | **widerlegt**: Spec-Entscheidung | – | nein (Doku-Hinweis) |
 | 6 | `Oldest` als Auffangzweig, vergleicht jüngste mtime | **widerlegt**: Spec-Entscheidung | – | nein |
 | 7 | `all_linked` vs. `freed_bytes` | **widerlegt**: Spec-Entscheidung, Test vorhanden | – | nein |
@@ -64,7 +64,9 @@ Zweiter `/code-review 8` nach den Fixes aus `dedupe-dirs-review-findings-fix-pla
 
 Eine Aktion kann den Keep einer anderen nur verändern, wenn ihre Quelle *im* Keep liegt, also nur in einem inkonsistenten Plan wie in Befund 1. Die Reproduktion dort zeigt `KeepChanged` ohne Cache-Beteiligung. Mit der Plan-Invariante aus Befund 1 (Quelle liegt nie unter einem `keep`) ist der Cache unbedenklich; ein späterer externer Eingriff während eines Laufs fällt unter die allgemeine Annahme „Dateisystem ändert sich während Apply nicht gleichzeitig“. **Kein eigener Fix**, der Cache bleibt.
 
-## Befund 4: `.ordner-cleanup` im Bericht (bestätigt, Teil widerlegt)
+## Befund 4: `.ordner-cleanup` im Bericht (nicht erreichbar)
+
+**Korrektur (beim Fix festgestellt):** Der Scanner lässt jeden Ordner namens `.ordner-cleanup` aus (`src/scan/classify.rs:141`, `name == TOOL_DIR`, auf jeder Ebene). Der Werkzeugordner und die Quarantäne stehen deshalb nie im Index; ein End-zu-Ende-Test über einen echten Scan zeigt keine Gruppe mit einer Quarantäne-Kopie. Die folgende Beschreibung gilt nur für einen synthetisch aufgebauten Index (Unit-Tests) und wurde fälschlich als Fehler im Bericht gewertet. Die Änderung bleibt als Absicherung der Analyse bestehen.
 
 **Bestätigt:** `folder_dups::analyze` schließt nur Ordner aus, deren *Name* `.ordner-cleanup` ist (`folder_dups.rs:176`). Unterordner (`.ordner-cleanup\quarantine\<Lauf>\Projekt`) bleiben Mitglied. Test: `Projekt\a.txt` und `.ordner-cleanup\quarantine\r1\Projekt\a.txt` ergeben eine Gruppe. `partial_pairs` hat dagegen den Filter `key.contains("\\.ordner-cleanup\\")` (`folder_dups.rs:375`). Der Planer ist nicht betroffen, weil der `Protector` jeden Pfad mit der Komponente `.ordner-cleanup` schützt (`protect.rs:258`) — der Bericht ruft den Protector aber nicht. Folge: Nach einem Apply zeigt der Bericht die Quarantäne-Kopie als „doppelten Ordner“ mit falschem Platzgewinn.
 

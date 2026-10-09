@@ -138,3 +138,33 @@ fn json_html_und_terminal_nennen_den_abschnitt() {
     assert!(html.contains(r#"data-slot="folder-duplicates""#));
     assert!(html.contains("Ordner-Duplikate"));
 }
+
+#[test]
+fn kopie_in_der_quarantaene_ist_kein_doppelter_ordner() {
+    let mut t = tree();
+    let root = t.root.clone();
+    write(
+        &root,
+        ".ordner-cleanup/quarantine/r1/Projekt/a.txt",
+        &[b'a'; 100],
+    );
+    write(
+        &root,
+        ".ordner-cleanup/quarantine/r1/Projekt/sub/b.txt",
+        &[b'b'; 200],
+    );
+    run_scan(&mut t.index, &StdDirSource, &root);
+
+    let f = &report(&t, 0.8).folder_duplicates;
+
+    assert_eq!(f.groups.len(), 1, "{:?}", f.groups);
+    assert_eq!(f.groups[0].dirs.len(), 2, "{:?}", f.groups[0].dirs);
+    assert!(
+        f.groups[0]
+            .dirs
+            .iter()
+            .all(|d| !d.contains(".ordner-cleanup")),
+        "{:?}",
+        f.groups[0].dirs
+    );
+}

@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use xxhash_rust::xxh3::xxh3_128;
 
 use crate::change::junk::is_builtin_junk_name;
+use crate::change::protect::TOOL_DIR;
 use crate::change::tree::Tree;
 use crate::index::FileHash;
 use crate::paths;
@@ -77,6 +78,11 @@ fn hex(bytes: &[u8]) -> String {
     out
 }
 
+/// Der Schlüssel ist der Werkzeugordner `.ordner-cleanup` (Quarantäne, Journal) oder liegt darin.
+fn in_tool_dir(key: &str) -> bool {
+    key.split('\\').any(|part| part == TOOL_DIR)
+}
+
 fn dir_name(path: &str) -> String {
     path.rsplit('\\').next().unwrap_or(path).to_lowercase()
 }
@@ -115,6 +121,9 @@ fn print_dir(
         entries.push(format!("F|{}|{size}|{hash}", file.name.to_lowercase()));
     }
     for child in tree.children(key) {
+        if in_tool_dir(child) {
+            continue;
+        }
         match done
             .get(child.as_str())
             .copied()
@@ -190,10 +199,7 @@ pub fn analyze(
                 data,
                 height,
             } => {
-                let is_internal = tree
-                    .row(key)
-                    .is_some_and(|r| dir_name(&r.path) == ".ordner-cleanup");
-                if *data && !is_internal {
+                if *data && !in_tool_dir(key) {
                     by_print
                         .entry(*fingerprint)
                         .or_insert_with(|| (Vec::new(), *files, *bytes, *height))
@@ -396,7 +402,7 @@ pub fn partial_pairs(
     exact: &[ExactGroup],
     opts: &PartialOptions,
 ) -> PartialResult {
-    let skip_dir = |key: &str| key == opts.root_key || key.contains("\\.ordner-cleanup\\");
+    let skip_dir = |key: &str| key == opts.root_key || in_tool_dir(key);
 
     // Hash → (Ordner, Größe) der zählenden Dateien; wirksame Bytes je Ordner (ohne Junk).
     let mut by_hash: HashMap<&[u8], Vec<(&str, u64)>> = HashMap::new();
@@ -1018,6 +1024,38 @@ mod tests {
         let top = top_level_groups(&run(&tree, &hashes).groups);
         assert_eq!(top.len(), 1, "{top:?}");
         assert_eq!(top[0].members, [k(r"D:\Daten\P\Y"), k(r"D:\Daten\P\Z")]);
+    }
+
+    #[test]
+    fn quarantaene_kopie_unter_dem_werkzeugordner_bildet_keine_gruppe() {
+        let (tree, hashes) = build(
+            &[],
+            &[
+                (r"D:\Daten\Projekt\a.txt", 7, 1),
+                (
+                    r"D:\Daten\.ordner-cleanup\quarantine\r1\Projekt\a.txt",
+                    7,
+                    1,
+                ),
+            ],
+        );
+        let a = run(&tree, &hashes);
+        assert!(a.groups.is_empty(), "{:?}", a.groups);
+    }
+
+    #[test]
+    fn werkzeugordner_aendert_den_fingerabdruck_des_elternordners_nicht() {
+        let (tree, hashes) = build(
+            &[],
+            &[
+                (r"D:\Daten\A\x.txt", 7, 1),
+                (r"D:\Daten\B\x.txt", 7, 1),
+                (r"D:\Daten\A\.ordner-cleanup\q.txt", 7, 2),
+            ],
+        );
+        let a = run(&tree, &hashes);
+        assert_eq!(a.groups.len(), 1, "{:?}", a.groups);
+        assert_eq!(a.groups[0].members, [k(r"D:\Daten\A"), k(r"D:\Daten\B")]);
     }
 
     #[test]
