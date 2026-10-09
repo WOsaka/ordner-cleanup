@@ -91,6 +91,24 @@ fn fragezeichen_der_karte_oeffnet_deren_hilfe_und_waehlt_sie_nicht() {
 }
 
 #[test]
+fn karte_doppelte_ordner_hat_einen_hilfetext() {
+    let (_guard, _home) = with_home();
+    let mut h = harness(State::new(HelpState::default()));
+    h.state_mut().help.show_topic(Topic::Card("dedupe-dirs"));
+    h.step();
+    h.step();
+    assert!(h
+        .query_all_by_label_contains("Doppelte Ordner")
+        .next()
+        .is_some());
+    assert!(h
+        .query_all_by_label_contains("ganze Ordner")
+        .next()
+        .is_some());
+    std::env::remove_var(HOME_OVERRIDE_ENV);
+}
+
+#[test]
 fn ueberschrift_der_seite_hat_ein_fragezeichen() {
     let (_guard, _home) = with_home();
     let mut h = harness(State::new(HelpState::default()));

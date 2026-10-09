@@ -163,6 +163,73 @@ fn gui_teilplan_laesst_sich_per_cli_anwenden_und_zurueckdrehen() {
 }
 
 #[test]
+fn gui_plan_doppelter_ordner_laesst_sich_per_cli_anwenden_und_zurueckdrehen() {
+    let env = Env::new();
+    for dir in ["Projekt", "Kopie von Projekt", "Backup Projekt"] {
+        env.write(&format!("{dir}/a.txt"), "alpha alpha", 3000);
+        env.write(&format!("{dir}/sub/b.txt"), "bravo bravo", 2000);
+    }
+    env.write("Anderes/x.txt", "ganz etwas anderes", 500);
+    env.scan();
+
+    let outcome = plan(
+        &PlanRequest {
+            target: TargetSpec::Path {
+                path: env.root().to_path_buf(),
+                force: false,
+            },
+            kind: PlanKindRequest::DedupeDirs {
+                keep: "oldest".parse().unwrap(),
+                min_size: None,
+            },
+            out: PlanOut::GuiDir,
+        },
+        &OpCtx::default(),
+    )
+    .unwrap();
+    assert_eq!(outcome.plan.actions.len(), 2);
+    let file = outcome.saved.clone().unwrap();
+    // Nur eine der zwei Kopien auswählen („Kopie von Projekt“).
+    let wanted = outcome
+        .plan
+        .actions
+        .iter()
+        .find(|a| a.path.ends_with("Kopie von Projekt"))
+        .unwrap()
+        .id;
+    let subset_file = save_subset(
+        &file,
+        &outcome.plan,
+        &HashSet::from([wanted]),
+        &Default::default(),
+    )
+    .unwrap();
+
+    env.bin()
+        .arg("apply")
+        .arg(&subset_file)
+        .arg("--yes")
+        .assert()
+        .success();
+    assert!(!env.root().join("Kopie von Projekt").exists());
+    assert!(env.root().join("Backup Projekt").exists() && env.root().join("Projekt").exists());
+
+    let listing = runs(Some(env.root())).unwrap();
+    let run = listing[0].1[0].run.clone();
+    env.bin()
+        .args(["undo", &run.to_string(), "--yes", "--root"])
+        .arg(env.root())
+        .assert()
+        .success();
+    assert!(env
+        .root()
+        .join("Kopie von Projekt")
+        .join("sub")
+        .join("b.txt")
+        .exists());
+}
+
+#[test]
 fn cli_plan_laesst_sich_ueber_ops_anwenden_und_zurueckdrehen() {
     let env = Env::new();
     let (_keep, b, c) = three_copies(&env);

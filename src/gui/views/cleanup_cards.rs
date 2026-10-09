@@ -1,4 +1,4 @@
-//! Karten der Aufräumen-Seite: die sechs Plan-Arten mit einem Satz Erklärung und, wo der letzte
+//! Karten der Aufräumen-Seite: die sieben Plan-Arten mit einem Satz Erklärung und, wo der letzte
 //! Scan eine Zahl kennt, mit dieser Zahl. Die Zahlen kommen aus dem Report; es gibt keine neue
 //! Analyse.
 
@@ -20,7 +20,12 @@ pub struct Card {
     pub text: &'static str,
 }
 
-pub const CARDS: [Card; 6] = [
+pub const CARDS: [Card; 7] = [
+    Card {
+        key: "dedupe-dirs",
+        title: "Doppelte Ordner",
+        text: "Ganze Ordner finden, die Kopien voneinander sind; ein Ordner bleibt, die übrigen gehen in die Quarantäne.",
+    },
     Card {
         key: "dedupe",
         title: "Duplikate",
@@ -71,6 +76,8 @@ pub fn card_layout(avail_width: f32, chrome: f32, spacing: f32) -> (usize, f32) 
 /// Zahlen des letzten Scans für die Karten. `None` = dafür liegt keine Zahl vor.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CardFacts {
+    /// Doppelte Ordner: Gruppen und die Bytes, die frei würden
+    pub dedupe_dirs: Option<(u64, u64)>,
     /// Duplikat-Gruppen und die Bytes, die frei würden
     pub dedupe: Option<(u64, u64)>,
     /// Müll-Dateien und -Bytes (aus dem Verlauf)
@@ -104,6 +111,7 @@ impl CardFacts {
             .and_then(|m| metric(m, "empty_dirs", Unit::Count))
             .or(Some(empty_structure));
         Self {
+            dedupe_dirs: None,
             dedupe: Some((duplicates.0 as u64, duplicates.1)),
             junk,
             empty_dirs,
@@ -117,7 +125,7 @@ impl CardFacts {
             .iter()
             .filter(|s| s.issue == "empty")
             .count() as u64;
-        Self::new(
+        let mut facts = Self::new(
             (
                 report.duplicates.group_count,
                 report.duplicates.total_wasted,
@@ -125,7 +133,12 @@ impl CardFacts {
             report.history.as_ref().map(|h| h.metrics.as_slice()),
             empty,
             report.meta.scanned_at.as_deref(),
-        )
+        );
+        facts.dedupe_dirs = Some((
+            report.folder_duplicates.groups.len() as u64,
+            report.folder_duplicates.total_reclaimable,
+        ));
+        facts
     }
 
     /// Die Zahl einer Karte als Satz; `None` bei Karten ohne Zahl (Archivieren, Versionen, Regeln)
@@ -135,6 +148,13 @@ impl CardFacts {
             format!("{} {}", texts::grouped(n), if n == 1 { one } else { many })
         };
         match key {
+            "dedupe-dirs" => self.dedupe_dirs.map(|(groups, bytes)| {
+                format!(
+                    "{}, {} könnten frei werden",
+                    plural(groups, "Gruppe", "Gruppen"),
+                    texts::bytes(bytes)
+                )
+            }),
             "dedupe" => self.dedupe.map(|(groups, bytes)| {
                 format!(
                     "{}, {} könnten frei werden",
@@ -355,6 +375,27 @@ mod tests {
             assert_eq!(f.number_text(key), None, "{key}");
         }
         assert_eq!(CardFacts::default().number_text("junk"), None);
+    }
+
+    #[test]
+    fn doppelte_ordner_sind_die_erste_karte_und_haben_eine_zahl_aus_dem_report() {
+        assert_eq!(CARDS.len(), 7);
+        assert_eq!(CARDS[0].key, "dedupe-dirs");
+        assert_eq!(CARDS[0].title, "Doppelte Ordner");
+        assert_eq!(CARDS[1].key, "dedupe", "vor „Duplikate“");
+        let mut f = CardFacts::new((1, 2), None, 0, None);
+        assert_eq!(f.number_text("dedupe-dirs"), None, "ohne Report keine Zahl");
+        f.dedupe_dirs = Some((2, 3_000));
+        let text = f.number_text("dedupe-dirs").unwrap();
+        assert!(
+            text.starts_with("2 Gruppen,") && text.contains("könnten frei werden"),
+            "{text}"
+        );
+        f.dedupe_dirs = Some((1, 0));
+        assert!(f
+            .number_text("dedupe-dirs")
+            .unwrap()
+            .starts_with("1 Gruppe,"));
     }
 
     #[test]

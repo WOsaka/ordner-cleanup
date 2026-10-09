@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::change::plan::{dependents, ActionType, Plan, Skipped};
+use crate::change::plan::{dependents, ActionType, Plan, PlannedAction, Skipped};
 use crate::paths;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +103,16 @@ fn key_of(path: &str) -> String {
     paths::path_key(Path::new(path))
 }
 
+/// Grund einer Aktion; ein doppelter Ordner nennt Dateianzahl und behaltenen Ordner.
+fn action_reason(a: &PlannedAction) -> String {
+    match (&a.keep, a.files) {
+        (Some(keep), Some(files)) if a.is_dir && a.action == ActionType::Quarantine => {
+            format!("{} · {files} Dateien · bleibt: {keep}", a.reason)
+        }
+        _ => a.reason.clone(),
+    }
+}
+
 fn skipped_reason(s: &Skipped) -> String {
     match &s.detail {
         Some(detail) => format!("{} ({detail})", s.reason),
@@ -131,7 +141,7 @@ impl ReviewModel {
                 &a.path,
                 a.target.clone(),
                 a.size,
-                a.reason.clone(),
+                action_reason(a),
                 a.rule.clone(),
                 a.mtime_ticks,
             ));
@@ -516,6 +526,24 @@ mod tests {
         );
         assert_eq!(s.quarantine, 3);
         assert_eq!(m.selected_ids(), [1, 2, 3].into());
+    }
+
+    #[test]
+    fn doppelter_ordner_nennt_dateianzahl_und_behaltenen_ordner() {
+        let mut dir = action(1, ActionType::Quarantine, r"D:\Daten\Kopie von P", 500);
+        dir.is_dir = true;
+        dir.files = Some(12);
+        dir.keep = Some(r"D:\Daten\P".into());
+        dir.reason = "exact-duplicate-dir".into();
+        let m = ReviewModel::new(plan(vec![dir], vec![]));
+        let reason = &m.row(0).reason;
+        assert!(reason.starts_with("exact-duplicate-dir"), "{reason}");
+        assert!(reason.contains("12 Dateien"), "{reason}");
+        assert!(reason.contains(r"bleibt: D:\Daten\P"), "{reason}");
+        // Einzeldateien und leere Ordner behalten ihren Grund unverändert.
+        let file = action(2, ActionType::Quarantine, r"D:\Daten\x.tmp", 5);
+        let m = ReviewModel::new(plan(vec![file], vec![]));
+        assert_eq!(m.row(0).reason, "junk:temp");
     }
 
     #[test]

@@ -229,6 +229,23 @@ static KEYS: HelpEntry = HelpEntry {
     doc: None,
 };
 
+static DEDUPE_DIRS: HelpEntry = HelpEntry {
+    title: "Doppelte Ordner",
+    what: "Findet ganze Ordner, die Kopien voneinander sind: dieselben Dateien mit demselben \
+           Inhalt an denselben Pfaden. Der Name des Ordners spielt keine Rolle; Müll wie \
+           Thumbs.db zählt nicht mit. Von jeder Gruppe bleibt ein Ordner liegen.",
+    changes: "Die überzähligen Ordner werden als Ganzes in die Quarantäne verschoben, samt \
+              Müll-Dateien darin. Welcher Ordner bleibt, entscheidet zuerst der Name \
+              („Kopie“, „Backup“, „(2)“ … gehen zuerst), dann deine Wahl. Erst doppelte \
+              Ordner bereinigen, dann einzelne Duplikate.",
+    undo: "Unter „Verlauf“ mit „Rückgängig“, solange die Quarantäne nicht geleert wurde.",
+    options: &[(
+        "Welcher Ordner bleibt",
+        "Bei gleichem Namens-Hinweis der älteste, der neueste oder der Ordner in einem Ordner, den du wählst.",
+    )],
+    doc: Some(DOC_AKTIONEN),
+};
+
 static DEDUPE: HelpEntry = HelpEntry {
     title: "Duplikate",
     what: "Findet Dateien mit genau gleichem Inhalt. Von jeder Gruppe bleibt eine Datei liegen, \
@@ -330,6 +347,7 @@ pub fn entry(topic: Topic) -> &'static HelpEntry {
         Topic::Review => &REVIEW,
         Topic::Keys => &KEYS,
         Topic::Card(key) => match key {
+            "dedupe-dirs" => &DEDUPE_DIRS,
             "dedupe" => &DEDUPE,
             "junk" => &JUNK,
             "empty-dirs" => &EMPTY_DIRS,

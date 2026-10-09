@@ -280,6 +280,10 @@ impl CleanupView {
                 no_classify: self.no_classify,
                 lock_held: false,
             },
+            "dedupe-dirs" => PlanKindRequest::DedupeDirs {
+                keep: self.keep_strategy()?,
+                min_size: None,
+            },
             _ => PlanKindRequest::Dedupe {
                 keep: self.keep_strategy()?,
             },
@@ -509,32 +513,32 @@ impl CleanupView {
                 (c.archive_default.clone(), c.versions_default.clone())
             });
         match self.kind {
-            "dedupe" => {
+            "dedupe" | "dedupe-dirs" => {
+                let noun = if self.kind == "dedupe-dirs" {
+                    "Ordner"
+                } else {
+                    "Datei"
+                };
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Welche Kopie bleibt:");
+                    ui.label(if self.kind == "dedupe-dirs" {
+                        "Welcher Ordner bleibt (Namen wie „Kopie“ oder „Backup“ zählen zuerst):"
+                    } else {
+                        "Welche Kopie bleibt:"
+                    });
+                    let oldest = format!("Der älteste {noun} bleibt");
+                    let newest = format!("Der neueste {noun} bleibt");
+                    let in_folder = "Die Kopie in einem bestimmten Ordner bleibt";
                     let text = match self.keep {
-                        "newest" => "Die neueste Datei bleibt",
-                        "path" => "Die Kopie in einem bestimmten Ordner bleibt",
-                        _ => "Die älteste Datei bleibt",
+                        "newest" => newest.as_str(),
+                        "path" => in_folder,
+                        _ => oldest.as_str(),
                     };
                     egui::ComboBox::from_id_salt("keep")
                         .selected_text(text)
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.keep,
-                                "oldest",
-                                "Die älteste Datei bleibt",
-                            );
-                            ui.selectable_value(
-                                &mut self.keep,
-                                "newest",
-                                "Die neueste Datei bleibt",
-                            );
-                            ui.selectable_value(
-                                &mut self.keep,
-                                "path",
-                                "Die Kopie in einem bestimmten Ordner bleibt",
-                            );
+                            ui.selectable_value(&mut self.keep, "oldest", oldest.as_str());
+                            ui.selectable_value(&mut self.keep, "newest", newest.as_str());
+                            ui.selectable_value(&mut self.keep, "path", in_folder);
                         });
                 });
                 if self.keep == "path" {

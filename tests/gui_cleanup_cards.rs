@@ -55,7 +55,7 @@ fn wait_for(harness: &mut Harness<'static, State>, label: &str) {
     let end = Instant::now() + Duration::from_secs(10);
     loop {
         harness.step();
-        if harness.query_by_label_contains(label).is_some() {
+        if harness.query_all_by_label_contains(label).next().is_some() {
             return;
         }
         assert!(Instant::now() < end, "„{label}“ erschien nicht");
@@ -76,11 +76,12 @@ fn with_home() -> (std::sync::MutexGuard<'static, ()>, tempfile::TempDir) {
 }
 
 #[test]
-fn sechs_karten_ohne_ziel_und_ohne_zahlen() {
+fn sieben_karten_ohne_ziel_und_ohne_zahlen() {
     let (_guard, _home) = with_home();
     let mut h = harness(State::new(None));
     wait_for(&mut h, "Wähle oben einen Ordner");
     for title in [
+        "Doppelte Ordner",
         "Duplikate",
         "Müll",
         "Leere Ordner",
@@ -110,10 +111,45 @@ fn duplikat_karte_zeigt_die_zahl_aus_dem_scan_ohne_neue_analyse() {
 
     let mut h = harness(State::new(Some(choice)));
     wait_for(&mut h, "1 Gruppe");
-    assert!(h.query_by_label_contains("könnten frei werden").is_some());
+    assert!(h
+        .query_all_by_label_contains("könnten frei werden")
+        .next()
+        .is_some());
     // Archivieren, Versionen und Regeln bekommen keine Zahl.
     click_card(&mut h, "Archivieren");
     assert!(h.query_by_label_contains("Älter als").is_some());
+    std::env::remove_var(HOME_OVERRIDE_ENV);
+}
+
+#[test]
+fn karte_doppelte_ordner_zeigt_die_zahl_und_steht_vor_duplikate() {
+    let (_guard, home) = with_home();
+    let root = home.path().join("daten");
+    for dir in ["Projekt", "Kopie von Projekt"] {
+        std::fs::create_dir_all(root.join(dir)).unwrap();
+        std::fs::write(
+            root.join(dir).join("a.txt"),
+            "gleicher Inhalt gleicher Inhalt",
+        )
+        .unwrap();
+    }
+    let choice = Choice::Folder(root);
+    let request = ScanOptions::default().scan_request(&choice);
+    scan(&request, &OpCtx::default()).unwrap();
+
+    let mut h = harness(State::new(Some(choice)));
+    wait_for(&mut h, "könnten frei werden");
+    // Beide Karten nennen eine Gruppe: Ordner-Kopie und (darin) die einzelne Datei.
+    let dirs = h.get_by_role_and_label(Role::Button, "Doppelte Ordner");
+    let files = h.get_by_role_and_label(Role::Button, "Duplikate");
+    let (a, b) = (
+        dirs.accesskit_node().raw_bounds().unwrap(),
+        files.accesskit_node().raw_bounds().unwrap(),
+    );
+    assert!(
+        (a.y0, a.x0) < (b.y0, b.x0),
+        "„Doppelte Ordner“ steht vor „Duplikate“"
+    );
     std::env::remove_var(HOME_OVERRIDE_ENV);
 }
 
