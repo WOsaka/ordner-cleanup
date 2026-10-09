@@ -714,6 +714,22 @@ mod tests {
     }
 
     #[test]
+    fn datei_link_macht_den_ordner_zum_nicht_kandidaten() {
+        // `contains_protected` löst den letzten Pfadteil nicht auf; Datei-Links hält diese
+        // Prüfung der Analyse draußen.
+        let index = seed_with(
+            &[(r"Z:\Root\A\a.txt", 100, 1), (r"Z:\Root\B\a.txt", 200, 1)],
+            &[],
+            |r| {
+                if r.path.contains(r"\B\") {
+                    r.is_link = true;
+                }
+            },
+        );
+        assert!(plan_of(&index).plan.actions.is_empty());
+    }
+
+    #[test]
     fn min_size_laesst_kleine_gruppen_ohne_skip_eintrag_weg() {
         let index = seed(&[(r"Z:\Root\A\a.txt", 100, 1), (r"Z:\Root\B\a.txt", 200, 1)]);
         let options = DedupeDirsOptions {

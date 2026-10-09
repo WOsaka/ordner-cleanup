@@ -164,6 +164,13 @@ pub fn subtree_dirs<'a>(tree: &'a Tree, key: &'a str) -> Vec<&'a str> {
 
 /// Etwas im Teilbaum verbietet es, den Ordner als Ganzes zu verschieben: der Ordner selbst,
 /// ein Unterordner (Name, Marker, Config) oder eine Datei darin ist geschützt.
+///
+/// Dateien prüft `check_cached` (der Elternordner wird je Ordner einmal aufgelöst; für Planer mit
+/// vielen Tausend Dateien). Der letzte Pfadteil bleibt dabei unaufgelöst: Eine Datei, die selbst
+/// ein Link auf ein geschütztes Ziel ist, erkennt das nicht. Das ist gedeckt, weil Datei-Links im
+/// Index `is_link` tragen (`SubtreeStats::has_link`: `archive` überspringt solche Ordner, die
+/// Ordneranalyse macht sie unvergleichbar), Ordner-Links `check_inside` streng prüft und `apply`
+/// immer streng mit `check` arbeitet.
 pub fn contains_protected(tree: &Tree, protector: &Protector, key: &str) -> bool {
     subtree_dirs(tree, key).into_iter().any(|dir| {
         tree.row(dir)
