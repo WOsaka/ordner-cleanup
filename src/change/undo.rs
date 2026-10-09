@@ -124,6 +124,8 @@ pub(super) enum OpKind {
         size: u64,
         dest: Dest,
         is_dir: bool,
+        /// Nur `dedupe`; bei Ordnern ein Fingerprint.
+        hash: Option<String>,
     },
     RemoveDir {
         path: String,
@@ -176,6 +178,7 @@ pub(super) fn collect_ops(entries: &[Entry]) -> Vec<Op> {
                 size,
                 dest,
                 is_dir,
+                hash,
                 ..
             } => Some((
                 *action,
@@ -185,6 +188,7 @@ pub(super) fn collect_ops(entries: &[Entry]) -> Vec<Op> {
                     size: *size,
                     dest: *dest,
                     is_dir: *is_dir,
+                    hash: hash.clone(),
                 },
             )),
             Entry::IntentRemoveDir {
@@ -591,7 +595,7 @@ pub fn undo_run(root: &Path, run: &RunId, env: &UndoEnv) -> Result<UndoOutcome, 
     Ok(result)
 }
 
-fn summarize(run: RunId, entries: &[Entry], quarantine_days: u32) -> RunSummary {
+pub(super) fn summarize(run: RunId, entries: &[Entry], quarantine_days: u32) -> RunSummary {
     let ops = collect_ops(entries);
     let started = entries.iter().find_map(|e| match e {
         Entry::RunStart { started, .. } => Some(started.clone()),

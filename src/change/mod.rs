@@ -13,6 +13,7 @@ pub mod plan;
 pub mod protect;
 pub mod quarantine;
 pub mod registry;
+pub mod restore;
 pub mod rules;
 #[cfg(test)]
 mod rules_tests;
