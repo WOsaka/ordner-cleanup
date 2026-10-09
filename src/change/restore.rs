@@ -3,15 +3,17 @@
 //! Lauf behält seinen Status, nur die Größe in der Quarantäne sinkt.
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 
 use chrono::{DateTime, Utc};
 
 use super::fsops::FsOps;
-use super::journal::Entry;
-use super::journal::{self, Dest};
+use super::journal::{self, Dest, Entry, JournalWriter};
 use super::plan::hex;
-use super::undo::{collect_ops, load, move_is_sane, summarize, OpKind, RunStatus, UndoError};
+use super::undo::{
+    collect_ops, load, move_is_sane, summarize, Op, OpKind, RunStatus, UndoEnv, UndoError,
+};
 use super::{quarantine, RunId};
 use crate::paths;
 
@@ -239,15 +241,155 @@ fn check_hash(fs: &dyn FsOps, item: &MoveInfo) -> HashCheck {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ItemOutcome {
+    Restored {
+        to: String,
+        renamed: bool,
+    },
+    /// Inzwischen per Undo oder einzeln zurückgeholt.
+    AlreadyRestored,
+    /// Nicht mehr in der Quarantäne (gelöscht, nie ausgeführt oder unbekannt).
+    Missing,
+    Failed(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemResult {
+    pub action: u32,
+    pub origin: String,
+    pub outcome: ItemOutcome,
+}
+
+/// Holt einzelne Aktionen eines Laufs zurück. Schreibt je Eintrag `undo_done` (bei
+/// Umbenennung mit `to`), aber weder `undo_start` noch `undo_end`.
+pub fn restore_items(
+    root: &Path,
+    run: &RunId,
+    actions: &[u32],
+    env: &UndoEnv,
+) -> Result<Vec<ItemResult>, UndoError> {
+    let entries = load(root, run)?;
+    quarantine::ensure_plain_dirs(env.fs, root, run)?;
+    let purged = entries.iter().any(|e| matches!(e, Entry::Purged { .. }));
+    let ops = collect_ops(&entries);
+    let mut journal = JournalWriter::open_append(&quarantine::journal_path(root, run))?;
+    let ctx = Ctx {
+        root_key: paths::path_key(root),
+        stop: quarantine::run_dir(root, run),
+        run,
+        env,
+    };
+    let mut results = Vec::new();
+    for &action in actions {
+        if env.cancel.load(Ordering::SeqCst) {
+            break;
+        }
+        let op = ops.iter().rev().find(|o| o.action == action);
+        let (origin, outcome) = match op {
+            Some(op) if !purged => (
+                op.origin().to_string(),
+                restore_one(&ctx, op, &mut journal)?,
+            ),
+            Some(op) => (op.origin().to_string(), ItemOutcome::Missing),
+            None => (String::new(), ItemOutcome::Missing),
+        };
+        results.push(ItemResult {
+            action,
+            origin,
+            outcome,
+        });
+    }
+    Ok(results)
+}
+
+struct Ctx<'a> {
+    root_key: String,
+    stop: PathBuf,
+    run: &'a RunId,
+    env: &'a UndoEnv<'a>,
+}
+
+fn restore_one(ctx: &Ctx, op: &Op, journal: &mut JournalWriter) -> Result<ItemOutcome, UndoError> {
+    let OpKind::Move {
+        from,
+        to,
+        dest: Dest::Quarantine,
+        ..
+    } = &op.kind
+    else {
+        return Ok(ItemOutcome::Missing);
+    };
+    if !op.done || op.failed {
+        return Ok(ItemOutcome::Missing);
+    }
+    if op.undone {
+        return Ok(ItemOutcome::AlreadyRestored);
+    }
+    if !move_is_sane(&ctx.root_key, &ctx.stop, from, to) {
+        return Ok(ItemOutcome::Failed(
+            "Journal-Eintrag verweist außerhalb von Wurzel oder Quarantäne".into(),
+        ));
+    }
+    let fs = ctx.env.fs;
+    let (stored, origin) = (Path::new(to), PathBuf::from(from));
+    if fs.metadata(stored).is_err() {
+        return Ok(ItemOutcome::Missing);
+    }
+    if let Some(parent) = origin.parent() {
+        if let Err(e) = fs.create_dir_all(parent) {
+            return Ok(ItemOutcome::Failed(e.to_string()));
+        }
+        match fs.metadata(parent) {
+            Ok(meta) if meta.is_dir && !meta.is_reparse_point() => {}
+            _ => return Ok(ItemOutcome::Failed("Ziel ist kein Ordner".into())),
+        }
+    }
+    let mut target = free_name(fs, &origin)?;
+    let mut retried = false;
+    loop {
+        match fs.rename(stored, &target) {
+            Ok(()) => break,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists && !retried => {
+                retried = true;
+                target = free_name(fs, &origin)?;
+            }
+            Err(e) => return Ok(ItemOutcome::Failed(e.to_string())),
+        }
+    }
+    let renamed = target != origin;
+    let target_text = paths::display(&target);
+    journal.append(&Entry::UndoDone {
+        run: ctx.run.clone(),
+        action: op.action,
+        to: renamed.then(|| target_text.clone()),
+    })?;
+    if let Some(parent) = stored.parent() {
+        quarantine::cleanup_empty_parents(fs, parent, &ctx.stop);
+    }
+    Ok(ItemOutcome::Restored {
+        to: target_text,
+        renamed,
+    })
+}
+
+fn free_name(fs: &dyn FsOps, origin: &Path) -> Result<PathBuf, UndoError> {
+    quarantine::unique_target(fs, origin.to_path_buf()).ok_or_else(|| {
+        UndoError::Invalid(format!("kein freier Name für {}", paths::display(origin)))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::change::fsops::testing::FaultyFs;
+    use crate::change::fsops::FileMeta;
     use crate::change::fsops::RealFs;
     use crate::change::journal::{Entry, JournalWriter};
     use crate::change::test_support::{fx, run_with, Fx, RUN};
     use crate::change::undo::{purge_run, undo_run, UndoEnv};
-    use std::sync::atomic::AtomicBool;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     const RUN2: &str = "20261004-120000-cd34";
     static NEVER: AtomicBool = AtomicBool::new(false);
@@ -522,5 +664,226 @@ mod tests {
         let p = preview(&fx, &[1, 2, 99]);
         assert_eq!(p.len(), 1);
         assert_eq!(p[0].action, 2);
+    }
+
+    fn restore(fx: &Fx, actions: &[u32]) -> Vec<ItemResult> {
+        restore_items(&fx.root, &run_id(RUN), actions, &env()).unwrap()
+    }
+
+    fn outcomes(results: &[ItemResult]) -> Vec<&ItemOutcome> {
+        results.iter().map(|r| &r.outcome).collect()
+    }
+
+    fn restored(renamed: bool, to: &Path) -> ItemOutcome {
+        ItemOutcome::Restored {
+            to: paths::display(to),
+            renamed,
+        }
+    }
+
+    #[test]
+    fn zurueckholen_legt_datei_und_ordner_wieder_an() {
+        let fx = applied();
+        let r = restore(&fx, &[2]);
+        let target = fx.root.join("c/sub/kopie2.txt");
+        assert_eq!(outcomes(&r), [&restored(false, &target)]);
+        assert_eq!(r[0].origin, paths::display(&target));
+        assert_eq!(fx.read("c/sub/kopie2.txt"), "gleicher inhalt");
+        assert!(
+            !fx.quarantined(RUN, "c").exists(),
+            "leere Ordner in der Quarantäne verschwinden"
+        );
+        assert!(fx.quarantined(RUN, "b/kopie.txt").exists());
+        let journal = fx.journal(RUN);
+        let undone = journal
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    Entry::UndoDone {
+                        action: 2,
+                        to: None,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(undone, 1);
+        assert!(!journal
+            .iter()
+            .any(|e| matches!(e, Entry::UndoStart { .. } | Entry::UndoEnd { .. })));
+    }
+
+    #[test]
+    fn zurueckholen_bei_belegtem_ursprung_benennt_um() {
+        let fx = applied();
+        fx.write("b/kopie.txt", "neue datei");
+        let r = restore(&fx, &[1]);
+        let target = fx.root.join("b/kopie (2).txt");
+        assert_eq!(outcomes(&r), [&restored(true, &target)]);
+        assert_eq!(fx.read("b/kopie.txt"), "neue datei", "Original bleibt");
+        assert_eq!(fx.read("b/kopie (2).txt"), "gleicher inhalt");
+        let wanted = paths::display(&target);
+        assert!(fx
+            .journal(RUN)
+            .iter()
+            .any(|e| matches!(e, Entry::UndoDone { action: 1, to: Some(t), .. } if *t == wanted)));
+    }
+
+    #[test]
+    fn zurueckholen_bringt_ganzen_ordner_zurueck() {
+        let fx = fx();
+        fx.write("a/1.txt", "eins");
+        fx.write("a/sub/2.txt", "zwei");
+        fx.write("b/1.txt", "eins");
+        fx.write("b/sub/2.txt", "zwei");
+        let plan = fx.dir_dedupe_plan(&[("b", "a")]);
+        run_with(&fx, &plan, &RealFs, &fx.protector(), RUN).unwrap();
+        assert!(!fx.exists("b"));
+        let r = restore(&fx, &[1]);
+        assert!(matches!(
+            r[0].outcome,
+            ItemOutcome::Restored { renamed: false, .. }
+        ));
+        assert_eq!(fx.read("b/sub/2.txt"), "zwei");
+    }
+
+    #[test]
+    fn elternordner_als_datei_scheitert_ohne_die_uebrigen_zu_stoppen() {
+        let fx = applied();
+        // Statt des Ordners `b` liegt dort jetzt eine Datei: Eintrag 1 kann nicht zurück.
+        std::fs::remove_dir(fx.root.join("b")).unwrap();
+        fx.write("b", "ich bin eine datei");
+        let r = restore(&fx, &[1, 2]);
+        assert!(matches!(r[0].outcome, ItemOutcome::Failed(_)));
+        assert!(matches!(r[1].outcome, ItemOutcome::Restored { .. }));
+        assert!(fx.quarantined(RUN, "b/kopie.txt").exists());
+    }
+
+    #[test]
+    fn zweiter_aufruf_meldet_bereits_zurueck() {
+        let fx = applied();
+        restore(&fx, &[1]);
+        let r = restore(&fx, &[1]);
+        assert_eq!(outcomes(&r), [&ItemOutcome::AlreadyRestored]);
+        assert_eq!(fx.read("b/kopie.txt"), "gleicher inhalt");
+    }
+
+    #[test]
+    fn fehlende_quarantaene_datei_und_unbekannte_aktion_sind_missing() {
+        let fx = applied();
+        std::fs::remove_file(fx.quarantined(RUN, "b/kopie.txt")).unwrap();
+        let r = restore(&fx, &[1, 99]);
+        assert_eq!(outcomes(&r), [&ItemOutcome::Missing, &ItemOutcome::Missing]);
+        assert!(!fx.exists("b/kopie.txt"));
+    }
+
+    #[test]
+    fn eintrag_ausserhalb_der_wurzel_scheitert_ohne_dateioperation() {
+        let fx = applied();
+        let outside = std::env::temp_dir().join("ordner-cleanup-restore-test.txt");
+        let path = quarantine::journal_path(&fx.root, &run_id(RUN));
+        let mut entries = journal::read(&path).unwrap();
+        for e in &mut entries {
+            if let Entry::Intent {
+                from, action: 1, ..
+            } = e
+            {
+                *from = paths::display(&outside);
+            }
+        }
+        std::fs::remove_file(&path).unwrap();
+        let mut w = JournalWriter::create(&path).unwrap();
+        for e in &entries {
+            w.append(e).unwrap();
+        }
+        let r = restore(&fx, &[1]);
+        assert!(matches!(r[0].outcome, ItemOutcome::Failed(_)));
+        assert!(fx.quarantined(RUN, "b/kopie.txt").exists());
+        assert!(!outside.exists());
+    }
+
+    #[test]
+    fn tool_ordner_als_junction_wird_abgelehnt() {
+        let fx = applied();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let tool = quarantine::tool_dir(&fx.root);
+        let moved = elsewhere.path().join("tool");
+        std::fs::rename(&tool, &moved).unwrap();
+        let ok = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&tool)
+            .arg(&moved)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("Junction nicht erzeugbar, Test übersprungen");
+            return;
+        }
+        assert!(restore_items(&fx.root, &run_id(RUN), &[1], &env()).is_err());
+        assert!(!fx.exists("b/kopie.txt"));
+    }
+
+    #[test]
+    fn abbruch_nach_dem_ersten_eintrag_laesst_den_rest_liegen() {
+        let fx = applied();
+        let cancel = AtomicBool::new(false);
+        let fs = CancelAfterRename { cancel: &cancel };
+        let env = UndoEnv {
+            fs: &fs,
+            now: "2026-10-03T11:00:00Z",
+            cancel: &cancel,
+        };
+        let r = restore_items(&fx.root, &run_id(RUN), &[1, 2], &env).unwrap();
+        assert_eq!(r.len(), 1);
+        assert!(matches!(r[0].outcome, ItemOutcome::Restored { .. }));
+        assert!(fx.exists("b/kopie.txt") && !fx.exists("c/sub/kopie2.txt"));
+        let undone = fx
+            .journal(RUN)
+            .iter()
+            .filter(|e| matches!(e, Entry::UndoDone { .. }))
+            .count();
+        assert_eq!(undone, 1, "der erste Eintrag ist journaliert");
+    }
+
+    /// `RealFs`, das nach dem ersten erfolgreichen `rename` das Abbruch-Flag setzt.
+    struct CancelAfterRename<'a> {
+        cancel: &'a AtomicBool,
+    }
+
+    impl FsOps for CancelAfterRename<'_> {
+        fn metadata(&self, p: &Path) -> io::Result<FileMeta> {
+            RealFs.metadata(p)
+        }
+        fn create_dir_all(&self, p: &Path) -> io::Result<()> {
+            RealFs.create_dir_all(p)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            RealFs.rename(from, to)?;
+            self.cancel.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+        fn hash(&self, p: &Path, size: u64) -> io::Result<Vec<u8>> {
+            RealFs.hash(p, size)
+        }
+        fn volume_serial(&self, p: &Path) -> io::Result<u32> {
+            RealFs.volume_serial(p)
+        }
+        fn remove_dir_all(&self, p: &Path) -> io::Result<()> {
+            RealFs.remove_dir_all(p)
+        }
+        fn remove_dir(&self, p: &Path) -> io::Result<()> {
+            RealFs.remove_dir(p)
+        }
+        fn create_dir(&self, p: &Path) -> io::Result<()> {
+            RealFs.create_dir(p)
+        }
+        fn read_dir(&self, p: &Path) -> io::Result<Vec<(PathBuf, FileMeta)>> {
+            RealFs.read_dir(p)
+        }
+        fn set_dir_meta(&self, p: &Path, a: u32, m: i64, c: i64) -> io::Result<()> {
+            RealFs.set_dir_meta(p, a, m, c)
+        }
     }
 }
