@@ -1,7 +1,7 @@
 ---
 title: "Implementation Plan: Duplikate ganzer Ordner (plan dedupe-dirs)"
 feature_spec: docs/features/ordner-duplikate.md
-status: approved
+status: implemented
 created: 2026-10-09
 updated: 2026-10-09
 ---
@@ -153,6 +153,14 @@ pub struct PartialPair { pub a: String, pub b: String, pub shared_bytes: u64, pu
 - **Performance:** `tests/perf_plans.rs`.
 - **Manuell:** Handtest in `docs/manual-tests.md` auf einem echten Ordner mit Kopien und einem OneDrive-Ordner mit Cloud-only-Datei (nichts darf heruntergeladen werden).
 - **Abschluss:** `verification-before-completion` vor `status: implemented`, `requesting-code-review` vor dem Merge `dev → main`.
+
+## Umsetzungsnotizen (Abweichungen und Ergänzungen)
+- **Grund-Text:** Der Plan (`exact-duplicate-dir:copy-name`) gilt; die Spec wurde angepasst (Akzeptanzkriterium nennt nun den Präfix).
+- **Behaltener Ordner zuerst:** Bei der Wahl des Ordners, der bleibt, wird ein bereits als „behalten“ feststehender Ordner (Mitglied in einem behaltenen Ordner) bevorzugt. Das ergänzt die Regel „Mitglieder in einem behaltenen Ordner werden nie entfernt“ und gibt zusätzlichen Platz frei.
+- **Schutzprüfung:** `contains_protected` prüft Dateien mit `Protector::check_cached` (ein Dateisystem-Aufruf je Ordner statt je Datei); `apply` prüft weiter streng mit `check`.
+- **Bericht:** `FolderDuplicatesReport` hat zusätzlich `partial_incomplete` (Paarbildung wurde abgebrochen) und `unverifiable` (Zahl nicht vergleichbarer Ordner). Gruppen im Bericht sind nur oberste Gruppen (`folder_dups::top_level_groups`). CSV: `folder-duplicates.csv`, `folder-partial.csv`. Im HTML eigener Abschnitt „Ordner-Duplikate“ vor „Exakte Duplikate“.
+- **Journal:** Der `intent` einer Ordner-Quarantäne trägt `is_dir: true` und keinen Hash.
+- **Test zu langer Pfade:** Der Planer-Test mit über 32.000 Zeichen langem Pfad wurde durch Unit-Tests von `quarantine::fits_dir` ersetzt (der Protector löst jeden der 130 Ebenen auf und braucht dafür Minuten).
 
 ## Risks & Open Questions
 - **Teilweise gleich wird zu teuer** (viele Duplikate, tiefe Bäume): Kappung je Hash-Gruppe (`MAX_PARTIAL_GROUP = 32`) und Obergrenze von 200 000 Ordnerpaaren mit Vermerk „unvollständig“; Werte nach dem Perf-Test anpassen.

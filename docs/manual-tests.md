@@ -16,6 +16,15 @@ Vorbereitung: `cargo build --release`, dann `target\release\ordner-cleanup.exe` 
 - [ ] In der GUI „Öffnen“ auf eine Cloud-only-Datei: Meldung statt Download.
 - [ ] OneDrive-Ordner mit mehr als der Obergrenze: Apply verlangt in der CLI `--allow-large`, in der GUI den Haken im Dialog.
 
+## 1a. Doppelte Ordner (Phase 7.1)
+
+- [ ] Echter Ordner mit einer Kopie („Kopie von …“ oder „… (2)“): `plan dedupe-dirs` wählt die Kopie zum Entfernen, der Originalordner bleibt; Review, Apply und `undo` stellen alles her (Pfade, Inhalt, Zeiten).
+- [ ] Namens-Heuristik an echten Ordnern prüfen: Fehltreffer (z. B. „Altbau“, „Backup-Strategie“) notieren; Muster ggf. in `dedupe_dirs_copy_patterns` ergänzen oder die Liste in `analysis/folder_dups.rs` anpassen.
+- [ ] OneDrive-Ordner mit einer Cloud-only-Datei in einer der Kopien: der Ordner taucht nicht als Aktion auf, es startet kein Download.
+- [ ] Bericht: Abschnitt „Ordner-Duplikate“ zeigt die Gruppen und teilweise gleiche Ordner plausibel (Schwelle in den Einstellungen ändern und neu bauen).
+- [ ] GUI: Karte „Doppelte Ordner“ steht vor „Duplikate“, zeigt die Zahl nach dem Scan, Review zeigt Dateianzahl und behaltenen Ordner; Teilauswahl anwenden und zurückdrehen.
+- [ ] Laufzeit: `plan dedupe-dirs` auf einem großen echten Index (> 500.000 Dateien) bleibt unter etwa 15 s.
+
 ## 2. Geplante Läufe (Phase 5)
 
 - [ ] `schedule add <profil> --daily 09:00`, `schedule list` zeigt die Aufgabe, in der Windows-Aufgabenplanung ist sie sichtbar.

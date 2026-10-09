@@ -171,7 +171,7 @@ pub fn contains_protected(tree: &Tree, protector: &Protector, key: &str) -> bool
             || tree
                 .files(dir)
                 .iter()
-                .any(|f| protector.check(Path::new(&f.path)).is_some())
+                .any(|f| protector.check_cached(Path::new(&f.path)).is_some())
     })
 }
 

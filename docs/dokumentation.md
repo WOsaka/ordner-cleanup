@@ -142,7 +142,7 @@ Die „Wurzel“ ist der Ordner, den man an `scan` übergibt. Quarantäne, Archi
 | `scan <pfad>` | Ordnerbaum erfassen, Duplikate hashen | nein (nur Index) |
 | `report [<pfad>]` | Bericht aus dem Index erzeugen | nein (nur Berichtsordner) |
 | `index list` / `index remove <pfad>` | Gescannte Wurzeln verwalten | nein (nur Index) |
-| `plan dedupe\|junk\|empty-dirs\|archive\|versions <pfad>` | Änderungsplan erzeugen | nein |
+| `plan dedupe\|dedupe-dirs\|junk\|empty-dirs\|archive\|versions <pfad>` | Änderungsplan erzeugen | nein |
 | `apply <plan.json>` | Plan ausführen | **ja** (umkehrbar) |
 | `undo <run-id>` | Lauf zurückdrehen | **ja** |
 | `runs [<wurzel>]` | Läufe auflisten | nein |
@@ -192,6 +192,7 @@ ordner-cleanup index remove <pfad>
 
 ```
 ordner-cleanup plan dedupe     <pfad> [--keep oldest|newest|path:<absoluter ordner>] [--out <plan.json>]
+ordner-cleanup plan dedupe-dirs <pfad> [--keep oldest|newest|path:<absoluter ordner>] [--min-size <größe>] [--out <plan.json>]
 ordner-cleanup plan junk       <pfad> [--category system,temp,downloads,installer,<eigene>] [--out <plan.json>]
 ordner-cleanup plan empty-dirs <pfad> [--out <plan.json>]
 ordner-cleanup plan archive    <pfad> [--older-than 2y] [--out <plan.json>]
@@ -280,6 +281,7 @@ Zusätzlich druckt `report` eine Terminal-Zusammenfassung und nennt die geschrie
 | **Dateitypen** | Anzahl und Größe je Endung und je Kategorie (Dokumente, Bilder, Video, Audio, Archive, Code, Ausführbar, Sonstige) |
 | **Alter** | Altersklassen nach Änderungsdatum (< 1 Monat, < 6 Monate, < 1 Jahr, < 3 Jahre, > 3 Jahre) und eine Liste „alter“ Dateien (Schwelle `--old-after`) |
 | **Exakte Duplikate** | Gruppen identischer Dateien (Voll-Hash) mit Pfaden, Größe und verschwendetem Platz (`Größe × (Anzahl − 1)`), nach Verschwendung sortiert |
+| **Ordner-Duplikate** | Gruppen gleicher Ordner (oberste Ebene, mit Platzgewinn) und „teilweise gleiche“ Ordnerpaare ab der Schwelle `dedupe_dirs_partial_threshold` (nur Hinweis; im HTML die 50 größten ab 1 MiB, vollständig in `folder-partial.csv` und im JSON) |
 | **Wahrscheinliche Duplikate** | Gruppen mit Cloud-Platzhaltern: gleicher Name und gleiche Größe, ausdrücklich als „nicht verifiziert“ markiert |
 | **Ähnliche Dateien / Versionen** | Gruppen im selben Ordner mit gleichem normalisiertem Namen (siehe unten) |
 | **Struktur** | Leere Ordner, Ordner mit nur einer Datei, zu tiefe Verschachtelung, Riesenordner |
@@ -382,6 +384,7 @@ Findet `undo` die Wurzel nicht im Lauf-Register, hilft `--root <wurzel>`. Auch `
 | Befehl | Was geplant wird | Aktionstyp | Undo |
 |---|---|---|---|
 | `plan dedupe` | Exakte Duplikate in die Quarantäne | `quarantine` | Datei zurück aus der Quarantäne |
+| `plan dedupe-dirs` | Doppelte ganze Ordner in die Quarantäne | `quarantine` (`is_dir`) | Ordner zurück aus der Quarantäne |
 | `plan junk` | Müll nach Kategorien in die Quarantäne | `quarantine` (ohne Hash) | Datei zurück aus der Quarantäne |
 | `plan empty-dirs` | Rekursiv leere Ordner, von unten nach oben | `remove-dir` | Ordner neu anlegen, Attribute und Zeitstempel zurücksetzen |
 | `plan archive` | Lange unberührte Ordner nach `<wurzel>\_Archiv\<Jahr>\…` | `move` (ganzer Ordner) | Rückbenennung |
@@ -402,6 +405,22 @@ Pro Gruppe identischer Dateien (gleicher Voll-Hash) bleibt **immer mindestens ei
 | `path:D:\Ordner` | die älteste Kopie unterhalb dieses absoluten Ordners |
 
 Bei Gleichstand entscheidet der kürzeste, dann der alphabetisch erste Pfad. Geschützte Dateien werden weder entfernt noch als „keep“ gewählt. Hardlinks auf die behaltene Datei zählen nicht (sie würden keinen Platz freigeben). Cloud-Platzhalter und Links kennt der Index in Gruppen gar nicht, sie werden nie angefasst. Der Plan nennt den tatsächlich freiwerdenden Platz.
+
+### 7.1a plan dedupe-dirs: doppelte Ordner
+
+```
+ordner-cleanup plan dedupe-dirs <pfad> [--keep oldest|newest|path:<absoluter ordner>] [--min-size <größe>] [--out <plan.json>]
+```
+
+Die Erkennung arbeitet nur auf dem Index (kein zusätzliches Lesen von Dateien): Aus (Name, Größe, Voll-Hash) der Dateien und den Fingerabdrücken der Unterordner wird von unten nach oben ein Fingerabdruck je Ordner gebildet (Merkle-Prinzip). Ordner mit gleichem Fingerabdruck bilden eine Gruppe.
+
+**Gleichheit:** dieselben relativen Dateipfade (Groß-/Kleinschreibung egal) mit derselben Größe und demselben Hash; der Name des Ordners selbst zählt nicht. Ignoriert werden `Thumbs.db`, `ehthumbs.db`, `.DS_Store`, `desktop.ini`, `*.tmp`, `~$*`, `*.crdownload`, `*.part`, `*.partial` und leere Unterordner (ignorierte Dateien wandern bei der Verschiebung trotzdem mit). Ein Ordner braucht mindestens eine verglichene Datei mit Größe > 0. Ordner mit Cloud-Platzhaltern, Links, Lücken im Index oder Dateien ohne Hash sind nicht vergleichbar und werden nie angefasst (Dateien werden nie gelesen oder gehasht).
+
+**Welcher Ordner bleibt:** 1. ein schon behaltener Ordner (damit nichts innerhalb eines behaltenen Ordners entfernt wird), 2. der Name: „Kopie“, „Copy“, „Backup“, „Sicherung“, „alt“/„old“/„bak“ als ganzes Wort, „(2)“ am Ende und eigene Wörter aus `dedupe_dirs_copy_patterns` machen einen Ordner zur Kopie, normale Namen bleiben bevorzugt („Altbau“ und „Copyright“ zählen nicht), 3. `--keep` (nach der jüngsten Änderungszeit aller Dateien im Ordner), 4. kürzester, dann alphabetisch erster Pfad. Bei `path:<prefix>` hat das Präfix Vorrang vor dem Namen; liegt kein Ordner der Gruppe darunter, bleibt die Gruppe unberührt (`group-incomplete`).
+
+**Plan:** `type: quarantine` mit `is_dir: true`, `files` (Dateianzahl), `hash` = Inhalts-Fingerabdruck der Gruppe, `keep` = behaltener Ordner und `keep_fingerprint` (Metadaten des behaltenen Ordners, siehe unten); `reason` ist `exact-duplicate-dir`, bzw. `exact-duplicate-dir:copy-name`, wenn der Name entschieden hat. Es wird von oben nach unten gearbeitet: Unterordner entfernter Ordner entfallen, nichts innerhalb eines behaltenen Ordners wird entfernt. Geschützte Ordner (auch mit geschütztem Inhalt) werden weder entfernt noch behalten. Hardlinks auf den behaltenen Ordner geben keinen Platz frei (`hardlink`); der Plan nennt den tatsächlich freiwerdenden Platz. `--min-size` lässt kleine Gruppen weg.
+
+**Apply:** Der zu entfernende Ordner wird wie bei `archive` per Metadaten-Walk geprüft (Dateianzahl, Größensumme, jüngste Änderungszeit; sonst `stale`). Der behaltene Ordner wird gegen `keep_fingerprint` geprüft (relativer Pfad, Größe, Änderungszeit der nicht ignorierten Dateien, ohne Hashen): fehlt er `keep-missing`, hat er sich geändert `keep-changed`; dann wird nichts entfernt. Danach folgt **ein** Rename in die Quarantäne; scheitert er (gesperrte Datei), bleibt der Ordner vollständig liegen. Undo, Purge und die OneDrive-Obergrenze (zählt die Dateianzahl) funktionieren wie bei `archive`.
 
 ### 7.2 plan junk: Müll
 
@@ -520,6 +539,8 @@ Datei: `%APPDATA%\ordner-cleanup\config.toml`. Alle Schlüssel sind optional; ei
 | `downloads_dirs` | `[]` | Ersetzt den Windows-Downloads-Ordner, wenn nicht leer |
 | `archive_older_than` | `"2y"` | Default für `plan archive --older-than` |
 | `versions_min_age` | `"30d"` | Default für `plan versions --min-age` |
+| `dedupe_dirs_copy_patterns` | `[]` | Zusätzliche Wörter/Muster, die einen Ordnernamen als Kopie kennzeichnen (`plan dedupe-dirs`) |
+| `dedupe_dirs_partial_threshold` | `0.8` | Ab diesem Anteil gemeinsamer Bytes meldet der Bericht Ordner als „teilweise gleich“ (0,5 bis 1,0) |
 | `onedrive_max_move_files` | `1000` | OneDrive-Obergrenze: Dateianzahl |
 | `onedrive_max_move_bytes` | `"5GB"` | OneDrive-Obergrenze: Größe |
 
@@ -629,7 +650,7 @@ Die CI (GitHub Actions, `windows-latest`) prüft `cargo fmt --check`, Clippy mit
 | `index/` | SQLite-Index (Schema, Speichern, Abfragen) |
 | `analysis/` | Dateitypen, Alter, ähnliche Dateien, Strukturprobleme, Problemdateien |
 | `report/` | Berichtsmodell und Ausgabe (Terminal, HTML, JSON, CSV) |
-| `change/` | Planer (`dedupe`, `junk`, `empty_dirs`, `archive`, `versions`), `apply`, `undo`, Journal, Quarantäne, Schutzregeln, Register |
+| `change/` | Planer (`dedupe`, `dedupe_dirs`, `junk`, `empty_dirs`, `archive`, `versions`), `apply`, `undo`, Journal, Quarantäne, Schutzregeln, Register |
 | `platform/` | Windows-spezifisches (Attribute, File-ID, Known Folders, Cloud-Erkennung) |
 | `paths.rs` | Pfad-Normalisierung (`\\?\`, Schlüssel, Vergleich) |
 | `templates/`, `assets/` | HTML-Vorlage, CSS und JS des Berichts |

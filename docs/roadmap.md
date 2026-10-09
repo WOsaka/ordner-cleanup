@@ -82,7 +82,7 @@ Alle Phasen 1 bis 6d sind im Code umgesetzt. Die folgenden Ideen stammen aus den
 ### 7.1 Lücken schließen
 | Idee | Nutzen | Aufwand |
 |---|---|---|
-| Duplikate ganzer Ordner (`plan dedupe-dirs`, Merkle-Hash aus Datei-Hashes) | Größter Platzgewinn („Backup_alt“) | M |
+| ~~Duplikate ganzer Ordner (`plan dedupe-dirs`, Merkle-Hash aus Datei-Hashes)~~ (umgesetzt, siehe unten) | Größter Platzgewinn („Backup_alt“) | M |
 | Kombinierter Aufräumplan (`plan cleanup`) mit Konfliktauflösung zwischen Aktionen | Ein Klick statt fünf Karten | M |
 | Archivieren als ZIP (Hash-Prüfung im ZIP, Undo = Entpacken) | Echte Platzersparnis | M |
 | Hardlinks statt Quarantäne für Duplikate (nur außerhalb OneDrive, opt-in) | Platz sparen, Datei bleibt erreichbar | S–M |
@@ -158,4 +158,4 @@ Kleine Sofortgewinne zwischendurch: Explorer-Kontextmenü, Inhalts-Hash als Cach
 | Phase 6b: GUI (egui, eigene `ordner-cleanup-gui.exe`, Funktionsgleichheit mit der CLI) | [`features/gui.md`](features/gui.md), Plan: [`implementation-plans/gui.md`](implementation-plans/gui.md) | Stufe 1 und 2 im Code umgesetzt (ops-Schicht, GUI, Einstellungen); manueller Test (Teil A und B), Nutzertest und Messung in VM/RDP offen |
 | Phase 6c: GUI-Bedienung (Kennzahl-Kacheln, Aufräumen als Karten, Theme hell/dunkel, Tastaturkürzel, Skala) | [`features/gui-bedienung.md`](features/gui-bedienung.md), Plan: [`implementation-plans/gui-bedienung.md`](implementation-plans/gui-bedienung.md) | Umgesetzt (Stufe 1 bis 4, Schritte 1 bis 20); Handtests in `manual-tests.md` 5a bis 5d (Optik, DPI, Windows-Modus) offen |
 | Phase 6d: GUI-Hilfe (Kurztexte zu Seiten, Karten und Review, F1, Link zur Doku) | [`features/gui-hilfe.md`](features/gui-hilfe.md), Plan: [`implementation-plans/gui-hilfe.md`](implementation-plans/gui-hilfe.md) | Im Code umgesetzt (Schritte 1 bis 9); Handtests in `manual-tests.md` 5e offen |
-| 7.1: Duplikate ganzer Ordner (`plan dedupe-dirs`) | [`features/ordner-duplikate.md`](features/ordner-duplikate.md), Plan: [`implementation-plans/ordner-duplikate.md`](implementation-plans/ordner-duplikate.md) | Spec als Entwurf, Plan wartet auf Freigabe |
+| 7.1: Duplikate ganzer Ordner (`plan dedupe-dirs`) | [`features/ordner-duplikate.md`](features/ordner-duplikate.md), Plan: [`implementation-plans/ordner-duplikate.md`](implementation-plans/ordner-duplikate.md) | Umgesetzt (`plan dedupe-dirs`, Bericht, GUI-Karte, Rundreise-Test); offen: Handtest auf echten Ordnern (`manual-tests.md` 1a) |

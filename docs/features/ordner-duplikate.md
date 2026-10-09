@@ -1,6 +1,6 @@
 ---
 title: "Duplikate ganzer Ordner (plan dedupe-dirs)"
-status: draft          # draft | approved | implemented
+status: implemented
 created: 2026-10-09
 updated: 2026-10-09
 ---
@@ -66,7 +66,7 @@ Betroffen ist zunächst der Entwickler selbst, später Familie und Kollegen (GUI
 - Summe der Dateigrößen der entfernten Ordner (inkl. ignorierter Junk-Dateien). Hardlinks werden wie bei `plan dedupe` behandelt: Bytes zählen nur, wenn alle Namen einer Datei-Identität entfernt werden.
 
 ## Acceptance Criteria
-- [ ] Given zwei Ordner `Projekt` und `Kopie von Projekt` mit identischen Dateien, when `plan dedupe-dirs`, then enthält der Plan genau eine Aktion `quarantine` mit `is_dir: true` für `Kopie von Projekt`, `keep` = `Projekt`, `reason: exact-duplicate-dir`, und das Dateisystem ist unverändert.
+- [ ] Given zwei Ordner `Projekt` und `Kopie von Projekt` mit identischen Dateien, when `plan dedupe-dirs`, then enthält der Plan genau eine Aktion `quarantine` mit `is_dir: true` für `Kopie von Projekt`, `keep` = `Projekt`, `reason` beginnt mit `exact-duplicate-dir` (hier `exact-duplicate-dir:copy-name`, weil der Kopie-Name die Wahl entschieden hat; ohne Namens-Hinweis nur `exact-duplicate-dir`), und das Dateisystem ist unverändert.
 - [ ] Given dieser Plan, when `apply --yes`, then liegt `Kopie von Projekt` komplett unter `quarantine\<run-id>\…` und `Projekt` ist unverändert; when `undo <run-id> --yes`, then ist der Baum byteidentisch zum Zustand vor dem Apply (Pfade, Größen, mtime, Inhalt) und unter `quarantine\<run-id>` bleibt nichts zurück.
 - [ ] Given zwei sonst gleiche Ordner, von denen einer zusätzlich `Thumbs.db` und `desktop.ini` enthält, when `plan dedupe-dirs`, then gelten sie als gleich.
 - [ ] Given zwei Ordner, die sich in einer Datei (Inhalt oder relativer Pfad) unterscheiden, when `plan dedupe-dirs`, then enthält der Plan keine Aktion für sie.
@@ -104,7 +104,7 @@ Betroffen ist zunächst der Entwickler selbst, später Familie und Kollegen (GUI
 | Index älter als die Plan-Erzeugung bzw. kein Scan vorhanden | Gleiche Meldung wie die anderen Planer („erst scannen“) |
 
 ## Technical Constraints
-- **Performance:** Kein zusätzliches Lesen von Dateien. Zwei gleiche Ordner bestehen ausschließlich aus Dateien, die auch einzeln Duplikate sind; der Index hat für sie bereits volle Hashes. Die Erkennung arbeitet nur auf dem Index: Ordner-Fingerabdruck aus den sortierten (relativer Pfad, Größe, Hash)-Paaren, Bottom-up über den Baum (Merkle-Prinzip). Ordner mit einer Datei, die in keiner Duplikat-Gruppe ist, scheiden sofort aus. Ziel: `plan dedupe-dirs` auf 1 Mio. indizierten Dateien unter 30 s (Messung in `tests/perf_plans.rs`).
+- **Performance:** Kein zusätzliches Lesen von Dateien. Zwei gleiche Ordner bestehen ausschließlich aus Dateien, die auch einzeln Duplikate sind; der Index hat für sie bereits volle Hashes. Die Erkennung arbeitet nur auf dem Index: Ordner-Fingerabdruck aus den sortierten (relativer Pfad, Größe, Hash)-Paaren, Bottom-up über den Baum (Merkle-Prinzip). Ordner mit einer Datei, die in keiner Duplikat-Gruppe ist, scheiden sofort aus. Ziel: `plan dedupe-dirs` auf 1 Mio. indizierten Dateien unter 30 s (Messung in `tests/perf_plans.rs`). Gemessen am 2026-10-09 (Release-Build): 100.000 Dateien mit vollen Hashes und 500 Ordnerpaaren in 1,44 s, linear hochgerechnet etwa 14 s für 1 Mio. Dateien.
 - **Teilweise gleich:** Die Paarbildung läuft nur über Dateien in Duplikat-Gruppen; Gruppen mit sehr vielen Mitgliedern (z. B. dieselbe Lizenzdatei 5000-mal) werden für die Paarbildung gekappt, damit die Paaranzahl nicht quadratisch explodiert (Grenze im Implementierungsplan festlegen).
 - **Security / Sicherheit:** Grundprinzipien gelten unverändert: Dry-Run als Standard, nie hart löschen (Quarantäne), geschützte Pfade, Cloud-only-Dateien nie lesen, Prüfung des Zustands beim Apply. Apply verschiebt den Ordner als Ganzes (ein `MoveFile` innerhalb des Volumes); schlägt das fehl, bleibt der Ordner unverändert.
 - **Plan-Format:** bleibt v2. Neu ist die Kombination `type: quarantine` mit `is_dir: true` sowie das optionale Feld `keep_fingerprint` (Fingerabdruck des behaltenen Ordners) und `files` (Dateianzahl, wie bei `archive`). Ältere Programmversionen lehnen solche Pläne mit klarer Meldung ab, statt sie falsch auszuführen.

@@ -27,6 +27,7 @@ ordner-cleanup index remove <pfad>
 
 ```
 ordner-cleanup plan dedupe <pfad> [--keep oldest|newest|path:<absoluter ordner>] [--out <plan.json>]
+ordner-cleanup plan dedupe-dirs <pfad> [--keep oldest|newest|path:<absoluter ordner>] [--min-size <größe>] [--out <plan.json>]
 ordner-cleanup apply <plan.json> [--yes] [--allow-large]
 ordner-cleanup undo <run-id> [--root <wurzel>] [--yes]
 ordner-cleanup runs [<wurzel>]
@@ -34,6 +35,8 @@ ordner-cleanup purge [--older-than 30d] [--root <wurzel>] [--yes]
 ```
 
 Ablauf: Ordner mit `scan` indizieren, mit `plan dedupe` einen Plan erzeugen (die Plan-Datei ist lesbares JSON, ohne `--out` landet sie als `plan-<zeitstempel>.json` im aktuellen Ordner), den Plan prüfen, mit `apply` ausführen, bei Bedarf mit `undo <run-id>` zurückdrehen. `plan` verändert nichts. Pro Duplikatgruppe bleibt immer mindestens eine Datei unberührt.
+
+**Doppelte Ordner (`plan dedupe-dirs`):** Komplette Ordnerkopien („Kopie von Projekt“, „Backup_alt“) sind oft der größte Platzfresser. Zwei Ordner gelten als gleich, wenn sie dieselben Dateien mit demselben Inhalt an denselben relativen Pfaden enthalten; der Name des Ordners ist egal, Müll wie `Thumbs.db` und `desktop.ini` und leere Unterordner zählen nicht mit. Der Plan enthält **eine** Quarantäne-Aktion je doppeltem Ordner (nicht hunderte Einzeldateien) und nur die oberste Ebene. Welcher Ordner bleibt, entscheidet zuerst der Name (Ordner mit „Kopie“, „Copy“, „Backup“, „Sicherung“, „alt“/„old“, „(2)“ … gehen zuerst, erweiterbar mit `dedupe_dirs_copy_patterns`), dann `--keep`. Erst doppelte Ordner bereinigen, dann einzelne Duplikate mit `plan dedupe`. Der Bericht listet zusätzlich „teilweise gleiche“ Ordner (ab `dedupe_dirs_partial_threshold`, Default 0,8) als Hinweis; sie kommen nie in einen Plan.
 
 - **Nichts wird hart gelöscht** (einzige Ausnahme: leere Ordner bei `plan empty-dirs`, siehe Phase 3; auch sie lassen sich per `undo` wiederherstellen). Verschoben wird per Umbenennen auf demselben Volume nach `<wurzel>\.ordner-cleanup\quarantine\<run-id>\<relativer Pfad>`; Zeitstempel und Inhalt bleiben erhalten. Einen Verschiebevorgang über Laufwerksgrenzen gibt es nicht. Ein belegtes Ziel wird nie überschrieben, es bekommt ein Suffix wie `datei (2).txt`. Hart gelöscht wird nur mit `purge` nach Bestätigung, nie automatisch.
 - **Bestätigung:** `apply`, `undo` und `purge` fragen einmal `j/N`. In einer nicht interaktiven Sitzung (Skript, Pipe) brechen sie ohne `--yes` ab, statt zu raten.
@@ -81,6 +84,8 @@ installer_min_age = "90d"
 downloads_dirs = []            # leer = Known Folder; sonst ersetzt die Liste ihn
 archive_older_than = "2y"
 versions_min_age = "30d"
+dedupe_dirs_copy_patterns = []        # zusätzliche Kopie-Wörter für plan dedupe-dirs
+dedupe_dirs_partial_threshold = 0.8   # „teilweise gleich“ im Bericht (0,5 bis 1,0)
 onedrive_max_move_files = 1000
 onedrive_max_move_bytes = "5GB"
 
@@ -193,7 +198,7 @@ score_below = 60                   # oder liegt unter diesem Wert
 [profiles.downloads]
 root       = 'C:\Users\Oskar\Downloads'
 rules_file = "downloads.rules.toml"      # relativ zum Config-Ordner
-plans      = ["rules", "junk"]           # rules | junk | empty-dirs | archive | versions | dedupe
+plans      = ["rules", "junk"]           # rules | junk | empty-dirs | archive | versions | dedupe | dedupe-dirs
 template   = "para"                      # eingebaut oder Pfad (relativ zum Config-Ordner)
 force      = false                       # Netzlaufwerk erlauben
 exclude    = ["*.iso"]
@@ -299,7 +304,7 @@ max_confidence  = 0.75                   # unter min_confidence: LLM-Kategorien 
 
 - **Übersicht:** gescannte Ordner und Profile mit Score und Trend, letzte Läufe, ausstehende Quarantäne. Hier wählen Sie einen Ordner (Windows-Dialog) oder ein Profil und **scannen** bzw. **klassifizieren** (Optionen unter „Erweitert“). Fortschritt und **Abbrechen** stehen unten in der Statuszeile.
 - **Analyse:** Größenbaum, Typen & Alter, Duplikate, Probleme & Struktur, Inhalte, Health-Score mit Verlauf, Soll/Ist; Export als HTML/JSON/CSV. Rechtsklick auf einen Pfad: im Explorer zeigen, Pfad kopieren, öffnen (nicht bei Cloud-only-Dateien).
-- **Aufräumen:** Plan erzeugen (Duplikate, Müll, leere Ordner, Archivieren, Versionen, Regeln) oder einen vorhandenen Plan öffnen, auch aus der CLI oder von geplanten Läufen. In der **Review-Liste** filtern, sortieren, einzeln oder gesammelt an- und abwählen; übersprungene Einträge stehen mit Grund in einem eigenen Filter. **Anwenden** zeigt vorher Anzahl, Größe, Ziel und Warnungen; die OneDrive-Obergrenze lässt sich nur mit einem ausdrücklichen Haken aufheben. Wurden Einträge abgewählt, entsteht vor dem Anwenden eine **neue Plan-Datei** `<original>-auswahl-<Zeitstempel>.json`, das Original bleibt unverändert.
+- **Aufräumen:** Plan erzeugen (Doppelte Ordner, Duplikate, Müll, leere Ordner, Archivieren, Versionen, Regeln) oder einen vorhandenen Plan öffnen, auch aus der CLI oder von geplanten Läufen. In der **Review-Liste** filtern, sortieren, einzeln oder gesammelt an- und abwählen; übersprungene Einträge stehen mit Grund in einem eigenen Filter. **Anwenden** zeigt vorher Anzahl, Größe, Ziel und Warnungen; die OneDrive-Obergrenze lässt sich nur mit einem ausdrücklichen Haken aufheben. Wurden Einträge abgewählt, entsteht vor dem Anwenden eine **neue Plan-Datei** `<original>-auswahl-<Zeitstempel>.json`, das Original bleibt unverändert.
 - **Verlauf:** Läufe mit Details aus dem Journal, **Rückgängig**, **Quarantäne leeren** (mit Vorschau) und das Entfernen gescannter Wurzeln aus dem Index.
 - **Einstellungen:** öffnet `config.toml`, `rules.toml` und `categories.toml` im Editor und legt auf Wunsch eine Startmenü-Verknüpfung an.
 
