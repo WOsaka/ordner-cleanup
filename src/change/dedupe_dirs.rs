@@ -1,9 +1,10 @@
 //! Planer für doppelte Ordner (`plan dedupe-dirs`): liest nur den Index und verändert nichts.
 //!
 //! Die Erkennung liefert `analysis::folder_dups`. Hier wird je Gruppe der behaltene Ordner
-//! gewählt (Namens-Heuristik, dann `--keep`), von oben nach unten gearbeitet, damit Unterordner
-//! bereits entfernter Ordner entfallen und nichts innerhalb eines behaltenen Ordners (oder über
-//! einem) entfernt wird, und je entferntem Ordner eine `quarantine`-Aktion mit `is_dir` erzeugt.
+//! gewählt (Namens-Heuristik, dann `--keep`), von oben nach unten gearbeitet (Gruppen mit
+//! größerer Teilbaumhöhe zuerst), damit Unterordner bereits entfernter Ordner entfallen und nichts
+//! innerhalb eines behaltenen Ordners entfernt wird, und je entferntem Ordner eine
+//! `quarantine`-Aktion mit `is_dir` erzeugt.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -17,7 +18,7 @@ use super::protect::Protector;
 use super::quarantine;
 use super::tree::{contains_protected, subtree_dirs, Tree};
 use super::SkipReason;
-use crate::analysis::folder_dups::{self, depth, within, ExactGroup, FolderDupOptions};
+use crate::analysis::folder_dups::{self, within, ExactGroup, FolderDupOptions};
 use crate::index::{FileHash, FileRow, Index, IndexError};
 use crate::paths;
 
@@ -125,15 +126,9 @@ pub fn plan_dedupe_dirs(
     // Bei `path:<prefix>` entscheidet das Präfix, nicht der Name.
     let name_decides = !matches!(strategy, KeepStrategy::PathPrefix(_));
 
-    // Oben zuerst: flachstes Mitglied, dann viele Bytes, dann Pfad.
+    // Oben zuerst: Gruppen mit Vorfahren-Mitgliedern vor denen mit deren Nachfahren.
     let mut groups: Vec<&ExactGroup> = analysis.groups.iter().collect();
-    groups.sort_by(|a, b| {
-        let top = |g: &ExactGroup| g.members.iter().map(|m| depth(m)).min().unwrap_or(0);
-        top(a)
-            .cmp(&top(b))
-            .then(b.bytes.cmp(&a.bytes))
-            .then_with(|| a.members.cmp(&b.members))
-    });
+    groups.sort_by(|a, b| folder_dups::cmp_groups(a, b));
 
     let archive_key = paths::dir_key(&root.join(ARCHIVE_DIR));
     let mut removed: HashSet<String> = HashSet::new();
@@ -183,8 +178,9 @@ pub fn plan_dedupe_dirs(
             continue;
         }
 
-        // Gesperrt: liegt in einem behaltenen Ordner oder enthält einen.
-        let locked = |key: &str| within(&kept, key) || kept.iter().any(|k| paths::is_under(k, key));
+        // Gesperrt: liegt in einem behaltenen Ordner. Weil Gruppen mit Vorfahren zuerst laufen,
+        // kann ein Mitglied hier keinen schon behaltenen Ordner enthalten.
+        let locked = |key: &str| within(&kept, key);
         let Some(keep) = eligible
             .iter()
             .copied()
@@ -829,6 +825,49 @@ mod tests {
         ])
     }
 
+    /// Keine Quelle liegt unter einer anderen Quelle oder unter dem `keep` einer anderen Aktion.
+    fn no_overlap(plan: &Plan) -> Result<(), String> {
+        for a in &plan.actions {
+            let own = paths::path_key(Path::new(&a.path));
+            let keep = paths::path_key(Path::new(a.keep.as_deref().unwrap()));
+            for o in plan.actions.iter().filter(|o| o.id != a.id) {
+                let other = paths::path_key(Path::new(&o.path));
+                if paths::is_under(&other, &own) {
+                    return Err(format!("{} liegt in der Quelle {}", o.path, a.path));
+                }
+                if paths::is_under(&other, &keep) {
+                    return Err(format!("{} liegt im behaltenen {keep}", o.path));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// W = P\Y\x = P\Z\x (Gruppe 1, flacher Treffer außerhalb); P\Y = P\Z (Gruppe 2) enthält
+    /// je eine Kopie. Gruppe 2 steht höher im Baum und muss zuerst entschieden werden.
+    fn wrapped_copies() -> Index {
+        seed(&[
+            (r"Z:\Root\W\f.txt", 1, 1),
+            (r"Z:\Root\P\Y\x\f.txt", 5, 1),
+            (r"Z:\Root\P\Z\x\f.txt", 10, 1),
+        ])
+    }
+
+    #[test]
+    fn behaltener_ordner_enthaelt_keinen_entfernten_ordner() {
+        let plan = plan_of(&wrapped_copies()).plan;
+        assert_eq!(no_overlap(&plan), Ok(()), "{:?}", paths_of(&plan));
+        assert_eq!(paths_of(&plan), [r"Z:\Root\P\Z", r"Z:\Root\W"]);
+        assert_eq!(plan.actions[0].keep.as_deref(), Some(r"Z:\Root\P\Y"));
+        assert_eq!(plan.actions[1].keep.as_deref(), Some(r"Z:\Root\P\Y\x"));
+    }
+
+    #[test]
+    fn verschachtelte_ordner_zaehlen_beim_platzgewinn_nicht_doppelt() {
+        // P\Z (eine Datei) und W (eine Datei) gehen: 2 x 100 Bytes.
+        assert_eq!(plan_of(&wrapped_copies()).freed_bytes, 200);
+    }
+
     #[test]
     fn mitglied_mit_behaltenem_unterordner_wird_nie_entfernt() {
         let plan = plan_of(&nested_groups()).plan;
@@ -838,11 +877,12 @@ mod tests {
             "{:?}",
             paths_of(&plan)
         );
-        assert!(
-            !paths_of(&plan).contains(&r"Z:\Root\A\B"),
-            "{:?}",
-            paths_of(&plan)
-        );
+        assert_eq!(no_overlap(&plan), Ok(()), "{:?}", paths_of(&plan));
+        // {A\B, M\N} steht höher und wird zuerst entschieden; A\B\k und A\B\k2 entfallen
+        // dadurch einzeln.
+        let removed = paths_of(&plan);
+        assert!(!removed.contains(&r"Z:\Root\A\B\k"), "{removed:?}");
+        assert!(!removed.contains(&r"Z:\Root\A\B\k2"), "{removed:?}");
     }
 
     #[test]

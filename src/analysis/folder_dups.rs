@@ -4,6 +4,7 @@
 //! (Datei: Name, Größe, voller Hash; Unterordner: Name, Fingerabdruck). Der Name des Ordners
 //! selbst geht nicht ein. Junk-Dateien und leere Unterordner zählen nicht mit.
 
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 use xxhash_rust::xxh3::xxh3_128;
@@ -30,6 +31,9 @@ pub struct ExactGroup {
     pub files: u64,
     /// Summe ihrer Größen je Mitglied.
     pub bytes: u64,
+    /// Verschachtelungstiefe der zählenden Unterordner (0 = nur Dateien). Ein Vorfahre hat
+    /// immer eine größere Höhe als jeder Nachfahre; Mitglieder einer Gruppe haben dieselbe.
+    pub height: u32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -58,11 +62,19 @@ enum Print {
         bytes: u64,
         /// Mindestens eine Datei mit Größe > 0.
         data: bool,
+        /// Verschachtelungstiefe der zählenden Unterordner (0 = nur Dateien).
+        height: u32,
     },
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(char::from(DIGITS[usize::from(b >> 4)]));
+        out.push(char::from(DIGITS[usize::from(b & 0x0f)]));
+    }
+    out
 }
 
 fn dir_name(path: &str) -> String {
@@ -79,6 +91,7 @@ fn print_dir(
         return Print::Unverifiable;
     }
     let (mut files, mut bytes, mut data) = (0u64, 0u64, false);
+    let mut height = 0u32;
     let mut entries: Vec<String> = Vec::new();
     for file in tree.files(key) {
         if is_ignored_name(&file.name) {
@@ -114,6 +127,7 @@ fn print_dir(
                 files: f,
                 bytes: b,
                 data: dt,
+                height: child_height,
             } => {
                 let name = tree
                     .row(child)
@@ -121,6 +135,7 @@ fn print_dir(
                 files += f;
                 bytes += b;
                 data |= dt;
+                height = height.max(child_height + 1);
                 entries.push(format!("D|{name}|{fingerprint:032x}"));
             }
         }
@@ -141,6 +156,7 @@ fn print_dir(
         files,
         bytes,
         data,
+        height,
     }
 }
 
@@ -158,7 +174,7 @@ pub fn analyze(
         done.insert(key, print);
     }
 
-    let mut by_print: HashMap<u128, (Vec<String>, u64, u64)> = HashMap::new();
+    let mut by_print: HashMap<u128, (Vec<String>, u64, u64, u32)> = HashMap::new();
     let mut unverifiable = 0;
     for (key, print) in &done {
         if *key == opts.root_key {
@@ -172,6 +188,7 @@ pub fn analyze(
                 files,
                 bytes,
                 data,
+                height,
             } => {
                 let is_internal = tree
                     .row(key)
@@ -179,7 +196,7 @@ pub fn analyze(
                 if *data && !is_internal {
                     by_print
                         .entry(*fingerprint)
-                        .or_insert_with(|| (Vec::new(), *files, *bytes))
+                        .or_insert_with(|| (Vec::new(), *files, *bytes, *height))
                         .0
                         .push((*key).to_string());
                 }
@@ -188,14 +205,15 @@ pub fn analyze(
     }
     let mut groups: Vec<ExactGroup> = by_print
         .into_iter()
-        .filter(|(_, (members, _, _))| members.len() >= 2)
-        .map(|(fingerprint, (mut members, files, bytes))| {
+        .filter(|(_, (members, _, _, _))| members.len() >= 2)
+        .map(|(fingerprint, (mut members, files, bytes, height))| {
             members.sort();
             ExactGroup {
                 members,
                 fingerprint,
                 files,
                 bytes,
+                height,
             }
         })
         .collect();
@@ -275,17 +293,23 @@ pub fn within(set: &HashSet<String>, key: &str) -> bool {
     }
 }
 
+/// Reihenfolge, in der Gruppen von oben nach unten abgearbeitet werden: größere Höhe zuerst
+/// (eine Gruppe mit Vorfahren-Mitgliedern kommt immer vor der mit deren Nachfahren), dann das
+/// flachste Mitglied, viele Bytes, Pfad.
+pub fn cmp_groups(a: &ExactGroup, b: &ExactGroup) -> Ordering {
+    let top = |g: &ExactGroup| g.members.iter().map(|m| depth(m)).min().unwrap_or(0);
+    b.height
+        .cmp(&a.height)
+        .then_with(|| top(a).cmp(&top(b)))
+        .then(b.bytes.cmp(&a.bytes))
+        .then_with(|| a.members.cmp(&b.members))
+}
+
 /// Nur oberste Gruppen: Mitglieder, die in einem Ordner einer höheren Gruppe liegen, entfallen;
 /// bleiben weniger als zwei, entfällt die Gruppe. (Der Planer arbeitet ebenso von oben nach unten.)
 pub fn top_level_groups(groups: &[ExactGroup]) -> Vec<ExactGroup> {
     let mut sorted: Vec<&ExactGroup> = groups.iter().collect();
-    sorted.sort_by(|a, b| {
-        let top = |g: &ExactGroup| g.members.iter().map(|m| depth(m)).min().unwrap_or(0);
-        top(a)
-            .cmp(&top(b))
-            .then(b.bytes.cmp(&a.bytes))
-            .then_with(|| a.members.cmp(&b.members))
-    });
+    sorted.sort_by(|a, b| cmp_groups(a, b));
     let mut covered: HashSet<String> = HashSet::new();
     let mut result = Vec::new();
     for group in sorted {
@@ -950,6 +974,58 @@ mod tests {
             },
         );
         assert!(result.incomplete);
+    }
+
+    /// W = P\Y\x = P\Z\x (Höhe 0); P\Y = P\Z (Höhe 1) enthalten je eine Kopie davon.
+    fn wrapped() -> (Tree, HashMap<String, FileHash>) {
+        build(
+            &[],
+            &[
+                (r"D:\Daten\W\f.txt", 7, 1),
+                (r"D:\Daten\P\Y\x\f.txt", 7, 1),
+                (r"D:\Daten\P\Z\x\f.txt", 7, 1),
+            ],
+        )
+    }
+
+    #[test]
+    fn hoehe_zaehlt_die_verschachtelung_zaehlender_unterordner() {
+        let (tree, hashes) = wrapped();
+        let a = run(&tree, &hashes);
+        let height_of = |member: &str| {
+            a.groups
+                .iter()
+                .find(|g| g.members.contains(&k(member)))
+                .map(|g| g.height)
+        };
+        assert_eq!(height_of(r"D:\Daten\W"), Some(0));
+        assert_eq!(height_of(r"D:\Daten\P\Y"), Some(1));
+    }
+
+    #[test]
+    fn gruppen_mit_vorfahren_kommen_vor_ihren_nachfahren() {
+        let (tree, hashes) = wrapped();
+        let a = run(&tree, &hashes);
+        let mut sorted: Vec<&ExactGroup> = a.groups.iter().collect();
+        sorted.sort_by(|a, b| cmp_groups(a, b));
+        // Die Gruppe mit dem flachsten Mitglied (W) steht trotzdem hinter {P\Y, P\Z}.
+        assert_eq!(sorted[0].members, [k(r"D:\Daten\P\Y"), k(r"D:\Daten\P\Z")]);
+    }
+
+    #[test]
+    fn oberste_gruppen_nehmen_die_hoehere_gruppe_und_lassen_gedeckte_mitglieder_weg() {
+        let (tree, hashes) = wrapped();
+        let top = top_level_groups(&run(&tree, &hashes).groups);
+        assert_eq!(top.len(), 1, "{top:?}");
+        assert_eq!(top[0].members, [k(r"D:\Daten\P\Y"), k(r"D:\Daten\P\Z")]);
+    }
+
+    #[test]
+    fn hex_stimmt_fuer_alle_bytewerte_mit_format_ueberein() {
+        let all: Vec<u8> = (0..=255).collect();
+        let expected: String = all.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex(&all), expected);
+        assert_eq!(hex(&[]), "");
     }
 
     #[test]
