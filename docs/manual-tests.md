@@ -125,17 +125,17 @@ Spec: [`features/gui-bedienung.md`](features/gui-bedienung.md). Mit einem frisch
 
 Spec: [`features/gui-hilfe.md`](features/gui-hilfe.md). Mit `cargo build --release` bauen, die exe-Dateien samt `README.md` und `docs\dokumentation.md` in einen Wegwerf-Ordner kopieren (README daneben, Dokumentation im Unterordner `docs`) und die GUI von dort starten.
 
-- [ ] Jede Seite (Übersicht, Analyse, Aufräumen, Verlauf, Einstellungen) hat neben der Überschrift ein „?“ mit Tooltip „Hilfe zu … (F1)“; ein Klick öffnet das Hilfefenster mit dem Kurztext der Seite.
-- [ ] Aufräumen: Jede der sechs Karten hat oben rechts ein „?“. Ein Klick darauf öffnet den Text dieser Karte und ändert die Auswahl der Karte nicht. Ein Klick auf den Rest der Karte wählt sie weiterhin.
-- [ ] `F1` öffnet die Hilfe zur aktuellen Seite, auch wenn der Fokus in einem Textfeld steht (zum Beispiel in der Suche). In der Review-Ansicht öffnet `F1` den Text „Plan prüfen“, ebenso das „?“ neben der Überschrift des Plans. Bei offenem Dialog tut `F1` nichts.
-- [ ] Seitenleiste: „? Hilfe“ öffnet die Hilfe zur aktuellen Seite, „? Kürzel“ und `?` öffnen den Reiter „Tastenkürzel“ (mit der Zeile `F1`); ein zweiter Druck schließt ihn wieder.
-- [ ] Reiter „Erklärung“ und „Tastenkürzel“ wechseln im selben Fenster; der Text ist ohne Befehlszeilen-Kenntnis verständlich (mit einer Person aus dem Nutzertest gegenlesen) und stimmt mit dem überein, was die Funktion tut.
-- [ ] „Ausführliche Doku öffnen“: öffnet die Datei im Standardprogramm; ohne Programm für `.md` öffnet sich Notepad. Der Kurztext nennt den Abschnitt, in dem die Erklärung steht.
-- [ ] `docs`-Ordner löschen und den Knopf erneut klicken: rote Meldung mit dem erwarteten Pfad, „Pfad kopieren“ legt ihn in die Zwischenablage, der Kurztext bleibt lesbar, kein Absturz.
-- [ ] Hilfe offen, während ein Scan läuft: Fortschritt und „Abbrechen“ in der Statuszeile funktionieren weiter, der Scan läuft ungestört.
-- [ ] Hilfe und ein Bestätigungsdialog („Anwenden“) gleichzeitig offen: das erste `Esc` schließt nur die Hilfe, das zweite den Dialog (ohne zu bestätigen).
-- [ ] Hell und dunkel, DPI 100/150/200 %, schmales und niedriges Fenster: Text umbricht, das Fenster scrollt, „Schließen“ (Kreuz) bleibt erreichbar, nichts ist abgeschnitten.
-- [ ] `netstat -ano` während die Hilfe benutzt wird: keine Verbindung des Prozesses.
+- [x] Jede Seite (Übersicht, Analyse, Aufräumen, Verlauf, Einstellungen) hat neben der Überschrift ein „?“ mit Tooltip „Hilfe zu … (F1)“; ein Klick öffnet das Hilfefenster mit dem Kurztext der Seite.
+- [x] Aufräumen: Jede der sechs Karten hat oben rechts ein „?“. Ein Klick darauf öffnet den Text dieser Karte und ändert die Auswahl der Karte nicht. Ein Klick auf den Rest der Karte wählt sie weiterhin.
+- [x] `F1` öffnet die Hilfe zur aktuellen Seite, auch wenn der Fokus in einem Textfeld steht (zum Beispiel in der Suche). In der Review-Ansicht öffnet `F1` den Text „Plan prüfen“, ebenso das „?“ neben der Überschrift des Plans. Bei offenem Dialog tut `F1` nichts.
+- [x] Seitenleiste: „? Hilfe“ öffnet die Hilfe zur aktuellen Seite, „? Kürzel“ und `?` öffnen den Reiter „Tastenkürzel“ (mit der Zeile `F1`); ein zweiter Druck schließt ihn wieder.
+- [x] Reiter „Erklärung“ und „Tastenkürzel“ wechseln im selben Fenster; der Text ist ohne Befehlszeilen-Kenntnis verständlich (mit einer Person aus dem Nutzertest gegenlesen) und stimmt mit dem überein, was die Funktion tut.
+- [x] „Ausführliche Doku öffnen“: öffnet die Datei im Standardprogramm; ohne Programm für `.md` öffnet sich Notepad. Der Kurztext nennt den Abschnitt, in dem die Erklärung steht.
+- [x] `docs`-Ordner löschen und den Knopf erneut klicken: rote Meldung mit dem erwarteten Pfad, „Pfad kopieren“ legt ihn in die Zwischenablage, der Kurztext bleibt lesbar, kein Absturz.
+- [x] Hilfe offen, während ein Scan läuft: Fortschritt und „Abbrechen“ in der Statuszeile funktionieren weiter, der Scan läuft ungestört.
+- [x] Hilfe und ein Bestätigungsdialog („Anwenden“) gleichzeitig offen: das erste `Esc` schließt nur die Hilfe, das zweite den Dialog (ohne zu bestätigen).
+- [ ] Hell und dunkel, DPI 100/150/200 %, schmales und niedriges Fenster: Text umbricht, das Fenster scrollt, „Schließen“ (Kreuz) bleibt erreichbar, nichts ist abgeschnitten. Geprüft ohne DPI-Stufen (offen: DPI 100/150/200 %).
+- [x] `netstat -ano` während die Hilfe benutzt wird: keine Verbindung des Prozesses.
 
 ## 6. Nutzertest
 
