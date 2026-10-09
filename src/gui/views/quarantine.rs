@@ -303,8 +303,8 @@ fn restore_confirm_text(count: usize, bytes: u64, lines: &[PreviewLine]) -> Stri
     }
     if cloud > 0 {
         text.push_str(&format!(
-            "\n\nHinweis: {cloud} Datei(en) liegen nur in der Cloud und werden nicht \
-             heruntergeladen."
+            "\n\nHinweis: {cloud} Datei(en) liegen nur in der Cloud und werden weder \
+             heruntergeladen noch geprüft."
         ));
     }
     text.push_str(
@@ -615,7 +615,13 @@ impl QuarantineView {
             {
                 self.clear_selection();
             }
-            let busy = shell.is_running(Route::Quarantine);
+            // Gesperrt, solange irgendein Schreib-Task läuft (Apply, Undo, Purge, Scan …).
+            let busy = shell.is_running(Route::Quarantine)
+                || shell
+                    .runner
+                    .running()
+                    .iter()
+                    .any(|r| r.kind == TaskKind::Write);
             let restore = ui.add_enabled(
                 any && !busy,
                 egui::Button::new(texts::quarantine_restore_button(self.selected.len())),
@@ -1281,7 +1287,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("Cloud") && text.contains("nicht heruntergeladen"),
+            text.contains("Cloud") && text.contains("weder heruntergeladen noch geprüft"),
             "{text}"
         );
         assert!(text.contains("nie überschrieben"), "{text}");

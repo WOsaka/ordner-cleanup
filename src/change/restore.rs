@@ -170,12 +170,13 @@ fn count_files(fs: &dyn FsOps, dir: &Path) -> Option<u64> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HashCheck {
-    /// Kein Hash im Journal (nur `dedupe` schreibt einen) oder ein Ordner.
+    /// Kein Hash im Journal (nur `dedupe` schreibt einen), ein Ordner oder nicht mehr da.
     NotApplicable,
     Match,
     /// Der Inhalt in der Quarantäne weicht ab oder ließ sich nicht prüfen.
     Mismatch,
-    /// Platzhalter: der Inhalt wird nicht gelesen, um keinen Download auszulösen.
+    /// Platzhalter (auch ohne Hash im Journal): der Inhalt wird nicht gelesen, um keinen
+    /// Download auszulösen.
     CloudOnly,
 }
 
@@ -227,17 +228,19 @@ pub fn preview_restore(
 }
 
 fn check_hash(fs: &dyn FsOps, item: &MoveInfo) -> HashCheck {
+    let stored = Path::new(&item.to);
+    let Ok(meta) = fs.metadata(stored) else {
+        return HashCheck::NotApplicable;
+    };
+    if meta.is_cloud_only() {
+        return HashCheck::CloudOnly;
+    }
     let (Some(expected), false) = (&item.hash, item.is_dir) else {
         return HashCheck::NotApplicable;
     };
-    let stored = Path::new(&item.to);
-    match fs.metadata(stored) {
-        Ok(meta) if meta.is_cloud_only() => HashCheck::CloudOnly,
-        Ok(meta) => match fs.hash(stored, meta.size) {
-            Ok(actual) if hex(&actual) == *expected => HashCheck::Match,
-            _ => HashCheck::Mismatch,
-        },
-        Err(_) => HashCheck::NotApplicable,
+    match fs.hash(stored, meta.size) {
+        Ok(actual) if hex(&actual) == *expected => HashCheck::Match,
+        _ => HashCheck::Mismatch,
     }
 }
 
@@ -337,6 +340,11 @@ fn restore_one(ctx: &Ctx, op: &Op, journal: &mut JournalWriter) -> Result<ItemOu
         return Ok(ItemOutcome::Missing);
     }
     if let Some(parent) = origin.parent() {
+        if let Ok(meta) = fs.metadata(parent) {
+            if !meta.is_dir || meta.is_reparse_point() {
+                return Ok(ItemOutcome::Failed("Ziel ist kein Ordner".into()));
+            }
+        }
         if let Err(e) = fs.create_dir_all(parent) {
             return Ok(ItemOutcome::Failed(e.to_string()));
         }
@@ -650,6 +658,18 @@ mod tests {
     }
 
     #[test]
+    fn vorschau_markiert_cloud_only_auch_ohne_hash() {
+        let fx = fx();
+        fx.write("tmp/x.tmp", "x");
+        let plan = fx.junk_plan(&["tmp/x.tmp"]);
+        run_with(&fx, &plan, &RealFs, &fx.protector(), RUN).unwrap();
+        let faulty = FaultyFs::new().cloud_only(&fx.quarantined(RUN, "tmp/x.tmp"));
+        let p = preview_restore(&fx.root, &sel(RUN, &[1]), &faulty).unwrap();
+        assert_eq!(p[0].hash, HashCheck::CloudOnly);
+        assert!(faulty.hashed().is_empty());
+    }
+
+    #[test]
     fn vorschau_laesst_unbekannte_und_erledigte_eintraege_weg() {
         let fx = applied();
         let path = quarantine::journal_path(&fx.root, &run_id(RUN));
@@ -755,7 +775,10 @@ mod tests {
         std::fs::remove_dir(fx.root.join("b")).unwrap();
         fx.write("b", "ich bin eine datei");
         let r = restore(&fx, &[1, 2]);
-        assert!(matches!(r[0].outcome, ItemOutcome::Failed(_)));
+        assert_eq!(
+            r[0].outcome,
+            ItemOutcome::Failed("Ziel ist kein Ordner".into())
+        );
         assert!(matches!(r[1].outcome, ItemOutcome::Restored { .. }));
         assert!(fx.quarantined(RUN, "b/kopie.txt").exists());
     }
