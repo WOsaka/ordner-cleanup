@@ -387,7 +387,7 @@ mod tests {
     use crate::change::fsops::RealFs;
     use crate::change::journal::{Entry, JournalWriter};
     use crate::change::test_support::{fx, run_with, Fx, RUN};
-    use crate::change::undo::{purge_run, undo_run, UndoEnv};
+    use crate::change::undo::{list_runs, purge_run, undo_run, RestoreStatus, RunSummary, UndoEnv};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -845,6 +845,74 @@ mod tests {
             .filter(|e| matches!(e, Entry::UndoDone { .. }))
             .count();
         assert_eq!(undone, 1, "der erste Eintrag ist journaliert");
+    }
+
+    fn summary(fx: &Fx) -> RunSummary {
+        list_runs(&fx.root, 30)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.run == run_id(RUN))
+            .unwrap()
+    }
+
+    #[test]
+    fn undo_ueberspringt_einzeln_zurueckgeholte_eintraege() {
+        let fx = applied();
+        restore(&fx, &[1]);
+        let out = undo_run(&fx.root, &run_id(RUN), &env()).unwrap();
+        let status_of = |action| {
+            out.results
+                .iter()
+                .find(|r| r.action == action)
+                .map(|r| r.status.clone())
+        };
+        assert_eq!(status_of(1), Some(RestoreStatus::NothingToDo));
+        assert_eq!(status_of(2), Some(RestoreStatus::Restored));
+        assert_eq!(out.exit_code(), 0);
+        assert_eq!(fx.read("b/kopie.txt"), "gleicher inhalt");
+        assert_eq!(fx.read("c/sub/kopie2.txt"), "gleicher inhalt");
+    }
+
+    #[test]
+    fn undo_laesst_umbenannte_datei_in_ruhe() {
+        let fx = applied();
+        fx.write("b/kopie.txt", "neue datei");
+        restore(&fx, &[1]);
+        let out = undo_run(&fx.root, &run_id(RUN), &env()).unwrap();
+        assert_eq!(out.exit_code(), 0);
+        assert_eq!(out.conflicts(), 0);
+        assert_eq!(fx.read("b/kopie.txt"), "neue datei");
+        assert_eq!(fx.read("b/kopie (2).txt"), "gleicher inhalt");
+        assert!(!fx.exists("b/kopie (3).txt"));
+    }
+
+    #[test]
+    fn purge_laesst_zurueckgeholte_dateien_unberuehrt() {
+        let fx = applied();
+        restore(&fx, &[1]);
+        purge_run(&fx.root, &run_id(RUN), &env()).unwrap();
+        assert_eq!(fx.read("b/kopie.txt"), "gleicher inhalt");
+        assert!(!fx.quarantined(RUN, "c/sub/kopie2.txt").exists());
+        assert!(list(&fx).items.is_empty());
+    }
+
+    #[test]
+    fn runs_zeigt_kleinere_groesse_und_unveraenderten_status() {
+        let fx = applied();
+        let size = "gleicher inhalt".len() as u64;
+        assert_eq!(summary(&fx).bytes, 2 * size);
+        restore(&fx, &[1]);
+        let after_one = summary(&fx);
+        assert_eq!(
+            (after_one.bytes, after_one.status),
+            (size, RunStatus::Complete)
+        );
+        restore(&fx, &[2]);
+        let after_all = summary(&fx);
+        assert_eq!(
+            (after_all.bytes, after_all.status),
+            (0, RunStatus::Complete)
+        );
     }
 
     /// `RealFs`, das nach dem ersten erfolgreichen `rename` das Abbruch-Flag setzt.
