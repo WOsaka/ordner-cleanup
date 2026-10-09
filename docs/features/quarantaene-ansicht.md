@@ -1,6 +1,6 @@
 ---
 title: "Quarantäne-Ansicht (Inhalt, Größe, Ablauf, einzelne Dateien zurückholen)"
-status: draft          # draft | approved | implemented
+status: approved       # draft | approved | implemented
 created: 2026-10-09
 updated: 2026-10-09
 ---
@@ -37,7 +37,7 @@ Das betrifft alle GUI-Nutzer. Besonders betroffen sind Familie und Kollegen ohne
 2. Die Seite lädt im Hintergrund aus den Journalen aller bekannten Wurzeln. Bis dahin steht dort „Wird geladen …“.
 3. Oben stehen die Wurzel-Auswahl („Alle“ oder eine Wurzel) und ein Suchfeld. Das Suchfeld filtert auf Name und ursprünglichen Pfad, ohne Groß- und Kleinschreibung.
 4. Darunter folgt eine Kopfzeile mit Summen, zum Beispiel „1 284 Einträge, 3,2 GB, nächster Ablauf in 4 Tagen“.
-5. Eine Tabelle zeigt die Spalten Auswahl, Name, Ursprünglicher Ort (gekürzt, voller Pfad im Tooltip), Größe, Aktion (Duplikat, Müll, …), Lauf/Datum, Läuft ab und Status. Sortieren lässt sich nach Name, Größe, Datum und Ablauf. Standard ist „zuletzt verschoben zuerst“.
+5. Eine Tabelle zeigt die Spalten Auswahl, Name, Ursprünglicher Ort (gekürzt, voller Pfad im Tooltip), Größe, Lauf/Datum, Läuft ab und Status. Sortieren lässt sich nach Name, Größe, Datum und Ablauf. Standard ist „zuletzt verschoben zuerst“.
 6. Ein Rechtsklick oder ein Knopf in der Zeile bietet „Im Explorer zeigen“. Das öffnet die Datei in der Quarantäne.
 7. Der Nutzer wählt eine oder mehrere Zeilen und klickt „Zurückholen …“.
 8. Ein Bestätigungsdialog nennt die Anzahl, die Gesamtgröße und die Ziele. Bei mehr als 15 Zielen zeigt er die ersten 15 und „… und N weitere“. Einträge, deren Ursprungspfad belegt ist, werden mit dem neuen Namen angezeigt, zum Beispiel „→ Bericht (2).pdf“. Weicht ein Hash ab, steht dort ein Warnhinweis.
@@ -89,7 +89,7 @@ Das betrifft alle GUI-Nutzer. Besonders betroffen sind Familie und Kollegen ohne
 ## Technical Constraints
 
 - **Quelle der Liste:** Die Liste kommt aus den Journalen (`collect_ops` in `change/undo.rs`) und nicht aus einem Verzeichnisscan der Quarantäne. Das Journal liefert ursprünglichen Pfad, Quarantäne-Pfad, Größe, Hash und Aktion. Für den Status „fehlt“ reicht ein `exists` je Eintrag über `FsOps`, ohne die Datei zu öffnen.
-- **Journal beim Zurückholen:** Für jeden zurückgeholten Eintrag kommt ein Eintrag ins Journal des ursprünglichen Laufs. Ohne Kollision genügt `UndoDone`. Mit Kollision braucht es einen Eintrag mit dem tatsächlichen Ziel, damit Verlauf-Details und ein späteres Undo wissen, wo die Datei liegt. Ob das ein neues Feld an `UndoDone` oder ein neuer Eintragstyp wird, entscheidet der Implementierungsplan (siehe Open Questions). Ältere Journale müssen lesbar bleiben.
+- **Journal beim Zurückholen:** Für jeden zurückgeholten Eintrag kommt ein `UndoDone` ins Journal des ursprünglichen Laufs. Bei einer Kollision trägt `UndoDone` zusätzlich das optionale Feld `to` mit dem tatsächlichen Ziel, zum Beispiel `…\Bericht (2).pdf`. So wissen Verlauf-Details und ein späteres Undo, wo die Datei liegt, und `collect_ops` setzt `undone` unverändert. Das Feld ist `#[serde(default, skip_serializing_if = "Option::is_none")]`, damit ältere Journale lesbar bleiben.
 - **Laufstatus:** Einzelnes Zurückholen schreibt kein `UndoStart`/`UndoEnd`. So bleibt der Laufstatus („ausgeführt“) unverändert, und nur die Größe in der Quarantäne sinkt. `summarize` berücksichtigt das schon über `undone`.
 - **Wiederverwendung:** Die Prüfungen aus `Restore::move_back` (Pfad unter Wurzel bzw. Lauf-Quarantäne, kein `..`, nie überschreiben, leere Elternordner in der Quarantäne aufräumen) werden genutzt oder herausgelöst, nicht dupliziert.
 - **Performance:** Bei 100 000 Einträgen läuft das Laden im Hintergrund-Task. Die Tabelle rendert virtualisiert (nur sichtbare Zeilen). Suche und Sortierung laufen im Speicher auf vorbereiteten Schlüsseln. Hash-Prüfung nur für die ausgewählten Einträge und erst vor dem Bestätigungsdialog, als eigener Lese-Task.
@@ -108,7 +108,7 @@ Das betrifft alle GUI-Nutzer. Besonders betroffen sind Familie und Kollegen ohne
   - Eintrag in Navigation und `Route`/`Page`
   - Wiederverwendung von `widgets/table` (`short_path_cell`, `status_cell`), `Dialog::Confirm` und Tasks (`TaskKind::Read`/`Write`)
   - Hilfetext in `gui/help.rs` und `texts.rs`
-  - optional ein Link „Inhalt ansehen“ aus der Verlaufsansicht auf die Seite, gefiltert auf den Lauf
+  - Knopf „Inhalt ansehen“ in der Verlaufsansicht je Lauf mit Quarantäne-Inhalt, öffnet die Seite auf diesen Lauf gefiltert
 - Doku:
   - `docs/dokumentation.md`: GUI-Seite und Journal-Eintrag
   - `docs/manual-tests.md`: neuer Abschnitt
@@ -116,6 +116,6 @@ Das betrifft alle GUI-Nutzer. Besonders betroffen sind Familie und Kollegen ohne
 
 ## Open Questions
 
-- [ ] Journal-Format für Zurückholen mit Kollision: optionales Feld `to` an `UndoDone` oder neuer Eintrag `Restored { action, to }`? Vorschlag: optionales Feld an `UndoDone`, weil `collect_ops` dann unverändert `undone` setzt.
-- [ ] Soll die Verlaufsansicht einen Knopf „Inhalt ansehen“ bekommen, der die Quarantäne-Seite auf den Lauf gefiltert öffnet? Vorschlag: ja, ist klein und hilft beim Finden.
-- [ ] Spalte „Aktion“: Woher kommt die Art (Duplikat, Müll, Versionen, …)? Das Journal speichert sie nicht je Eintrag. Vorschlag: aus `run_start` bzw. der Plan-Art des Laufs, falls vorhanden, sonst Spalte weglassen.
+- [x] Journal-Format für Zurückholen mit Kollision: optionales Feld `to` an `UndoDone` (mit der Freigabe der Spec übernommen).
+- [x] Knopf „Inhalt ansehen“ in der Verlaufsansicht, öffnet die Quarantäne-Seite auf den Lauf gefiltert: ja (mit der Freigabe der Spec übernommen).
+- [x] Spalte „Aktion“: entfällt. Das Journal speichert die Planer-Art weder je Eintrag noch im `run_start` (dort steht nur der Plan-Pfad), und die Plan-Datei kann fehlen. Die Spalte „Lauf/Datum“ und „Inhalt ansehen“ aus dem Verlauf reichen zur Einordnung (mit der Freigabe der Spec übernommen).
