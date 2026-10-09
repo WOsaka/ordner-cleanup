@@ -24,6 +24,7 @@ pub mod admin;
 pub mod apply;
 pub mod classify;
 pub mod plan;
+pub mod quarantine;
 pub mod report;
 pub mod runs;
 pub mod scan;
