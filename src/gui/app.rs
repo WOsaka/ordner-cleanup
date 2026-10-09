@@ -101,6 +101,9 @@ impl GuiApp {
             if let Some(tab) = goto.analysis_tab {
                 self.analysis.preselect_tab(tab);
             }
+            if let Some((root, run)) = goto.quarantine_run {
+                self.quarantine.show_run(root, run);
+            }
             self.page = goto.page;
         }
     }

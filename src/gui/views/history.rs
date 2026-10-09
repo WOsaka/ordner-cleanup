@@ -10,11 +10,11 @@ use eframe::egui;
 use super::undo_flow::{UndoFlow, TASK_CHECK as UNDO_CHECK, TASK_UNDO};
 use crate::change::journal::{self, Entry};
 use crate::change::quarantine;
-use crate::change::undo::RunSummary;
+use crate::change::undo::{RunStatus, RunSummary};
 use crate::change::RunId;
 use crate::gui::format::{root_status, run_row};
 use crate::gui::help::Topic;
-use crate::gui::shell::{Answer, Dialog, Page, Route, Shell, TaskResult};
+use crate::gui::shell::{Answer, Dialog, Goto, Page, Route, Shell, TaskResult};
 use crate::gui::tasks::TaskKind;
 use crate::gui::texts;
 use crate::gui::widgets::help_button::heading_with_help;
@@ -83,9 +83,12 @@ pub fn detail_rows(entries: &[Entry]) -> Vec<DetailRow> {
                     rows[i].status = format!("Fehler: {error}");
                 }
             }
-            Entry::UndoDone { action, .. } => {
+            Entry::UndoDone { action, to, .. } => {
                 if let Some(&i) = index.get(action) {
-                    rows[i].status = "zurückgedreht".into();
+                    rows[i].status = match to {
+                        Some(to) => format!("zurückgeholt als {to}"),
+                        None => "zurückgedreht".into(),
+                    };
                 }
             }
             Entry::UndoConflict { action, reason, .. } => {
@@ -97,6 +100,11 @@ pub fn detail_rows(entries: &[Entry]) -> Vec<DetailRow> {
         }
     }
     rows
+}
+
+/// Hat der Lauf noch Dateien in der Quarantäne, die sich ansehen lassen?
+fn can_view_content(run: &RunSummary) -> bool {
+    run.bytes > 0 && !matches!(run.status, RunStatus::Purged | RunStatus::Unreadable)
 }
 
 struct HistoryData {
@@ -164,6 +172,7 @@ impl HistoryView {
         });
         let mut want_detail: Option<(PathBuf, RunId)> = None;
         let mut want_undo: Option<(PathBuf, RunId)> = None;
+        let mut want_view: Option<(PathBuf, RunId)> = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
             let now = Local::now();
             egui::Grid::new("runs").striped(true).show(ui, |ui| {
@@ -187,6 +196,16 @@ impl HistoryView {
                         ui.horizontal(|ui| {
                             if ui.button("Details").clicked() {
                                 want_detail = Some((root.clone(), r.run.clone()));
+                            }
+                            if ui
+                                .add_enabled(
+                                    can_view_content(r),
+                                    egui::Button::new(texts::HISTORY_VIEW_CONTENT),
+                                )
+                                .on_hover_text(texts::HISTORY_VIEW_CONTENT_TIP)
+                                .clicked()
+                            {
+                                want_view = Some((root.clone(), r.run.clone()));
                             }
                             if ui
                                 .add_enabled(row.can_undo, egui::Button::new("Rückgängig …"))
@@ -227,6 +246,13 @@ impl HistoryView {
         }
         if let Some((root, run)) = want_undo {
             self.undo.begin(shell, Route::History, run, Some(root));
+        }
+        if let Some(target) = want_view {
+            shell.goto = Some(Goto {
+                page: Page::Quarantine,
+                quarantine_run: Some(target),
+                ..Goto::default()
+            });
         }
     }
 
@@ -456,6 +482,56 @@ mod tests {
         assert_eq!(rows[0].text, r"D:\a.txt → D:\q\a.txt");
         assert!(rows[1].status.starts_with("übersprungen"), "{:?}", rows[1]);
         assert_eq!(rows[2].status, "Fehler: gesperrt");
+    }
+
+    #[test]
+    fn einzeln_zurueckgeholte_datei_nennt_den_neuen_namen() {
+        let entries = vec![
+            Entry::Intent {
+                run: run(),
+                action: 1,
+                from: r"D:\a.txt".into(),
+                to: r"D:\q\a.txt".into(),
+                size: 1,
+                hash: None,
+                dest: Default::default(),
+                is_dir: false,
+            },
+            Entry::Done {
+                run: run(),
+                action: 1,
+            },
+            Entry::UndoDone {
+                run: run(),
+                action: 1,
+                to: Some(r"D:\a (2).txt".into()),
+            },
+        ];
+        assert_eq!(
+            detail_rows(&entries)[0].status,
+            r"zurückgeholt als D:\a (2).txt"
+        );
+    }
+
+    fn summary(bytes: u64, status: RunStatus) -> RunSummary {
+        RunSummary {
+            run: run(),
+            started: None,
+            moved: 1,
+            counts: Default::default(),
+            bytes,
+            status,
+            expires: None,
+        }
+    }
+
+    #[test]
+    fn inhalt_ansehen_nur_bei_dateien_in_der_quarantaene() {
+        assert!(can_view_content(&summary(10, RunStatus::Complete)));
+        assert!(can_view_content(&summary(10, RunStatus::PartiallyUndone)));
+        assert!(!can_view_content(&summary(0, RunStatus::Complete)));
+        assert!(!can_view_content(&summary(10, RunStatus::Purged)));
+        assert!(!can_view_content(&summary(10, RunStatus::Unreadable)));
     }
 
     #[test]

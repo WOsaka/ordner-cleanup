@@ -90,6 +90,8 @@ pub struct Goto {
     pub plan_kind: Option<&'static str>,
     /// Vorgewählter Tab (nur `Page::Analysis`): `problems` oder `content`
     pub analysis_tab: Option<&'static str>,
+    /// Nur `Page::Quarantine`: Wurzel und Lauf, auf die die Liste gefiltert wird
+    pub quarantine_run: Option<(std::path::PathBuf, crate::change::RunId)>,
 }
 
 /// Was eine Ansicht von der Kopfleiste verlangt.

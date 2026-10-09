@@ -165,6 +165,10 @@ static HISTORY: HelpEntry = HelpEntry {
             "Bis zu diesem Tag bleiben Dateien in der Quarantäne und lassen sich zurückholen.",
         ),
         (
+            "Inhalt ansehen",
+            "Springt zur Seite „Quarantäne“ und zeigt die Dateien dieses Laufs, die noch dort liegen. Dort holst du einzelne zurück.",
+        ),
+        (
             "Gescannte Wurzeln im Index",
             "Entfernt gemerkte Ordner aus dem Index. Deine Dateien bleiben unberührt.",
         ),

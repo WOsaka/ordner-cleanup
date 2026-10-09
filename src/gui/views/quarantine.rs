@@ -517,6 +517,13 @@ impl QuarantineView {
         }
     }
 
+    /// Zeigt nur die Einträge eines Laufs (Sprung aus dem Verlauf).
+    pub fn show_run(&mut self, root: PathBuf, run: RunId) {
+        self.root = Some(root);
+        self.run = Some(run);
+        self.filter.clear();
+    }
+
     /// Setzt die Liste (nach dem Laden); `generation` ist der Stand von `Shell::generation`.
     pub fn set_list(&mut self, list: QuarantineList, generation: u64) {
         let roots: Vec<PathBuf> = list.roots.iter().map(|r| r.root.clone()).collect();
@@ -1152,6 +1159,24 @@ mod tests {
         };
         view.set_list(list, 1);
         assert_eq!(view.selected.len(), 3);
+    }
+
+    #[test]
+    fn sprung_aus_dem_verlauf_filtert_auf_wurzel_und_lauf() {
+        let (mut view, data) = view_with(rows());
+        view.filter = "alpha".into();
+        view.show_run(PathBuf::from(r"D:\Daten"), RunId::parse(RUN_A).unwrap());
+        assert_eq!(
+            view.filter, "",
+            "ein alter Suchtext würde den Lauf verdecken"
+        );
+        view.refresh_visible(&data);
+        let actions: Vec<u32> = view
+            .visible
+            .iter()
+            .map(|&i| data.rows[i].item.action)
+            .collect();
+        assert_eq!(actions, [1, 2]);
     }
 
     fn line(origin: &str, target: &str, hash: HashCheck) -> PreviewLine {

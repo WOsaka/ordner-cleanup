@@ -23,6 +23,10 @@ pub const EMPTY_BUTTON: &str = "Ordner wählen und scannen";
 pub const LOADING: &str = "Wird geladen …";
 pub const ALL: &str = "Alle";
 
+pub const HISTORY_VIEW_CONTENT: &str = "Inhalt ansehen";
+pub const HISTORY_VIEW_CONTENT_TIP: &str =
+    "Zeigt die Dateien dieses Laufs, die noch in der Quarantäne liegen";
+
 pub const QUARANTINE_ROOT: &str = "Wurzel:";
 pub const QUARANTINE_SEARCH: &str = "Suchen in Name und Pfad";
 pub const QUARANTINE_EMPTY: &str = "Die Quarantäne ist leer.";
