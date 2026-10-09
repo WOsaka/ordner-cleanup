@@ -2,7 +2,8 @@
 //!
 //! Die Erkennung liefert `analysis::folder_dups`. Hier wird je Gruppe der behaltene Ordner
 //! gewählt (Namens-Heuristik, dann `--keep`), von oben nach unten gearbeitet, damit Unterordner
-//! bereits entfernter Ordner entfallen und nichts innerhalb eines behaltenen Ordners entfernt
+//! bereits entfernter Ordner entfallen und nichts innerhalb eines behaltenen Ordners (oder über
+//! einem) entfernt
 //! wird, und je entferntem Ordner eine `quarantine`-Aktion mit `is_dir` erzeugt.
 
 use std::cmp::Ordering;
@@ -183,7 +184,8 @@ pub fn plan_dedupe_dirs(
             continue;
         }
 
-        let locked = |key: &str| within(&kept, key);
+        // Gesperrt: liegt in einem behaltenen Ordner oder enthält einen.
+        let locked = |key: &str| within(&kept, key) || kept.iter().any(|k| paths::is_under(k, key));
         let Some(keep) = eligible
             .iter()
             .copied()
@@ -801,6 +803,47 @@ mod tests {
         ]);
         let plan = plan_of(&index).plan;
         assert!(plan.actions.is_empty(), "{:?}", paths_of(&plan));
+    }
+
+    /// Kein behaltener Ordner liegt auf oder unter der Quelle einer anderen Aktion.
+    fn keeps_are_outside_removed(plan: &Plan) -> Result<(), String> {
+        for keeper in &plan.actions {
+            let keep = paths::path_key(Path::new(keeper.keep.as_deref().unwrap()));
+            for other in &plan.actions {
+                if paths::is_under(&keep, &paths::path_key(Path::new(&other.path))) {
+                    return Err(format!("{} behalten, aber {} entfernt", keep, other.path));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// G1 = { Z, A\B\k, A\B\k2, M\N\k, M\N\k2 } behält `A\B\k` (älteste Datei); G2 = { A\B, M\N }
+    /// behielte `M\N` und entfernte damit `A\B`, das den behaltenen `A\B\k` enthält.
+    fn nested_groups() -> Index {
+        seed(&[
+            (r"Z:\Root\Z\f.txt", 300, 1),
+            (r"Z:\Root\A\B\k\f.txt", 1, 1),
+            (r"Z:\Root\A\B\k2\f.txt", 500, 1),
+            (r"Z:\Root\M\N\k\f.txt", 100, 1),
+            (r"Z:\Root\M\N\k2\f.txt", 100, 1),
+        ])
+    }
+
+    #[test]
+    fn mitglied_mit_behaltenem_unterordner_wird_nie_entfernt() {
+        let plan = plan_of(&nested_groups()).plan;
+        assert_eq!(
+            keeps_are_outside_removed(&plan),
+            Ok(()),
+            "{:?}",
+            paths_of(&plan)
+        );
+        assert!(
+            !paths_of(&plan).contains(&r"Z:\Root\A\B"),
+            "{:?}",
+            paths_of(&plan)
+        );
     }
 
     #[test]

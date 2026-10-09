@@ -291,6 +291,14 @@ impl Plan {
                     ));
                 }
             }
+            if let (true, Some(keep)) = (a.is_dir, &a.keep) {
+                if moved_with_dir(&dir_moves, a.id, &paths::path_key(Path::new(keep))) {
+                    return invalid(format!(
+                        "Aktion {}: der behaltene Ordner {keep} liegt in einem Ordner, der selbst entfernt wird",
+                        a.id
+                    ));
+                }
+            }
             if let Some(target) = &a.target {
                 let target_key = paths::path_key(Path::new(target));
                 let own_key = paths::path_key(Path::new(&a.path));
@@ -1185,6 +1193,25 @@ mod tests {
     fn dedupe_dirs_plan_enthaelt_nur_ordner_quarantaenen() {
         let file_action = action(1, r"D:\Daten\B\x.txt", r"D:\Daten\A\x.txt");
         assert!(!invalid_message(&dirs_plan(vec![file_action])).is_empty());
+    }
+
+    #[test]
+    fn behaltener_ordner_in_einem_entfernten_ordner_ist_ungueltig() {
+        let p = dirs_plan(vec![
+            dir_action(1, r"D:\Daten\B", r"D:\Daten\M"),
+            dir_action(2, r"D:\Daten\X", r"D:\Daten\B\k"),
+        ]);
+        assert!(invalid_message(&p).contains("behaltene Ordner"));
+    }
+
+    #[test]
+    fn behaltene_ordner_neben_entfernten_sind_gueltig() {
+        let p = dirs_plan(vec![
+            dir_action(1, r"D:\Daten\B", r"D:\Daten\A"),
+            dir_action(2, r"D:\Daten\C", r"D:\Daten\A"),
+            dir_action(3, r"D:\Daten\Bx", r"D:\Daten\A\k"),
+        ]);
+        assert!(p.validate().is_ok());
     }
 
     #[test]
