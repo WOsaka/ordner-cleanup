@@ -44,6 +44,7 @@ pub fn action(key: Key, ctrl: bool, shift: bool, ctx: KeyContext) -> Option<KeyA
             Key::Num3 => page(2),
             Key::Num4 => page(3),
             Key::Num5 => page(4),
+            Key::Num6 => page(5),
             Key::O => Some(KeyAction::OpenPlan),
             Key::R => Some(KeyAction::Reload),
             Key::A if ctx.review_open => Some(if shift {
@@ -83,7 +84,7 @@ pub const HELP: [(&str, &str); 12] = [
     ),
     ("Strg+O", "Plan öffnen"),
     ("Strg+R", "Neu laden"),
-    ("Strg+1 … Strg+5", "Seite wechseln"),
+    ("Strg+1 … Strg+6", "Seite wechseln"),
     ("Esc", "Dialog schließen"),
     ("F1", "Hilfe zur aktuellen Seite"),
     ("?", "Diese Liste"),
@@ -168,10 +169,18 @@ mod tests {
             Some(KeyAction::Page(Page::Cleanup))
         );
         assert_eq!(
+            action(Key::Num4, true, false, PLAIN),
+            Some(KeyAction::Page(Page::History))
+        );
+        assert_eq!(
             action(Key::Num5, true, false, PLAIN),
+            Some(KeyAction::Page(Page::Quarantine))
+        );
+        assert_eq!(
+            action(Key::Num6, true, false, PLAIN),
             Some(KeyAction::Page(Page::Settings))
         );
-        assert_eq!(action(Key::Num6, true, false, PLAIN), None);
+        assert_eq!(action(Key::Num7, true, false, PLAIN), None);
         assert_eq!(action(Key::Num1, false, false, PLAIN), None);
     }
 

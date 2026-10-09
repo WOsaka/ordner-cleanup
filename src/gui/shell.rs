@@ -21,6 +21,7 @@ pub enum Route {
     Analysis,
     Cleanup,
     History,
+    Quarantine,
     Settings,
 }
 
@@ -34,15 +35,17 @@ pub enum Page {
     Analysis,
     Cleanup,
     History,
+    Quarantine,
     Settings,
 }
 
 impl Page {
-    pub const ALL: [Page; 5] = [
+    pub const ALL: [Page; 6] = [
         Page::Overview,
         Page::Analysis,
         Page::Cleanup,
         Page::History,
+        Page::Quarantine,
         Page::Settings,
     ];
 
@@ -53,6 +56,7 @@ impl Page {
             Page::Analysis => "\u{25D4}",
             Page::Cleanup => "\u{2702}",
             Page::History => "\u{21BA}",
+            Page::Quarantine => "\u{25A3}",
             Page::Settings => "\u{2699}",
         }
     }
@@ -72,6 +76,7 @@ impl Page {
             Page::Analysis => texts::NAV_ANALYSIS,
             Page::Cleanup => texts::NAV_CLEANUP,
             Page::History => texts::NAV_HISTORY,
+            Page::Quarantine => texts::NAV_QUARANTINE,
             Page::Settings => texts::NAV_SETTINGS,
         }
     }

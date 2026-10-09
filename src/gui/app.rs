@@ -11,7 +11,7 @@ use super::texts;
 use super::theme::{self, ThemeChoice};
 use super::views::{
     analysis::AnalysisView, cleanup::CleanupView, help_window::HelpState, history::HistoryView,
-    overview::OverviewView, settings::SettingsView,
+    overview::OverviewView, quarantine::QuarantineView, settings::SettingsView,
 };
 use super::widgets::dialogs;
 
@@ -39,6 +39,7 @@ pub struct GuiApp {
     analysis: AnalysisView,
     cleanup: CleanupView,
     history: HistoryView,
+    quarantine: QuarantineView,
     settings: SettingsView,
     help: HelpState,
     /// Symbolschrift vorhanden (einmal beim Start geprüft)
@@ -68,6 +69,7 @@ impl GuiApp {
             analysis: AnalysisView::default(),
             cleanup: CleanupView::default(),
             history: HistoryView::default(),
+            quarantine: QuarantineView::default(),
             settings: SettingsView::default(),
             help: HelpState::default(),
             icons: super::fonts::symbols_available(),
@@ -88,6 +90,7 @@ impl GuiApp {
                 Route::Analysis => self.analysis.on_finished(&name, result, &mut self.shell),
                 Route::Cleanup => self.cleanup.on_finished(&name, result, &mut self.shell),
                 Route::History => self.history.on_finished(&name, result, &mut self.shell),
+                Route::Quarantine => self.quarantine.on_finished(&name, result, &mut self.shell),
                 Route::Settings => self.settings.on_finished(&name, result, &mut self.shell),
             }
         }
@@ -149,6 +152,9 @@ impl GuiApp {
                 }
                 id if id.starts_with("history.") => {
                     self.history.on_answer(id, answer, &mut self.shell)
+                }
+                id if id.starts_with("quarantine.") => {
+                    self.quarantine.on_answer(id, answer, &mut self.shell)
                 }
                 id if id.starts_with("cleanup.") => {
                     self.cleanup.on_answer(id, answer, &mut self.shell)
@@ -327,6 +333,7 @@ impl eframe::App for GuiApp {
             Page::Analysis => self.analysis.ui(ui, &mut self.shell),
             Page::Cleanup => self.cleanup.ui(ui, &mut self.shell),
             Page::History => self.history.ui(ui, &mut self.shell),
+            Page::Quarantine => self.quarantine.ui(ui, &mut self.shell),
             Page::Settings => {
                 self.appearance_ui(ui);
                 self.settings.ui(ui, &mut self.shell)

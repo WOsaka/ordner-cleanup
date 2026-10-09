@@ -6,6 +6,7 @@ pub const NAV_OVERVIEW: &str = "Übersicht";
 pub const NAV_ANALYSIS: &str = "Analyse";
 pub const NAV_CLEANUP: &str = "Aufräumen";
 pub const NAV_HISTORY: &str = "Verlauf";
+pub const NAV_QUARANTINE: &str = "Quarantäne";
 pub const NAV_SETTINGS: &str = "Einstellungen";
 
 pub const BUSY_SCAN: &str = "Ein anderer Scan läuft. Bitte später erneut versuchen.";

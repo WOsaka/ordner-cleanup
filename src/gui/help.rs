@@ -172,6 +172,28 @@ static HISTORY: HelpEntry = HelpEntry {
     doc: Some(DOC_AUFRAEUMEN),
 };
 
+static QUARANTINE: HelpEntry = HelpEntry {
+    title: "Quarantäne",
+    what: "Zeigt, was nach dem Aufräumen in der Quarantäne liegt: wie viel, wie groß, woher und            bis wann. Einzelne Dateien oder Ordner holst du hier gezielt zurück, ohne den ganzen            Lauf rückgängig zu machen.",
+    changes: "„Zurückholen“ verschiebt die gewählten Einträge an ihren alten Ort. Ist der Name               dort inzwischen belegt, bekommt die zurückgeholte Datei einen neuen Namen wie               „Bericht (2).docx“; vorhandene Dateien werden nie überschrieben.",
+    undo: "Nicht nötig: Ein Lauf lässt sich danach weiter unter „Verlauf“ rückgängig machen,            die schon zurückgeholten Einträge werden dabei übersprungen. Wurde die Quarantäne            geleert, sind die Dateien nicht mehr da.",
+    options: &[
+        (
+            "Läuft ab",
+            "Nach diesem Tag darf die Quarantäne geleert werden. Bis dahin bleibt alles zurückholbar.",
+        ),
+        (
+            "fehlt",
+            "Die Datei liegt nicht mehr in der Quarantäne (zum Beispiel von Hand gelöscht).",
+        ),
+        (
+            "nur online",
+            "Die Datei liegt nur in der Cloud. Beim Zurückholen wird sie nicht heruntergeladen.",
+        ),
+    ],
+    doc: Some(DOC_AUFRAEUMEN),
+};
+
 static SETTINGS: HelpEntry = HelpEntry {
     title: "Einstellungen",
     what: "Hier stellst du Regeln, Profile mit Zeitplänen, die Inhaltserkennung und das Aussehen \
@@ -344,6 +366,7 @@ pub fn entry(topic: Topic) -> &'static HelpEntry {
         Topic::Page(Page::Analysis) => &ANALYSIS,
         Topic::Page(Page::Cleanup) => &CLEANUP,
         Topic::Page(Page::History) => &HISTORY,
+        Topic::Page(Page::Quarantine) => &QUARANTINE,
         Topic::Page(Page::Settings) => &SETTINGS,
         Topic::Review => &REVIEW,
         Topic::Keys => &KEYS,
