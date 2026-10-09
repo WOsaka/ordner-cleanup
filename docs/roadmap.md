@@ -1,7 +1,7 @@
 ---
 title: "Roadmap & Feature-Ideen"
 created: 2026-10-02
-updated: 2026-10-08
+updated: 2026-10-09
 ---
 
 # Roadmap & Feature-Ideen
@@ -67,6 +67,72 @@ Ideensammlung und grobe Priorisierung für ordner-cleanup. Einzelne Features wer
 - Interaktives Review im Terminal (TUI)
 - Optional später eine lokale Web-GUI
 - Index-Cache (SQLite) für inkrementelle Re-Scans
+
+## 7. Ausbau nach Phase 6 (Ideen, Stand 2026-10-09)
+
+Alle Phasen 1 bis 6d sind im Code umgesetzt. Die folgenden Ideen stammen aus den „Out of Scope“-Listen der Specs, aus Lücken im Code und aus dem Ziel, das Tool an Familie und Kollegen ohne CLI-Kenntnisse weiterzugeben.
+
+### 7.0 Konsolidieren vor neuen Features
+- Offene Handtests abarbeiten (GUI 5a bis 5e, geplante Läufe mit Toast, LLM-Spikes, VM/RDP), vor allem den **echten Cloud-only-Platzhalter**
+- Rundreise-Property-Tests: zufälliger Baum → Plan → Apply → Undo ergibt den Ausgangsbaum bitgleich
+- Lasttest mit ca. 1 Mio. Dateien (Index-Größe, Speicher der GUI-Tabellen, inkrementeller Scan)
+- Plan-Integrität: Hash der Plan-Datei, vor dem Apply geprüft
+- Release 1.0 taggen
+
+### 7.1 Lücken schließen
+| Idee | Nutzen | Aufwand |
+|---|---|---|
+| Duplikate ganzer Ordner (`plan dedupe-dirs`, Merkle-Hash aus Datei-Hashes) | Größter Platzgewinn („Backup_alt“) | M |
+| Kombinierter Aufräumplan (`plan cleanup`) mit Konfliktauflösung zwischen Aktionen | Ein Klick statt fünf Karten | M |
+| Archivieren als ZIP (Hash-Prüfung im ZIP, Undo = Entpacken) | Echte Platzersparnis | M |
+| Hardlinks statt Quarantäne für Duplikate (nur außerhalb OneDrive, opt-in) | Platz sparen, Datei bleibt erreichbar | S–M |
+| Inhalts-Hash als zweiter Cache-Schlüssel für Klassifikation/OCR | Verschobene Dateien nicht neu analysieren | S |
+| „Regel aus Auswahl erzeugen“ in der Review-Liste | Weniger Hin und Her zwischen Review und Regeln | M |
+
+### 7.2 Neue Analysen
+- Entwickler-/Projekt-Caches (`target/`, `node_modules`, `.venv`, `bin/obj`) in lange unberührten Projekten; braucht eine eng begrenzte Ausnahme von den geschützten Pfaden (nur bei Projekt-Markern)
+- Ähnliche Fotos (pHash/dHash), Serienbilder, unscharfe Aufnahmen; Auswahl im Review
+- Verwaiste Installer in Downloads (Abgleich mit installierten Programmen, nur lesend)
+- Datenschutz-Check: sensible Dokumente (Ausweis, Kontoauszug, Vertrag) offen auf Desktop/Downloads oder in geteilten OneDrive-Ordnern
+- Audio-Metadaten (ID3/FLAC) für Musik-Regeln
+- Speicherfresser außerhalb der Nutzerordner nur als Hinweis (Hibernation, Update-Cache, Wiederherstellungspunkte)
+
+### 7.3 Neuorganisation
+- Regeln aus Beispielen lernen: manuelle Verschiebungen zwischen zwei Scans (per Hash erkannt) als Regel vorschlagen
+- Regel-Testbank in der GUI: Live-Vorschau der Treffer und Ziele
+- Vorlage anwenden: fehlende Ordner anlegen + Migrationsplan
+- Moves über Laufwerke (Kopieren → Hash prüfen → Quarantäne), Laufwerke über Volume-Seriennummer wiedererkennen
+- Regeln auf Ordnern
+
+### 7.4 Laufender Betrieb
+- Eingangsordner-Modus: Hintergrundprozess beobachtet nur Downloads/Desktop, erzeugt Pläne, Toast mit „Prüfen“
+- Explorer-Kontextmenü (HKCU, ohne Admin) und Tray-Icon mit Score
+- Quarantäne-Ansicht: Inhalt, Größe, Ablauf, einzelne Dateien zurückholen
+- Monatsbilanz („12,4 GB frei geräumt, Score 61 → 78“)
+
+### 7.5 Weitergabe
+- Erststart-Assistent (Ordner → Profil → Scan → Ergebnis)
+- Code-Signierung bzw. Installer (SmartScreen)
+- Firmen-Vorgaben: zentrale Regeln/Vorlagen/Schutzpfade von einer Freigabe, schreibgeschützt über der Nutzer-Config
+- Diagnosepaket (Logs, Config mit geschwärzten Pfaden)
+- Englische Oberfläche (Texte liegen zentral in `texts.rs`)
+
+### 7.6 Technik
+- Schneller Scan über das USN-Journal (meist Admin nötig, Walker als Rückfall)
+- Netzlaufwerke/SMB: Bandbreitenbremse, Modus „nur Metadaten“
+
+### 7.7 Offene Grundsatzentscheidungen
+- **Auto-Apply für einzelne, freigegebene Regeln?** Würde Grundprinzip „Plan → Review → Apply“ aufweichen
+- **Netzwerkzugriff für Update-Prüfung (opt-in, GitHub Releases)?** Ausnahme von „keine Daten verlassen den PC“
+
+### 7.8 Vorschlag Reihenfolge
+1. Konsolidieren und 1.0 (7.0)
+2. Duplikate ganzer Ordner
+3. Entwickler-Caches
+4. Kombinierter Aufräumplan + Erststart-Assistent
+5. Regeln aus Beispielen lernen
+
+Kleine Sofortgewinne zwischendurch: Explorer-Kontextmenü, Inhalts-Hash als Cache-Schlüssel, Quarantäne-Ansicht.
 
 ## Priorisierung
 
