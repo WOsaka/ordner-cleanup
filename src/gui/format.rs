@@ -152,6 +152,16 @@ pub fn short_path(path: &str, max_chars: usize) -> String {
         .map_or(path.len(), |(i, _)| i + 1);
     let (head, rest) = path.split_at(head_end);
     let head_len = head.chars().count();
+    if head_len + 1 > max_chars {
+        // Schon der Kopf passt nicht neben der Auslassung: von hinten kürzen.
+        let skip = len.saturating_sub(max_chars.saturating_sub(1));
+        let suffix: String = path.chars().skip(skip).collect();
+        return if max_chars == 0 {
+            String::new()
+        } else {
+            format!("…{suffix}")
+        };
+    }
     let budget = max_chars.saturating_sub(head_len + 2);
     let mut tail = String::new();
     for segment in rest.split('\\').rev() {
@@ -489,6 +499,23 @@ mod tests {
         let p = r"\\server\freigabe\a\b\c\d\datei.txt";
         assert_eq!(short_path(p, 31), r"\\server\freigabe\…\d\datei.txt");
         assert_eq!(short_path(p, 30), r"\\server\freigabe\…\datei.txt");
+    }
+
+    #[test]
+    fn zu_langer_kopf_wird_selbst_gekuerzt_und_bleibt_in_der_grenze() {
+        let pfade = [
+            r"\\server\share",
+            r"\\sehr-langer-servername\freigabe\ordner\datei.txt",
+            r"D:\Ordner\datei.txt",
+        ];
+        for p in pfade {
+            for max in 0..=40 {
+                let s = short_path(p, max);
+                assert!(s.chars().count() <= max, "{p} bei {max}: {s}");
+            }
+        }
+        let s = short_path(r"\\sehr-langer-servername\freigabe\ordner\datei.txt", 12);
+        assert!(s.starts_with('…') && s.ends_with("datei.txt"), "{s}");
     }
 
     #[test]
