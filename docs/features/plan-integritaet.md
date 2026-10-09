@@ -1,6 +1,6 @@
 ---
 title: "Plan-Integrität (Hash der Plan-Datei, vor dem Apply geprüft)"
-status: draft          # draft | approved | implemented
+status: approved       # draft | approved | implemented
 created: 2026-10-09
 updated: 2026-10-09
 ---
@@ -92,5 +92,5 @@ Zwischen `plan` und `apply` liegt bewusst ein Review. In dieser Zeit kann sich d
 
 ## Open Questions
 
-- [ ] Name des Feldes: `integrity` (Vorschlag) oder `plan_hash`?
-- [ ] Soll die Warnung bei v1/v2-Plänen in der GUI ein Hinweis in der Review sein oder ein Dialog vor dem Anwenden? (Vorschlag: Hinweis in der Review-Kopfzeile, kein zusätzlicher Dialog.)
+- [x] Name des Feldes: `integrity` (mit der Freigabe der Spec übernommen).
+- [x] Warnung bei v1/v2-Plänen in der GUI: Hinweis in der Review-Kopfzeile, kein zusätzlicher Dialog (mit der Freigabe der Spec übernommen).
