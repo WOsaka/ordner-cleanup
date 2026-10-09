@@ -6,6 +6,7 @@ pub const NAV_OVERVIEW: &str = "Übersicht";
 pub const NAV_ANALYSIS: &str = "Analyse";
 pub const NAV_CLEANUP: &str = "Aufräumen";
 pub const NAV_HISTORY: &str = "Verlauf";
+pub const NAV_QUARANTINE: &str = "Quarantäne";
 pub const NAV_SETTINGS: &str = "Einstellungen";
 
 pub const BUSY_SCAN: &str = "Ein anderer Scan läuft. Bitte später erneut versuchen.";
@@ -14,6 +15,72 @@ pub const CANCEL: &str = "Abbrechen";
 pub const CLOSE: &str = "Schließen";
 pub const OK: &str = "OK";
 pub const NO_ROOT_YET: &str = "Noch nichts gescannt. Ordner wählen und scannen.";
+pub const EMPTY_TITLE: &str = "Noch nichts gescannt";
+pub const EMPTY_TEXT: &str =
+    "Wähle einen Ordner und scanne ihn. Danach erscheinen hier Zustand und Läufe.";
+pub const EMPTY_BUTTON: &str = "Ordner wählen und scannen";
+
+pub const LOADING: &str = "Wird geladen …";
+pub const ALL: &str = "Alle";
+
+pub const HISTORY_VIEW_CONTENT: &str = "Inhalt ansehen";
+pub const HISTORY_VIEW_CONTENT_TIP: &str =
+    "Zeigt die Dateien dieses Laufs, die noch in der Quarantäne liegen";
+
+pub const QUARANTINE_ROOT: &str = "Wurzel:";
+pub const QUARANTINE_SEARCH: &str = "Suchen in Name und Pfad";
+pub const QUARANTINE_EMPTY: &str = "Die Quarantäne ist leer.";
+pub const QUARANTINE_NO_MATCH: &str = "Keine Einträge für diese Auswahl.";
+pub const QUARANTINE_REMOVE_RUN_FILTER: &str = "Filter auf diesen Lauf entfernen";
+pub const QUARANTINE_SELECT_FILTERED: &str = "Alle gefilterten wählen";
+pub const QUARANTINE_CLEAR_SELECTION: &str = "Auswahl aufheben";
+pub const QUARANTINE_RESTORE_TITLE: &str = "Zurückholen";
+pub const QUARANTINE_RESTORE_OK: &str = "Zurückholen";
+pub const QUARANTINE_NOTHING_TO_RESTORE: &str =
+    "Die gewählten Einträge sind nicht mehr in der Quarantäne oder schon zurückgeholt.";
+pub const COL_NAME: &str = "Name";
+pub const COL_ORIGIN: &str = "Ursprünglicher Ort";
+pub const COL_SIZE: &str = "Größe";
+pub const COL_DATE: &str = "Lauf";
+pub const COL_EXPIRES: &str = "Läuft ab";
+pub const COL_STATUS: &str = "Status";
+
+pub fn quarantine_restore_button(selected: usize) -> String {
+    format!("Zurückholen … ({selected})")
+}
+
+pub fn quarantine_only_run(run: &str) -> String {
+    format!("Nur Lauf {run}  ✕")
+}
+
+pub fn quarantine_folder_name(name: &str) -> String {
+    format!("{name} (Ordner)")
+}
+
+pub fn quarantine_file_count(count: u64) -> String {
+    match count {
+        1 => "1 Datei".to_string(),
+        n => format!("{} Dateien", grouped(n)),
+    }
+}
+
+pub fn quarantine_missing(count: usize) -> String {
+    match count {
+        1 => "1 Eintrag fehlt in der Quarantäne (zum Beispiel von Hand gelöscht).".to_string(),
+        n => format!("{n} Einträge fehlen in der Quarantäne (zum Beispiel von Hand gelöscht)."),
+    }
+}
+
+pub fn quarantine_unreadable(count: usize) -> String {
+    match count {
+        1 => "Ein Journal ließ sich nicht lesen; seine Einträge fehlen in der Liste.".to_string(),
+        n => format!("{n} Journale ließen sich nicht lesen; ihre Einträge fehlen in der Liste."),
+    }
+}
+
+pub fn quarantine_unreachable(root: &str) -> String {
+    format!("Nicht erreichbar, daher nicht aufgelistet: {root}")
+}
 
 pub const CLOSE_TITLE: &str = "Aufgabe läuft noch";
 pub const CLOSE_TEXT: &str = "Es läuft noch eine Aufgabe. Beim Abbrechen endet die laufende \

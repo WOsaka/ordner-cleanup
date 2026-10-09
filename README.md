@@ -20,13 +20,15 @@ ordner-cleanup index remove <pfad>
 - Konfiguration (optional): `%APPDATA%\ordner-cleanup\config.toml`; CLI-Flags haben Vorrang.
 - Netzlaufwerke und UNC-Pfade werden nur mit `--force` gescannt (in Phase 1 nicht unterstützt).
 - OneDrive-Cloud-Platzhalter werden nie geöffnet: Sie erscheinen nur mit Metadaten und höchstens als „wahrscheinliche Duplikate“.
-- Exit-Codes: `0` OK, `1` Fehler oder Abbruch, `2` OK mit Teilfehlern (z. B. Zugriff verweigert, gesperrte Dateien).
+- Exit-Codes: `0` OK, `1` Fehler oder Abbruch, `2` OK mit Teilfehlern (z. B. Zugriff verweigert, gesperrte Dateien), `3` Plan wurde nach dem Erstellen verändert (`apply`, nichts ausgeführt).
 - Der letzte Zugriffszeitstempel (Last Access) kann sich durch das Hashen ändern. Windows aktualisiert ihn standardmäßig kaum.
 
 ## Aufräumen: plan, apply, undo (Phase 2)
 
 ```
 ordner-cleanup plan dedupe <pfad> [--keep oldest|newest|path:<absoluter ordner>] [--out <plan.json>]
+ordner-cleanup plan dedupe-dirs <pfad> [--keep oldest|newest|path:<absoluter ordner>] [--min-size <größe>] [--out <plan.json>]
+ordner-cleanup plan seal <plan.json> [--yes]
 ordner-cleanup apply <plan.json> [--yes] [--allow-large]
 ordner-cleanup undo <run-id> [--root <wurzel>] [--yes]
 ordner-cleanup runs [<wurzel>]
@@ -34,6 +36,8 @@ ordner-cleanup purge [--older-than 30d] [--root <wurzel>] [--yes]
 ```
 
 Ablauf: Ordner mit `scan` indizieren, mit `plan dedupe` einen Plan erzeugen (die Plan-Datei ist lesbares JSON, ohne `--out` landet sie als `plan-<zeitstempel>.json` im aktuellen Ordner), den Plan prüfen, mit `apply` ausführen, bei Bedarf mit `undo <run-id>` zurückdrehen. `plan` verändert nichts. Pro Duplikatgruppe bleibt immer mindestens eine Datei unberührt.
+
+**Doppelte Ordner (`plan dedupe-dirs`):** Komplette Ordnerkopien („Kopie von Projekt“, „Backup_alt“) sind oft der größte Platzfresser. Zwei Ordner gelten als gleich, wenn sie dieselben Dateien mit demselben Inhalt an denselben relativen Pfaden enthalten; der Name des Ordners ist egal, Müll wie `Thumbs.db` und `desktop.ini` und leere Unterordner zählen nicht mit. Der Plan enthält **eine** Quarantäne-Aktion je doppeltem Ordner (nicht hunderte Einzeldateien) und nur die oberste Ebene. Welcher Ordner bleibt, entscheidet zuerst der Name (Ordner mit „Kopie“, „Copy“, „Backup“, „Sicherung“, „alt“/„old“, „(2)“ … gehen zuerst, erweiterbar mit `dedupe_dirs_copy_patterns`), dann `--keep`. Erst doppelte Ordner bereinigen, dann einzelne Duplikate mit `plan dedupe`. Der Bericht listet zusätzlich „teilweise gleiche“ Ordner (ab `dedupe_dirs_partial_threshold`, Default 0,8) als Hinweis; sie kommen nie in einen Plan.
 
 - **Nichts wird hart gelöscht** (einzige Ausnahme: leere Ordner bei `plan empty-dirs`, siehe Phase 3; auch sie lassen sich per `undo` wiederherstellen). Verschoben wird per Umbenennen auf demselben Volume nach `<wurzel>\.ordner-cleanup\quarantine\<run-id>\<relativer Pfad>`; Zeitstempel und Inhalt bleiben erhalten. Einen Verschiebevorgang über Laufwerksgrenzen gibt es nicht. Ein belegtes Ziel wird nie überschrieben, es bekommt ein Suffix wie `datei (2).txt`. Hart gelöscht wird nur mit `purge` nach Bestätigung, nie automatisch.
 - **Bestätigung:** `apply`, `undo` und `purge` fragen einmal `j/N`. In einer nicht interaktiven Sitzung (Skript, Pipe) brechen sie ohne `--yes` ab, statt zu raten.
@@ -81,6 +85,8 @@ installer_min_age = "90d"
 downloads_dirs = []            # leer = Known Folder; sonst ersetzt die Liste ihn
 archive_older_than = "2y"
 versions_min_age = "30d"
+dedupe_dirs_copy_patterns = []        # zusätzliche Kopie-Wörter für plan dedupe-dirs
+dedupe_dirs_partial_threshold = 0.8   # „teilweise gleich“ im Bericht (0,5 bis 1,0)
 onedrive_max_move_files = 1000
 onedrive_max_move_bytes = "5GB"
 
@@ -193,7 +199,7 @@ score_below = 60                   # oder liegt unter diesem Wert
 [profiles.downloads]
 root       = 'C:\Users\Oskar\Downloads'
 rules_file = "downloads.rules.toml"      # relativ zum Config-Ordner
-plans      = ["rules", "junk"]           # rules | junk | empty-dirs | archive | versions | dedupe
+plans      = ["rules", "junk"]           # rules | junk | empty-dirs | archive | versions | dedupe | dedupe-dirs
 template   = "para"                      # eingebaut oder Pfad (relativ zum Config-Ordner)
 force      = false                       # Netzlaufwerk erlauben
 exclude    = ["*.iso"]
@@ -299,11 +305,16 @@ max_confidence  = 0.75                   # unter min_confidence: LLM-Kategorien 
 
 - **Übersicht:** gescannte Ordner und Profile mit Score und Trend, letzte Läufe, ausstehende Quarantäne. Hier wählen Sie einen Ordner (Windows-Dialog) oder ein Profil und **scannen** bzw. **klassifizieren** (Optionen unter „Erweitert“). Fortschritt und **Abbrechen** stehen unten in der Statuszeile.
 - **Analyse:** Größenbaum, Typen & Alter, Duplikate, Probleme & Struktur, Inhalte, Health-Score mit Verlauf, Soll/Ist; Export als HTML/JSON/CSV. Rechtsklick auf einen Pfad: im Explorer zeigen, Pfad kopieren, öffnen (nicht bei Cloud-only-Dateien).
-- **Aufräumen:** Plan erzeugen (Duplikate, Müll, leere Ordner, Archivieren, Versionen, Regeln) oder einen vorhandenen Plan öffnen, auch aus der CLI oder von geplanten Läufen. In der **Review-Liste** filtern, sortieren, einzeln oder gesammelt an- und abwählen; übersprungene Einträge stehen mit Grund in einem eigenen Filter. **Anwenden** zeigt vorher Anzahl, Größe, Ziel und Warnungen; die OneDrive-Obergrenze lässt sich nur mit einem ausdrücklichen Haken aufheben. Wurden Einträge abgewählt, entsteht vor dem Anwenden eine **neue Plan-Datei** `<original>-auswahl-<Zeitstempel>.json`, das Original bleibt unverändert.
-- **Verlauf:** Läufe mit Details aus dem Journal, **Rückgängig**, **Quarantäne leeren** (mit Vorschau) und das Entfernen gescannter Wurzeln aus dem Index.
+- **Aufräumen:** Plan erzeugen (Doppelte Ordner, Duplikate, Müll, leere Ordner, Archivieren, Versionen, Regeln) oder einen vorhandenen Plan öffnen, auch aus der CLI oder von geplanten Läufen. In der **Review-Liste** filtern, sortieren, einzeln oder gesammelt an- und abwählen; übersprungene Einträge stehen mit Grund in einem eigenen Filter. **Anwenden** zeigt vorher Anzahl, Größe, Ziel und Warnungen; die OneDrive-Obergrenze lässt sich nur mit einem ausdrücklichen Haken aufheben. Wurden Einträge abgewählt, entsteht vor dem Anwenden eine **neue Plan-Datei** `<original>-auswahl-<Zeitstempel>.json`, das Original bleibt unverändert.
+- **Verlauf:** Läufe mit Details aus dem Journal, **Rückgängig**, **Quarantäne leeren** (mit Vorschau) und das Entfernen gescannter Wurzeln aus dem Index. **Inhalt ansehen** springt zur Quarantäne-Seite, gefiltert auf diesen Lauf.
+- **Quarantäne:** alle Dateien und Ordner, die nach dem Aufräumen noch in der Quarantäne liegen, mit Größe, Herkunft, Lauf und Ablauftag. Die Liste lässt sich nach Wurzel filtern, durchsuchen (Name und Pfad) und sortieren und bleibt auch bei Hunderttausenden Einträgen flüssig. Einzelne Einträge holt **Zurückholen …** an ihren alten Ort zurück, ohne den ganzen Lauf rückgängig zu machen. Vorher zeigt eine Rückfrage die Ziele; ist ein Name belegt, bekommt die Datei einen neuen (`name (2).ext`), nichts wird überschrieben. Einträge, die nur in der Cloud liegen (OneDrive), werden dabei nicht heruntergeladen. Ein späteres **Rückgängig** des Laufs überspringt die schon zurückgeholten Einträge.
 - **Einstellungen:** öffnet `config.toml`, `rules.toml` und `categories.toml` im Editor und legt auf Wunsch eine Startmenü-Verknüpfung an.
 
+**Tastenkürzel:** `Strg+1` bis `Strg+6` wechseln die Seite (Übersicht, Analyse, Aufräumen, Verlauf, Quarantäne, Einstellungen); `?` zeigt alle Kürzel. Seit der Seite „Quarantäne“ liegt „Einstellungen“ auf `Strg+6` (vorher `Strg+5`).
+
 **Speicherorte:** Pläne der GUI liegen unter `%LOCALAPPDATA%\ordner-cleanup\plans\_gui` (änderbar mit `[gui] plans_dir`), der Fensterzustand unter `%APPDATA%\ordner-cleanup\gui`, Abstürze im Hintergrund unter `%LOCALAPPDATA%\ordner-cleanup\gui-errors.log`. Die Dateien (Index, Pläne, Journal, Register, Config) sind dieselben wie bei der CLI: ein in der GUI erzeugter Plan lässt sich per `apply` anwenden und umgekehrt, ebenso `undo`.
+
+**Hilfe:** Neben jeder Seitenüberschrift, im Kopf jeder Aufräum-Karte und in der Review-Ansicht steht ein **„?“**; `F1` öffnet die Hilfe zur aktuellen Seite. Das Hilfefenster erklärt in einfachen Worten, was die Funktion tut, was sich ändert und wie man es rückgängig macht, und öffnet mit „Ausführliche Doku öffnen“ diese README bzw. `docs\dokumentation.md`. Beide Dateien gehören in denselben Ordner wie die `exe`-Dateien (`README.md` daneben, `dokumentation.md` im Unterordner `docs`); das CI-Artefakt enthält sie. Gibt es kein Programm für `.md`, öffnet sich Notepad.
 
 Beim Schließen während einer laufenden Aufgabe fragt die GUI nach; bei „Abbrechen und schließen“ endet die laufende Einzeloperation sauber und das Journal bleibt konsistent. Startet das Fenster nicht (VM, Remotedesktop, alte Treiber), versucht die GUI einmal einen zweiten Renderer und verweist sonst auf die Kommandozeile.
 
@@ -353,6 +364,8 @@ Kennzahlen, Score und Verlauf (Phase 5), gemessen am 2026-10-04 (Release-Build, 
 Der Anteil am Scan hängt von dessen Geschwindigkeit ab: Die Kennzahlen kosten rund 2 µs je Datei, der Scan im Messaufbau (kleine Dateien aus dem Dateicache) nur etwa 17 µs. Bei einem Scan ab etwa 40 µs je Datei, wie er auf kalter Platte, mit größeren Dateien oder im OneDrive-Ordner üblich sein dürfte (nicht gemessen), bliebe der Anteil unter 5 %; der Messaufbau erreicht das Ziel nicht.
 
 Die Messung ist als ignorierter Test abgelegt: `cargo test --release --test perf_plans -- --ignored --nocapture`. Den Testbaum erzeugt `cargo run --release --example gen-tree -- <zielordner> [anzahl]`. Der Baum besteht aus kleinen Dateien; bei großen Dateien dominiert das Hashen, das über Teil-Hash und Größengruppen begrenzt wird. Manuell geprüft am 2026-10-03: Scan von `OneDrive\Dokumente` (30 Dateien, davon 1 Cloud-only) ließ Größen, Zeitstempel und Attribute unverändert, die Cloud-only-Datei blieb Cloud-only.
+
+Quarantäne-Ansicht (Phase 7.4), `cargo test --release --test perf_quarantine -- --ignored --nocapture`, 100.000 Einträge aus 100 Journalen mit echten Dateien: Liste laden 5,2 s (Ziel < 10 s), Suchen 5 ms, Sortieren höchstens 28 ms, Lauf-Filter 9 ms (Ziel je < 100 ms).
 
 Inhaltsklassifikation (Phase 6a), `cargo test --release --test perf_classify -- --ignored --nocapture`: 10.000 Dateien, erster `classify` 0,23 s (nur Textdateien, nicht unterstützt), Wiederholung aus dem Cache 0,08 s. Textlayer-PDFs, OCR (ca. 1 bis 2 s je Seite) und LLM sind nicht als Zahl gemessen.
 

@@ -12,7 +12,7 @@ use crate::report::{FileItem, Report, TreeNode};
 const ROW_H: f32 = 20.0;
 
 fn heading(ui: &mut egui::Ui, text: &str) {
-    ui.add_space(6.0);
+    ui.add_space(crate::gui::theme::SPACE_M);
     ui.heading(text);
 }
 
@@ -21,6 +21,7 @@ fn plan_button(ui: &mut egui::Ui, shell: &mut Shell, label: &str, kind: &'static
         shell.goto = Some(Goto {
             page: Page::Cleanup,
             plan_kind: Some(kind),
+            ..Goto::default()
         });
     }
 }
@@ -143,7 +144,57 @@ pub fn types_and_age(ui: &mut egui::Ui, report: &Report, shell: &mut Shell) {
     file_table(ui, "old-files", &report.age.old_files, shell);
 }
 
+/// Doppelte Ordner (exakt) und teilweise gleiche Paare (nur Hinweis); steht über den Dateien.
+fn folder_duplicates(ui: &mut egui::Ui, report: &Report, shell: &mut Shell) {
+    let f = &report.folder_duplicates;
+    heading(ui, "Doppelte Ordner");
+    ui.horizontal(|ui| {
+        ui.label(format!(
+            "{} Gruppen, {} verschwendet",
+            texts::grouped(f.groups.len() as u64),
+            texts::bytes(f.total_reclaimable)
+        ));
+        plan_button(ui, shell, "Plan für doppelte Ordner", "dedupe-dirs");
+    });
+    if !f.groups.is_empty() {
+        ui.weak("Erst doppelte Ordner bereinigen, dann einzelne Duplikate.");
+    }
+    for (i, g) in f.groups.iter().enumerate() {
+        egui::CollapsingHeader::new(format!(
+            "{} Kopien × {}  ·  {} verschwendet",
+            g.dirs.len(),
+            texts::bytes(g.bytes),
+            texts::bytes(g.reclaimable)
+        ))
+        .id_salt(("dupdir", i))
+        .show(ui, |ui| {
+            for dir in &g.dirs {
+                path_cell(ui, dir, shell);
+            }
+        });
+    }
+    if !f.partial.is_empty() {
+        heading(ui, "Teilweise gleiche Ordner (nur Hinweis)");
+        for (i, p) in f.partial.iter().take(50).enumerate() {
+            egui::CollapsingHeader::new(format!(
+                "{:.0} % gemeinsam  ·  {}",
+                p.ratio * 100.0,
+                texts::bytes(p.shared_bytes)
+            ))
+            .id_salt(("partdir", i))
+            .show(ui, |ui| {
+                path_cell(ui, &p.a, shell);
+                path_cell(ui, &p.b, shell);
+            });
+        }
+    }
+    ui.add_space(crate::gui::theme::SPACE_M);
+    ui.separator();
+}
+
 pub fn duplicates(ui: &mut egui::Ui, report: &Report, shell: &mut Shell) {
+    folder_duplicates(ui, report, shell);
+    heading(ui, "Doppelte Dateien");
     let d = &report.duplicates;
     ui.horizontal(|ui| {
         ui.label(format!(

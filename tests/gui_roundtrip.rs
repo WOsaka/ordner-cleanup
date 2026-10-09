@@ -8,8 +8,8 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 use assert_cmd::Command;
-use ordner_cleanup::change::plan::Plan;
-use ordner_cleanup::ops::apply::{apply_check, apply_execute};
+use ordner_cleanup::change::plan::{Plan, Seal};
+use ordner_cleanup::ops::apply::{apply_check, apply_execute, plan_file_changed};
 use ordner_cleanup::ops::plan::{plan, save_subset, PlanKindRequest, PlanOut, PlanRequest};
 use ordner_cleanup::ops::runs::{runs, undo_check, undo_execute};
 use ordner_cleanup::ops::scan::{scan, ScanRequest};
@@ -160,6 +160,73 @@ fn gui_teilplan_laesst_sich_per_cli_anwenden_und_zurueckdrehen() {
         .assert()
         .success();
     assert!(b.exists() && c.exists());
+}
+
+#[test]
+fn gui_plan_doppelter_ordner_laesst_sich_per_cli_anwenden_und_zurueckdrehen() {
+    let env = Env::new();
+    for dir in ["Projekt", "Kopie von Projekt", "Backup Projekt"] {
+        env.write(&format!("{dir}/a.txt"), "alpha alpha", 3000);
+        env.write(&format!("{dir}/sub/b.txt"), "bravo bravo", 2000);
+    }
+    env.write("Anderes/x.txt", "ganz etwas anderes", 500);
+    env.scan();
+
+    let outcome = plan(
+        &PlanRequest {
+            target: TargetSpec::Path {
+                path: env.root().to_path_buf(),
+                force: false,
+            },
+            kind: PlanKindRequest::DedupeDirs {
+                keep: "oldest".parse().unwrap(),
+                min_size: None,
+            },
+            out: PlanOut::GuiDir,
+        },
+        &OpCtx::default(),
+    )
+    .unwrap();
+    assert_eq!(outcome.plan.actions.len(), 2);
+    let file = outcome.saved.clone().unwrap();
+    // Nur eine der zwei Kopien auswählen („Kopie von Projekt“).
+    let wanted = outcome
+        .plan
+        .actions
+        .iter()
+        .find(|a| a.path.ends_with("Kopie von Projekt"))
+        .unwrap()
+        .id;
+    let subset_file = save_subset(
+        &file,
+        &outcome.plan,
+        &HashSet::from([wanted]),
+        &Default::default(),
+    )
+    .unwrap();
+
+    env.bin()
+        .arg("apply")
+        .arg(&subset_file)
+        .arg("--yes")
+        .assert()
+        .success();
+    assert!(!env.root().join("Kopie von Projekt").exists());
+    assert!(env.root().join("Backup Projekt").exists() && env.root().join("Projekt").exists());
+
+    let listing = runs(Some(env.root())).unwrap();
+    let run = listing[0].1[0].run.clone();
+    env.bin()
+        .args(["undo", &run.to_string(), "--yes", "--root"])
+        .arg(env.root())
+        .assert()
+        .success();
+    assert!(env
+        .root()
+        .join("Kopie von Projekt")
+        .join("sub")
+        .join("b.txt")
+        .exists());
 }
 
 #[test]
@@ -381,4 +448,54 @@ fn plan_preview_with_text(env: &Env, text: &str) -> ordner_cleanup::ops::plan::P
         &OpCtx::default(),
     )
     .unwrap()
+}
+
+#[test]
+fn veraenderte_plan_datei_wird_vor_dem_anwenden_erkannt() {
+    let env = Env::new();
+    three_copies(&env);
+    env.scan();
+    let file = env.plan_dedupe(PlanOut::GuiDir).saved.unwrap();
+    let loaded = Plan::load(&file).unwrap();
+    assert!(!plan_file_changed(&file, &loaded).unwrap());
+
+    // Ein Editor speichert unverändert mit CRLF: kein Fehlalarm.
+    let crlf = std::fs::read_to_string(&file)
+        .unwrap()
+        .replace('\n', "\r\n");
+    std::fs::write(&file, crlf).unwrap();
+    assert!(!plan_file_changed(&file, &loaded).unwrap());
+
+    // Aktion von Hand entfernt, nicht neu versiegelt.
+    let mut json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    json["actions"].as_array_mut().unwrap().pop();
+    std::fs::write(&file, json.to_string()).unwrap();
+    assert!(plan_file_changed(&file, &loaded).unwrap());
+
+    // Geändert und neu versiegelt: ebenfalls nicht mehr der geladene Plan.
+    let mut edited = loaded.clone();
+    edited.actions.pop();
+    edited.save_replacing(&file).unwrap();
+    assert!(plan_file_changed(&file, &loaded).unwrap());
+}
+
+#[test]
+fn teilplan_aus_der_review_hat_eine_eigene_gueltige_pruefsumme() {
+    let env = Env::new();
+    three_copies(&env);
+    env.scan();
+    let outcome = env.plan_dedupe(PlanOut::GuiDir);
+    let file = outcome.saved.clone().unwrap();
+    let keep: HashSet<u32> = [outcome.plan.actions[0].id].into();
+    let subset_file = save_subset(&file, &outcome.plan, &keep, &Default::default()).unwrap();
+
+    let text = std::fs::read_to_string(&subset_file).unwrap();
+    let (subset, seal) = Plan::parse(&text).unwrap();
+    assert_eq!(seal, Seal::Valid);
+    assert_eq!(subset.version, 3);
+    let original: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    let own: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_ne!(own["integrity"], original["integrity"]);
 }

@@ -33,7 +33,10 @@ impl FormState {
 }
 
 /// Mindestbreite der Bezeichnungsspalte, damit Label und Schlüssel nicht umbrechen.
-const LABEL_COL_WIDTH: f32 = 220.0;
+pub(crate) const LABEL_COL_WIDTH: f32 = 220.0;
+
+/// Breite der Eingabefelder; die Regelmaske nutzt dieselbe, damit alle Felder bündig enden.
+pub(crate) const FIELD_WIDTH: f32 = 420.0;
 
 fn id_of(loc: Loc, key: &str) -> String {
     format!("{}.{key}", loc.id())
@@ -104,7 +107,10 @@ fn field(
             }
         });
         if let Some(error) = state.errors.get(&id) {
-            ui.colored_label(egui::Color32::LIGHT_RED, error);
+            ui.colored_label(
+                crate::gui::theme::tone_color(ui, crate::gui::format::Tone::Error),
+                error,
+            );
         }
     });
     changed
@@ -185,7 +191,7 @@ fn text_field(
         ui.add(
             egui::TextEdit::multiline(buffer)
                 .desired_rows(2)
-                .desired_width(420.0)
+                .desired_width(FIELD_WIDTH)
                 .font(egui::TextStyle::Monospace),
         )
     } else if let FieldKind::Choice(options) = spec.kind {
@@ -210,7 +216,7 @@ fn text_field(
         }
         return false;
     } else {
-        ui.add(egui::TextEdit::singleline(buffer).desired_width(420.0))
+        ui.add(egui::TextEdit::singleline(buffer).desired_width(FIELD_WIDTH))
     };
     if response.changed() {
         let text = buffer.clone();

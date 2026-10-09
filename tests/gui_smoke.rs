@@ -31,6 +31,8 @@ fn plan(n: u32) -> Plan {
                 reason: "junk:temp".into(),
                 target: None,
                 is_dir: false,
+                keep_fingerprint: None,
+                source_fingerprint: None,
                 files: None,
                 rule: None,
             })
@@ -50,8 +52,13 @@ struct State {
 
 #[test]
 fn review_mit_tausend_eintraegen_zeigt_zusammenfassung_und_loest_anwenden_aus() {
+    // Der Hinweis liest die Quarantäne-Tage aus der Config: eine leere, eigene verwenden.
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let home = tempfile::tempdir().unwrap();
+    std::env::set_var(ordner_cleanup::paths::HOME_OVERRIDE_ENV, home.path());
     let model = ReviewModel::new(plan(1000));
     let review = ReviewState::new(model, None, "1000 Aktionen".into(), vec![]);
+    std::env::remove_var(ordner_cleanup::paths::HOME_OVERRIDE_ENV);
     let shell = Shell::new(eframe::egui::Context::default());
     let mut harness = Harness::new_ui_state(
         |ui, state: &mut State| {
@@ -67,7 +74,11 @@ fn review_mit_tausend_eintraegen_zeigt_zusammenfassung_und_loest_anwenden_aus() 
     );
     harness.run();
     harness.get_by_label_contains("Ausgewählt: 1.000 von 1.000 Einträgen");
-    harness.get_by_label("Anwenden …").click();
+    harness.get_by_label_contains("Nichts wird gelöscht");
+    harness.get_by_label_contains("Übersprungene zeigen (0)");
+    harness
+        .get_by_label_contains("Anwenden (1.000 Einträge")
+        .click();
     harness.run();
     assert!(harness.state().apply_clicked);
 }
@@ -112,7 +123,7 @@ fn obergrenze_dialog_braucht_den_haken() {
 fn alle_seiten_lassen_sich_ohne_daten_zeichnen() {
     use ordner_cleanup::gui::views::{
         analysis::AnalysisView, cleanup::CleanupView, history::HistoryView, overview::OverviewView,
-        settings::SettingsView,
+        quarantine::QuarantineView, settings::SettingsView,
     };
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let home = tempfile::tempdir().unwrap();
@@ -123,6 +134,7 @@ fn alle_seiten_lassen_sich_ohne_daten_zeichnen() {
         analysis: AnalysisView,
         cleanup: CleanupView,
         history: HistoryView,
+        quarantine: QuarantineView,
         settings: SettingsView,
     }
     let pages = Pages {
@@ -131,6 +143,7 @@ fn alle_seiten_lassen_sich_ohne_daten_zeichnen() {
         analysis: AnalysisView::default(),
         cleanup: CleanupView::default(),
         history: HistoryView::default(),
+        quarantine: QuarantineView::default(),
         settings: SettingsView::default(),
     };
     let mut harness = Harness::new_ui_state(
@@ -139,6 +152,7 @@ fn alle_seiten_lassen_sich_ohne_daten_zeichnen() {
             p.analysis.ui(ui, &mut p.shell);
             p.cleanup.ui(ui, &mut p.shell);
             p.history.ui(ui, &mut p.shell);
+            p.quarantine.ui(ui, &mut p.shell);
             p.settings.ui(ui, &mut p.shell);
         },
         pages,
@@ -194,4 +208,121 @@ fn einstellungen_zeigen_alle_tabs_mit_echten_dateien() {
         harness.get_by_label_contains(expected);
     }
     std::env::remove_var(HOME_OVERRIDE_ENV);
+}
+
+#[test]
+fn review_laesst_sich_mit_der_tastatur_bedienen_und_anwenden_oeffnet_nur_den_dialog() {
+    use eframe::egui::Context;
+    use ordner_cleanup::gui::keys::KeyAction;
+
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let home = tempfile::tempdir().unwrap();
+    std::env::set_var(ordner_cleanup::paths::HOME_OVERRIDE_ENV, home.path());
+    let mut review = ReviewState::new(ReviewModel::new(plan(5)), None, "5".into(), vec![]);
+    std::env::remove_var(ordner_cleanup::paths::HOME_OVERRIDE_ENV);
+    let ctx = Context::default();
+    let mut shell = Shell::new(ctx.clone());
+    // Erste Zeile fokussieren, abwählen (Leertaste springt weiter), zweite ebenso.
+    review.handle_key(KeyAction::Next, &ctx, &mut shell);
+    review.handle_key(KeyAction::Toggle, &ctx, &mut shell);
+    review.handle_key(KeyAction::Toggle, &ctx, &mut shell);
+    assert_eq!(review.model.summary().selected, 3);
+    // Strg+Umschalt+A wählt alle gefilterten ab; Anwenden bleibt dann wirkungslos.
+    review.handle_key(KeyAction::DeselectFiltered, &ctx, &mut shell);
+    review.handle_key(KeyAction::Apply, &ctx, &mut shell);
+    review.handle_key(KeyAction::SelectFiltered, &ctx, &mut shell);
+    review.handle_key(KeyAction::Apply, &ctx, &mut shell);
+
+    let mut harness = Harness::new_ui_state(
+        |ui, state: &mut State| {
+            if state.review.ui(ui, &mut state.shell) {
+                state.apply_clicked = true;
+            }
+        },
+        State {
+            review,
+            shell,
+            apply_clicked: false,
+        },
+    );
+    harness.run();
+    harness.get_by_label_contains("Ausgewählt: 5 von 5 Einträgen");
+    // Nur das gemeldete Anwenden aus dem zweiten Strg+Enter kommt an; es startet nichts selbst.
+    assert!(harness.state().apply_clicked);
+    assert!(harness.state().shell.dialogs.is_empty());
+}
+
+fn quarantine_list(count: usize) -> ordner_cleanup::ops::quarantine::QuarantineList {
+    use ordner_cleanup::change::restore::QuarantineItem;
+    use ordner_cleanup::change::RunId;
+    use ordner_cleanup::ops::quarantine::{QuarantineList, RootItems};
+    let run = RunId::parse("20261003-120000-ab12").unwrap();
+    let items = (0..count)
+        .map(|i| QuarantineItem {
+            run: run.clone(),
+            action: i as u32 + 1,
+            origin: format!(r"D:\Daten\ordner{}\datei{i}.tmp", i % 50),
+            stored: format!(r"D:\Daten\.ordner-cleanup\quarantine\{run}\datei{i}.tmp"),
+            size: 1000,
+            hash: None,
+            is_dir: false,
+            file_count: None,
+            started: Some("2026-10-03T12:00:00Z".into()),
+            expires: None,
+            present: true,
+            cloud_only: false,
+        })
+        .collect();
+    QuarantineList {
+        roots: vec![RootItems {
+            root: r"D:\Daten".into(),
+            items,
+        }],
+        unreadable: 0,
+        unreachable: vec![],
+    }
+}
+
+#[test]
+fn quarantaene_zeigt_summe_und_zeilen_auch_bei_100000_eintraegen() {
+    use ordner_cleanup::gui::views::quarantine::QuarantineView;
+    struct State {
+        shell: Shell,
+        view: QuarantineView,
+    }
+    let mut view = QuarantineView::default();
+    let shell = Shell::new(eframe::egui::Context::default());
+    view.set_list(quarantine_list(100_000), shell.generation);
+    let mut harness = Harness::new_ui_state(
+        |ui, s: &mut State| s.view.ui(ui, &mut s.shell),
+        State { shell, view },
+    );
+    let started = std::time::Instant::now();
+    harness.run();
+    harness.get_by_label_contains("100.000 Einträge");
+    assert!(harness.query_all_by_label_contains("datei0.tmp").count() >= 1);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "nur sichtbare Zeilen werden gezeichnet: {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn leere_quarantaene_sagt_es() {
+    use ordner_cleanup::gui::views::quarantine::QuarantineView;
+    use ordner_cleanup::ops::quarantine::QuarantineList;
+    struct State {
+        shell: Shell,
+        view: QuarantineView,
+    }
+    let mut view = QuarantineView::default();
+    let shell = Shell::new(eframe::egui::Context::default());
+    view.set_list(QuarantineList::default(), shell.generation);
+    let mut harness = Harness::new_ui_state(
+        |ui, s: &mut State| s.view.ui(ui, &mut s.shell),
+        State { shell, view },
+    );
+    harness.run();
+    harness.get_by_label("Die Quarantäne ist leer.");
 }

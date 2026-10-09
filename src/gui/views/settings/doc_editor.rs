@@ -163,7 +163,7 @@ impl DocEditor {
         });
         if let Some(e) = &self.load_error {
             ui.colored_label(
-                egui::Color32::LIGHT_RED,
+                crate::gui::theme::tone_color(ui, crate::gui::format::Tone::Error),
                 format!("Die Datei lässt sich nicht lesen: {e}"),
             );
         }
@@ -193,7 +193,10 @@ impl DocEditor {
         });
         if self.conflict {
             ui.horizontal_wrapped(|ui| {
-                ui.colored_label(egui::Color32::YELLOW, "Die Datei wurde extern geändert.");
+                ui.colored_label(
+                    crate::gui::theme::tone_color(ui, crate::gui::format::Tone::Warn),
+                    "Die Datei wurde extern geändert.",
+                );
                 if ui.button("Neu laden (Änderungen verwerfen)").clicked() {
                     self.reload();
                 }
@@ -203,7 +206,10 @@ impl DocEditor {
             });
         }
         if let Some(e) = &self.save_error {
-            ui.colored_label(egui::Color32::LIGHT_RED, format!("Nicht gespeichert: {e}"));
+            ui.colored_label(
+                crate::gui::theme::tone_color(ui, crate::gui::format::Tone::Error),
+                format!("Nicht gespeichert: {e}"),
+            );
         }
         if let Some(n) = &self.notice {
             ui.label(egui::RichText::new(n).weak());

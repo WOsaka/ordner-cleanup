@@ -66,6 +66,22 @@ pub fn open(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Öffnet eine vorhandene Textdatei mit dem Standardprogramm; gibt es keins (typisch für `.md`),
+/// öffnet sie Notepad. Anders als [`edit`] wird eine fehlende Datei nie angelegt.
+pub fn open_text(path: &Path) -> Result<()> {
+    if open(path).is_ok() {
+        return Ok(());
+    }
+    if !path.is_file() {
+        bail!("{} existiert nicht", paths::display(path));
+    }
+    std::process::Command::new("notepad.exe")
+        .arg(path)
+        .spawn()
+        .context("Editor konnte nicht gestartet werden")?;
+    Ok(())
+}
+
 /// Zeigt die Datei im Explorer (markiert); ein Ordner wird geöffnet.
 pub fn reveal(path: &Path) -> Result<()> {
     let shown = paths::display(path);

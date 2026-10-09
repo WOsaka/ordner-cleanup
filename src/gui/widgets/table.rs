@@ -4,7 +4,9 @@ use std::path::Path;
 
 use eframe::egui;
 
+use crate::gui::format::{short_path, StatusStyle};
 use crate::gui::shell::Shell;
+use crate::gui::theme;
 use crate::platform::shell as explorer;
 
 /// Kontextmenü „Im Explorer zeigen · Pfad kopieren · Öffnen“ für einen Pfad. „Öffnen“ ist für
@@ -54,4 +56,28 @@ pub fn share_bar(ui: &mut egui::Ui, share: f32, width: f32) {
             .desired_width(width)
             .text(format!("{:.0} %", share * 100.0)),
     );
+}
+
+/// Pfad in der Mitte gekürzt; der volle Pfad steht im Tooltip, das Kontextmenü kopiert ihn.
+pub fn short_path_cell(ui: &mut egui::Ui, path: &str, max_chars: usize, shell: &mut Shell) {
+    let response = ui.add(
+        egui::Label::new(short_path(path, max_chars))
+            .truncate()
+            .sense(egui::Sense::click()),
+    );
+    response.clone().on_hover_text(path);
+    path_menu(&response, path, shell);
+}
+
+/// Status mit Symbol in der Farbe seines Tons.
+pub fn status_cell(ui: &mut egui::Ui, status: &StatusStyle) {
+    ui.colored_label(theme::tone_color(ui, status.tone), status.label());
+}
+
+/// Kurzer Zeittext, der genaue Wert steht im Tooltip.
+pub fn time_cell(ui: &mut egui::Ui, time: &(String, String)) {
+    let response = ui.label(&time.0);
+    if !time.1.is_empty() {
+        response.on_hover_text(&time.1);
+    }
 }

@@ -99,6 +99,14 @@ pub fn render(report: &Report) -> String {
         report.duplicates.group_count,
         size(report.duplicates.total_wasted)
     );
+    let folders = &report.folder_duplicates;
+    let _ = writeln!(
+        s,
+        "  Doppelte Ordner:  {} Gruppen (verschwendet: {}), teilweise gleich: {}",
+        folders.groups.len(),
+        size(folders.total_reclaimable),
+        folders.partial.len()
+    );
     let _ = writeln!(
         s,
         "  Wahrscheinlich:   {} Gruppen (nicht verifiziert, Cloud)",

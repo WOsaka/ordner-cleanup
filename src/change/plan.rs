@@ -1,10 +1,12 @@
 //! Plan-Datei (JSON): Datenmodell, Laden mit Versionsprüfung und Validierung.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::protect::TOOL_DIR;
 use super::SkipReason;
@@ -12,8 +14,11 @@ use crate::paths;
 use crate::scan::source::TICKS_PER_SEC;
 
 /// Aktuelle Plan-Version; Version 1 (nur `dedupe`) wird weiterhin gelesen.
-pub const PLAN_VERSION: u32 = 2;
+pub const PLAN_VERSION: u32 = 3;
 const MIN_PLAN_VERSION: u32 = 1;
+/// Ab dieser Version trägt die Plan-Datei die Prüfsumme `integrity` (Pflichtfeld).
+const SEALED_VERSION: u32 = 3;
+const INTEGRITY_PREFIX: &str = "sha256:";
 
 /// Name des Archivordners unter der Wurzel (Ziel von `move`).
 pub const ARCHIVE_DIR: &str = "_Archiv";
@@ -28,12 +33,61 @@ pub enum PlanError {
     UnsupportedVersion { found: u64, expected: u32 },
     #[error("Plan ist ungültig: {0}")]
     Invalid(String),
+    #[error(
+        "Plan wurde nach dem Erstellen verändert (Prüfsumme erwartet {}…, gefunden {}…). \
+         Bewusst geändert? Mit `ordner-cleanup plan seal <datei>` neu versiegeln.",
+        short_integrity(.stored),
+        short_integrity(.actual)
+    )]
+    Tampered { stored: String, actual: String },
+}
+
+/// Zustand der Prüfsumme einer gelesenen Plan-Datei.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Seal {
+    /// Format 3, Prüfsumme stimmt.
+    Valid,
+    /// Format 1 oder 2, ohne Prüfsumme.
+    Unprotected {
+        version: u32,
+    },
+    /// Format 3 ohne Feld `integrity`.
+    Missing,
+    Mismatch {
+        stored: String,
+        actual: String,
+    },
+}
+
+/// Die ersten 12 Hex-Zeichen einer Prüfsumme `sha256:<hex>`.
+pub fn short_integrity(integrity: &str) -> &str {
+    let hex = integrity
+        .strip_prefix(INTEGRITY_PREFIX)
+        .unwrap_or(integrity);
+    hex.get(..12).unwrap_or(hex)
+}
+
+fn is_integrity(s: &str) -> bool {
+    s.strip_prefix(INTEGRITY_PREFIX).is_some_and(|h| {
+        h.len() == 64
+            && h.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
+}
+
+/// Plan-Datei beim Schreiben: Prüfsumme als erstes Feld, danach der Plan.
+#[derive(Serialize)]
+struct Sealed<'a> {
+    integrity: String,
+    #[serde(flatten)]
+    plan: &'a Plan,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PlanKind {
     Dedupe,
+    DedupeDirs,
     Junk,
     EmptyDirs,
     Archive,
@@ -97,6 +151,13 @@ pub struct PlannedAction {
     /// `move` eines ganzen Ordners; `size`/`mtime_ticks` sind dann Summe bzw. jüngste mtime.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_dir: bool,
+    /// Metadaten-Fingerabdruck des behaltenen Ordners (nur `dedupe-dirs`, 32 Hex).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_fingerprint: Option<String>,
+    /// Metadaten-Fingerabdruck des entfernten Ordners (nur `dedupe-dirs`, 32 Hex). Fehlt er
+    /// (ältere Pläne), prüft `apply` die Quelle nur über Dateianzahl, Summe und jüngste mtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_fingerprint: Option<String>,
     /// Dateianzahl eines verschobenen Ordners.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<u64>,
@@ -163,10 +224,38 @@ pub(super) fn has_dot_component(path: &str) -> bool {
 }
 
 impl Plan {
-    /// Lädt aus JSON-Text; die Version wird vor allem anderen geprüft, damit ein Plan einer
-    /// neueren Version nicht an unbekannten Feldern scheitert.
+    /// Lädt aus JSON-Text und lehnt einen veränderten Plan (`Tampered`) oder einen v3-Plan ohne
+    /// Prüfsumme ab; Pläne der Formate 1 und 2 werden ungeprüft gelesen.
     pub fn from_json(text: &str) -> Result<Self, PlanError> {
-        let value: serde_json::Value =
+        let (plan, seal) = Self::parse_unvalidated(text)?;
+        match seal {
+            Seal::Mismatch { stored, actual } => {
+                return Err(PlanError::Tampered { stored, actual })
+            }
+            Seal::Missing => {
+                return Err(PlanError::Invalid(format!(
+                    "Plan im Format {SEALED_VERSION} braucht das Feld „integrity“"
+                )))
+            }
+            Seal::Valid | Seal::Unprotected { .. } => {}
+        }
+        plan.validate()?;
+        Ok(plan)
+    }
+
+    /// Liest und prüft die Struktur, lehnt eine abweichende oder fehlende Prüfsumme aber nicht
+    /// ab, sondern meldet sie im `Seal` (für `plan seal`).
+    pub fn parse(text: &str) -> Result<(Self, Seal), PlanError> {
+        let (plan, seal) = Self::parse_unvalidated(text)?;
+        plan.validate()?;
+        Ok((plan, seal))
+    }
+
+    /// Die Version wird vor allem anderen geprüft, damit ein Plan einer neueren Version nicht an
+    /// unbekannten Feldern scheitert. Die Prüfsumme wird vor `validate` verglichen, damit ein
+    /// veränderter Plan immer als verändert gemeldet wird.
+    fn parse_unvalidated(text: &str) -> Result<(Self, Seal), PlanError> {
+        let mut value: serde_json::Value =
             serde_json::from_str(text).map_err(|e| PlanError::Corrupt(e.to_string()))?;
         let version = value
             .get("version")
@@ -178,21 +267,77 @@ impl Plan {
                 expected: PLAN_VERSION,
             });
         }
+        let stored = match value.as_object_mut().and_then(|o| o.remove("integrity")) {
+            None => None,
+            Some(serde_json::Value::String(s)) if is_integrity(&s) => Some(s),
+            Some(_) => {
+                return Err(PlanError::Invalid(
+                    "Feld „integrity“ hat nicht das Format sha256:<64 Hex-Zeichen>".into(),
+                ))
+            }
+        };
+        let sealed = version >= u64::from(SEALED_VERSION);
+        if stored.is_some() && !sealed {
+            return Err(PlanError::Invalid(format!(
+                "Plan im Format {version} darf kein Feld „integrity“ tragen"
+            )));
+        }
         let plan: Self =
             serde_json::from_value(value).map_err(|e| PlanError::Corrupt(e.to_string()))?;
-        plan.validate()?;
-        Ok(plan)
+        let seal = match stored {
+            _ if !sealed => Seal::Unprotected {
+                version: plan.version,
+            },
+            None => Seal::Missing,
+            Some(stored) => {
+                let actual = plan.integrity();
+                if stored == actual {
+                    Seal::Valid
+                } else {
+                    Seal::Mismatch { stored, actual }
+                }
+            }
+        };
+        Ok((plan, seal))
     }
 
     pub fn load(path: &Path) -> Result<Self, PlanError> {
-        let text = std::fs::read_to_string(paths::extended(path))
-            .map_err(|e| PlanError::Unreadable(format!("{}: {e}", paths::display(path))))?;
-        Self::from_json(&text)
+        Self::from_json(&read_text(path)?)
     }
 
+    /// Liest die Datei wie `parse`, ohne eine abweichende Prüfsumme abzulehnen (nur für
+    /// `plan seal`).
+    pub fn read_unverified(path: &Path) -> Result<(Self, Seal), PlanError> {
+        Self::parse(&read_text(path)?)
+    }
+
+    /// SHA-256 der kanonischen Form (kompaktes JSON in Feldreihenfolge der Struktur, ohne
+    /// `integrity`) als `sha256:<hex>`.
+    pub fn integrity(&self) -> String {
+        // Reine Strukturen mit String-Schlüsseln: Serialisieren kann nicht fehlschlagen. Lieber
+        // laut scheitern, als jeden Plan mit dem Hash des leeren Strings zu „schützen“.
+        let canonical = serde_json::to_string(self).expect("Plan ist serialisierbar");
+        format!(
+            "{INTEGRITY_PREFIX}{}",
+            hex(&Sha256::digest(canonical.as_bytes()))
+        )
+    }
+
+    /// Versiegeltes, eingerücktes JSON; jeder Plan wird dabei im aktuellen Format geschrieben.
     pub fn to_json(&self) -> String {
-        // Reine Strukturen mit String-Schlüsseln: Serialisieren kann nicht fehlschlagen.
-        serde_json::to_string_pretty(self).unwrap_or_default()
+        let plan = if self.version == PLAN_VERSION {
+            Cow::Borrowed(self)
+        } else {
+            Cow::Owned(Plan {
+                version: PLAN_VERSION,
+                ..self.clone()
+            })
+        };
+        let sealed = Sealed {
+            integrity: plan.integrity(),
+            plan: &plan,
+        };
+        serde_json::to_string_pretty(&sealed).unwrap_or_default()
     }
 
     /// Schreibt die Plan-Datei und überschreibt nie eine vorhandene.
@@ -205,12 +350,36 @@ impl Plan {
         file.sync_all()
     }
 
+    /// Ersetzt eine vorhandene Plan-Datei atomar: erst `<datei>.tmp` schreiben, dann darüber
+    /// umbenennen (nur für `plan seal`).
+    pub fn save_replacing(&self, path: &Path) -> std::io::Result<()> {
+        let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
+        tmp_name.push(".tmp");
+        let tmp = path.with_file_name(tmp_name);
+        // `create_new`: eine vorhandene Datei (fremde `.tmp`, parallel laufendes `plan seal`)
+        // wird weder überschrieben noch von uns aufgeräumt.
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(paths::extended(&tmp))?;
+        let written = (|| {
+            file.write_all(self.to_json().as_bytes())?;
+            file.sync_all()?;
+            std::fs::rename(paths::extended(&tmp), paths::extended(path))
+        })();
+        if written.is_err() {
+            let _ = std::fs::remove_file(paths::extended(&tmp));
+        }
+        written
+    }
+
     pub fn total_bytes(&self) -> u64 {
         self.actions.iter().map(|a| a.size).sum()
     }
 
     /// Teilplan mit nur den Aktionen aus `keep`; IDs, `skipped`, Art, Wurzel, Zeitstempel und
-    /// Parameter bleiben unverändert (kein Formatwechsel).
+    /// Parameter bleiben unverändert. Beim Speichern wird er wie jeder Plan Format 3 mit eigener
+    /// Prüfsumme.
     pub fn subset(&self, keep: &HashSet<u32>) -> Plan {
         Plan {
             actions: self
@@ -278,11 +447,46 @@ impl Plan {
                 .or_default()
                 .push(o.id);
         }
+        // `dedupe-dirs`: behaltene Ordner (Schlüssel → Aktions-IDs), um Quellen darin zu finden.
+        let mut keep_dirs: HashMap<String, Vec<u32>> = HashMap::new();
+        if self.kind == PlanKind::DedupeDirs {
+            for o in self.actions.iter().filter(|o| o.is_dir) {
+                if let Some(keep) = &o.keep {
+                    keep_dirs
+                        .entry(paths::path_key(Path::new(keep)))
+                        .or_default()
+                        .push(o.id);
+                }
+            }
+        }
         for a in &self.actions {
+            if self.kind == PlanKind::DedupeDirs {
+                let own_key = paths::path_key(Path::new(&a.path));
+                if moved_with_dir(&keep_dirs, a.id, &own_key) {
+                    return invalid(format!(
+                        "Aktion {}: {} liegt im behaltenen Ordner einer anderen Aktion",
+                        a.id, a.path
+                    ));
+                }
+                if moved_with_dir(&dir_moves, a.id, &own_key) {
+                    return invalid(format!(
+                        "Aktion {}: {} liegt in einem Ordner, der selbst entfernt wird",
+                        a.id, a.path
+                    ));
+                }
+            }
             if let Some(keep) = &a.keep {
                 if sources.contains(&paths::path_key(Path::new(keep))) {
                     return invalid(format!(
                         "Aktion {}: die behaltene Datei {keep} steht selbst als Aktion im Plan",
+                        a.id
+                    ));
+                }
+            }
+            if let (true, Some(keep)) = (a.is_dir, &a.keep) {
+                if moved_with_dir(&dir_moves, a.id, &paths::path_key(Path::new(keep))) {
+                    return invalid(format!(
+                        "Aktion {}: der behaltene Ordner {keep} liegt in einem Ordner, der selbst entfernt wird",
                         a.id
                     ));
                 }
@@ -321,8 +525,38 @@ impl Plan {
                 "rule gibt es nur in Plänen der Art rules".into()
             });
         }
+        let is_dir_dedupe = self.kind == PlanKind::DedupeDirs;
+        if a.keep_fingerprint.is_some() && !(is_dir_dedupe && a.action == ActionType::Quarantine) {
+            return invalid("keep_fingerprint gibt es nur bei dedupe-dirs".into());
+        }
+        if let Some(print) = &a.source_fingerprint {
+            if !(is_dir_dedupe && a.action == ActionType::Quarantine) {
+                return invalid("source_fingerprint gibt es nur bei dedupe-dirs".into());
+            }
+            if !is_hash(print) {
+                return invalid("source_fingerprint ist kein xxh3-128-Hex".into());
+            }
+        }
         match a.action {
             ActionType::Quarantine => {
+                if a.is_dir && !is_dir_dedupe {
+                    return invalid(
+                        "Ordner-Quarantäne gibt es nur in Plänen der Art dedupe-dirs".into(),
+                    );
+                }
+                if is_dir_dedupe {
+                    if !a.is_dir {
+                        return invalid(
+                            "ein dedupe-dirs-Plan enthält nur Ordner-Quarantänen".into(),
+                        );
+                    }
+                    if a.files.is_none() {
+                        return invalid("Ordner braucht die Dateianzahl (files)".into());
+                    }
+                    if !a.keep_fingerprint.as_deref().is_some_and(is_hash) {
+                        return invalid("Ordner braucht keep_fingerprint (xxh3-128-Hex)".into());
+                    }
+                }
                 let present = [&a.hash, &a.keep, &a.keep_hash]
                     .iter()
                     .filter(|f| f.is_some())
@@ -330,7 +564,7 @@ impl Plan {
                 if present != 0 && present != 3 {
                     return invalid("hash, keep und keep_hash gelten nur gemeinsam".into());
                 }
-                if self.kind == PlanKind::Dedupe && present == 0 {
+                if matches!(self.kind, PlanKind::Dedupe | PlanKind::DedupeDirs) && present == 0 {
                     return invalid("Hash der Aktion fehlt".into());
                 }
                 if let (Some(hash), Some(keep_hash), Some(keep)) = (&a.hash, &a.keep_hash, &a.keep)
@@ -341,8 +575,14 @@ impl Plan {
                     if hash != keep_hash {
                         return invalid("Hash und keep_hash weichen ab".into());
                     }
-                    if paths::path_key(Path::new(keep)) == key {
+                    let keep_key = paths::path_key(Path::new(keep));
+                    if keep_key == key {
                         return invalid("Pfad entspricht der behaltenen Datei".into());
+                    }
+                    if a.is_dir
+                        && (paths::is_under(key, &keep_key) || paths::is_under(&keep_key, key))
+                    {
+                        return invalid("Ordner liegt im oder über dem behaltenen Ordner".into());
                     }
                 }
                 if a.target.is_some() {
@@ -407,6 +647,11 @@ impl Plan {
     }
 }
 
+fn read_text(path: &Path) -> Result<String, PlanError> {
+    std::fs::read_to_string(paths::extended(path))
+        .map_err(|e| PlanError::Unreadable(format!("{}: {e}", paths::display(path))))
+}
+
 /// `key` und seine Vorfahren (je Ebene bis vor das letzte `\`), von innen nach außen.
 fn ancestors_inclusive(key: &str) -> impl Iterator<Item = &str> {
     let mut next = Some(key);
@@ -467,6 +712,8 @@ mod tests {
             reason: "exact-duplicate".into(),
             target: None,
             is_dir: false,
+            keep_fingerprint: None,
+            source_fingerprint: None,
             files: None,
             rule: None,
         }
@@ -581,13 +828,13 @@ mod tests {
 
     #[test]
     fn unbekannte_version_wird_klar_abgelehnt() {
-        for version in [0, 3] {
+        for version in [0, 4] {
             let mut v: serde_json::Value = serde_json::from_str(&ok_plan().to_json()).unwrap();
             v["version"] = version.into();
             v["neues_feld"] = true.into();
             let err = Plan::from_json(&v.to_string()).unwrap_err();
             assert!(
-                matches!(err, PlanError::UnsupportedVersion { expected: 2, .. }),
+                matches!(err, PlanError::UnsupportedVersion { expected: 3, .. }),
                 "{err}"
             );
             assert!(err.to_string().contains(&format!("Version {version}")));
@@ -1096,5 +1343,444 @@ mod tests {
         let loaded = Plan::from_json(&json).unwrap();
         assert_eq!(loaded.actions[0].rule, None);
         assert_eq!(loaded.version, PLAN_VERSION);
+    }
+
+    const FP: &str = "fedcba9876543210fedcba9876543210";
+
+    fn dir_action(id: u32, path: &str, keep: &str) -> PlannedAction {
+        PlannedAction {
+            reason: "exact-duplicate-dir".into(),
+            is_dir: true,
+            files: Some(3),
+            keep_fingerprint: Some(FP.into()),
+            source_fingerprint: None,
+            ..action(id, path, keep)
+        }
+    }
+
+    fn dirs_plan(actions: Vec<PlannedAction>) -> Plan {
+        plan_of(PlanKind::DedupeDirs, actions)
+    }
+
+    fn invalid_message(p: &Plan) -> String {
+        match p.validate() {
+            Err(PlanError::Invalid(msg)) => msg,
+            other => panic!("erwartet Invalid, bekam {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dedupe_dirs_plan_ist_verlustfrei_serialisierbar() {
+        let p = dirs_plan(vec![dir_action(1, r"D:\Daten\Kopie von P", r"D:\Daten\P")]);
+        assert!(p.validate().is_ok());
+        let json = p.to_json();
+        assert!(json.contains("\"dedupe-dirs\""));
+        assert!(json.contains("keep_fingerprint"));
+        assert_eq!(Plan::from_json(&json).unwrap(), p);
+    }
+
+    #[test]
+    fn ordner_quarantaene_braucht_alle_pflichtfelder() {
+        let base = || dir_action(1, r"D:\Daten\B", r"D:\Daten\A");
+        let mut no_fp = base();
+        no_fp.keep_fingerprint = None;
+        assert!(invalid_message(&dirs_plan(vec![no_fp])).contains("keep_fingerprint"));
+        let mut no_files = base();
+        no_files.files = None;
+        assert!(invalid_message(&dirs_plan(vec![no_files])).contains("files"));
+        let mut no_hash = base();
+        (no_hash.hash, no_hash.keep, no_hash.keep_hash) = (None, None, None);
+        assert!(!invalid_message(&dirs_plan(vec![no_hash])).is_empty());
+        let mut bad_fp = base();
+        bad_fp.keep_fingerprint = Some("zz".into());
+        assert!(invalid_message(&dirs_plan(vec![bad_fp])).contains("keep_fingerprint"));
+    }
+
+    #[test]
+    fn dedupe_dirs_plan_enthaelt_nur_ordner_quarantaenen() {
+        let file_action = action(1, r"D:\Daten\B\x.txt", r"D:\Daten\A\x.txt");
+        assert!(!invalid_message(&dirs_plan(vec![file_action])).is_empty());
+    }
+
+    #[test]
+    fn behaltener_ordner_in_einem_entfernten_ordner_ist_ungueltig() {
+        let p = dirs_plan(vec![
+            dir_action(1, r"D:\Daten\B", r"D:\Daten\M"),
+            dir_action(2, r"D:\Daten\X", r"D:\Daten\B\k"),
+        ]);
+        assert!(invalid_message(&p).contains("behaltene Ordner"));
+    }
+
+    #[test]
+    fn quelle_im_behaltenen_ordner_einer_anderen_aktion_ist_ungueltig() {
+        let p = dirs_plan(vec![
+            dir_action(1, r"D:\Daten\X\k", r"D:\Daten\W"),
+            dir_action(2, r"D:\Daten\Y", r"D:\Daten\X"),
+        ]);
+        assert!(invalid_message(&p).contains("im behaltenen Ordner"));
+    }
+
+    #[test]
+    fn verschachtelte_quellen_sind_in_dedupe_dirs_ungueltig() {
+        let p = dirs_plan(vec![
+            dir_action(1, r"D:\Daten\B", r"D:\Daten\A"),
+            dir_action(2, r"D:\Daten\B\sub", r"D:\Daten\A\sub"),
+        ]);
+        assert!(invalid_message(&p).contains("selbst entfernt wird"));
+    }
+
+    #[test]
+    fn source_fingerprint_gibt_es_nur_bei_dedupe_dirs_und_muss_ein_hash_sein() {
+        let mut ok = dir_action(1, r"D:\Daten\B", r"D:\Daten\A");
+        ok.source_fingerprint = Some(FP.into());
+        assert!(dirs_plan(vec![ok.clone()]).validate().is_ok());
+        assert!(dirs_plan(vec![ok.clone()])
+            .to_json()
+            .contains("source_fingerprint"));
+
+        let mut bad = ok.clone();
+        bad.source_fingerprint = Some("zz".into());
+        assert!(invalid_message(&dirs_plan(vec![bad])).contains("source_fingerprint"));
+
+        let mut elsewhere = action(1, r"D:\Daten\B\x.txt", r"D:\Daten\A\x.txt");
+        elsewhere.source_fingerprint = Some(FP.into());
+        assert!(invalid_message(&plan(vec![elsewhere])).contains("source_fingerprint"));
+    }
+
+    #[test]
+    fn plan_ohne_source_fingerprint_bleibt_gueltig_und_schreibt_das_feld_nicht() {
+        let p = dirs_plan(vec![dir_action(1, r"D:\Daten\B", r"D:\Daten\A")]);
+        assert!(p.validate().is_ok());
+        assert!(!p.to_json().contains("source_fingerprint"));
+    }
+
+    #[test]
+    fn behaltene_ordner_neben_entfernten_sind_gueltig() {
+        let p = dirs_plan(vec![
+            dir_action(1, r"D:\Daten\B", r"D:\Daten\A"),
+            dir_action(2, r"D:\Daten\C", r"D:\Daten\A"),
+            dir_action(3, r"D:\Daten\Bx", r"D:\Daten\A\k"),
+        ]);
+        assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn ordner_quarantaene_gibt_es_nur_in_dedupe_dirs() {
+        let p = plan(vec![dir_action(1, r"D:\Daten\B", r"D:\Daten\A")]);
+        assert!(invalid_message(&p).contains("dedupe-dirs"));
+    }
+
+    #[test]
+    fn keep_fingerprint_ist_ausserhalb_von_dedupe_dirs_verboten() {
+        let mut a = action(1, r"D:\Daten\b\x.txt", r"D:\Daten\a\x.txt");
+        a.keep_fingerprint = Some(FP.into());
+        assert!(invalid_message(&plan(vec![a])).contains("keep_fingerprint"));
+    }
+
+    #[test]
+    fn ordner_aktion_darf_nicht_in_oder_ueber_dem_behaltenen_ordner_liegen() {
+        let inside = dirs_plan(vec![dir_action(1, r"D:\Daten\A\sub", r"D:\Daten\A")]);
+        assert!(invalid_message(&inside).contains("behalten"));
+        let above = dirs_plan(vec![dir_action(1, r"D:\Daten", r"D:\Daten\A")]);
+        assert!(!invalid_message(&above).is_empty());
+        let same = dirs_plan(vec![dir_action(1, r"D:\Daten\A", r"D:\Daten\A")]);
+        assert!(!invalid_message(&same).is_empty());
+        let sibling_prefix = dirs_plan(vec![dir_action(1, r"D:\Daten\AB", r"D:\Daten\A")]);
+        assert!(
+            sibling_prefix.validate().is_ok(),
+            "A und AB sind Geschwister"
+        );
+    }
+
+    #[test]
+    fn ordner_quarantaene_ist_abhaengigkeit_der_darin_liegenden_aktion() {
+        let outer = dir_action(1, r"D:\Daten\B", r"D:\Daten\A");
+        let inner = dir_action(2, r"D:\Daten\B\sub", r"D:\Daten\A\sub");
+        let p = dirs_plan(vec![outer, inner]);
+        assert_eq!(dependents(&p, 2), vec![1]);
+        assert!(dependents(&p, 1).is_empty());
+    }
+
+    #[test]
+    fn plan_ohne_keep_fingerprint_bleibt_gueltig_und_schreibt_das_feld_nicht() {
+        let json = ok_plan().to_json();
+        assert!(!json.contains("keep_fingerprint"));
+        assert!(Plan::from_json(&json).is_ok());
+    }
+
+    fn value(p: &Plan) -> serde_json::Value {
+        serde_json::from_str(&p.to_json()).unwrap()
+    }
+
+    #[test]
+    fn gespeicherter_plan_ist_v3_und_beginnt_mit_der_pruefsumme() {
+        let json = ok_plan().to_json();
+        assert!(json.starts_with("{\n  \"integrity\": \"sha256:"), "{json}");
+        let v = value(&ok_plan());
+        assert_eq!(v["version"], 3);
+        assert!(is_integrity(v["integrity"].as_str().unwrap()));
+        assert_eq!(v["integrity"], ok_plan().integrity());
+    }
+
+    #[test]
+    fn alter_plan_wird_beim_speichern_auf_v3_gehoben() {
+        let old = Plan::from_json(V1_JSON).unwrap();
+        let (back, seal) = Plan::parse(&old.to_json()).unwrap();
+        assert_eq!(back.version, PLAN_VERSION);
+        assert_eq!(seal, Seal::Valid);
+    }
+
+    #[test]
+    fn formatierung_zeilenenden_schluesselreihenfolge_und_null_aendern_den_hash_nicht() {
+        let p = ok_plan();
+        let pretty = p.to_json();
+        let compact_sorted = value(&p).to_string();
+        assert!(
+            compact_sorted.starts_with("{\"actions\""),
+            "Schlüssel umgestellt"
+        );
+        let crlf = pretty.replace('\n', "\r\n");
+        let mut with_null = value(&p);
+        with_null["actions"][0]["target"] = serde_json::Value::Null;
+        with_null["params"] = serde_json::json!({});
+        for text in [pretty, compact_sorted, crlf, with_null.to_string()] {
+            assert_eq!(Plan::from_json(&text).unwrap(), p);
+            assert_eq!(Plan::parse(&text).unwrap().1, Seal::Valid);
+        }
+    }
+
+    fn assert_tampered(v: &serde_json::Value) {
+        match Plan::from_json(&v.to_string()) {
+            Err(e @ PlanError::Tampered { .. }) => {
+                let msg = e.to_string();
+                assert!(msg.contains("verändert"), "{msg}");
+                assert!(msg.contains("plan seal"), "{msg}");
+                assert!(msg.contains("…). Bewusst geändert?"), "{msg}");
+                assert!(!msg.contains("Daten"), "keine Pfade: {msg}");
+            }
+            other => panic!("erwartet Tampered, bekam {other:?}"),
+        }
+    }
+
+    #[test]
+    fn inhaltliche_aenderungen_ergeben_tampered() {
+        let mut changed = value(&ok_plan());
+        changed["actions"][0]["size"] = 11.into();
+        assert_tampered(&changed);
+
+        let mut removed = value(&ok_plan());
+        removed["actions"].as_array_mut().unwrap().pop();
+        assert_tampered(&removed);
+
+        let mut added = value(&ok_plan());
+        let mut extra = added["actions"][0].clone();
+        extra["id"] = 3.into();
+        extra["path"] = r"D:\Daten\d\kopie.txt".into();
+        added["actions"].as_array_mut().unwrap().push(extra);
+        assert_tampered(&added);
+
+        let mut skipped = value(&ok_plan());
+        skipped["skipped"] = serde_json::json!([]);
+        assert_tampered(&skipped);
+    }
+
+    #[test]
+    fn veraenderter_und_ungueltiger_plan_wird_als_veraendert_gemeldet() {
+        let mut v = value(&ok_plan());
+        v["actions"][1]["id"] = 1.into();
+        assert_tampered(&v);
+    }
+
+    #[test]
+    fn tampered_meldung_nennt_gekuerzte_pruefsummen() {
+        let mut v = value(&ok_plan());
+        let stored = v["integrity"].as_str().unwrap().to_owned();
+        v["actions"][0]["size"] = 11.into();
+        let err = Plan::from_json(&v.to_string()).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains(&format!("{}…", &stored[7..19])), "{msg}");
+        assert!(!msg.contains(&stored[7..20]), "nur 12 Zeichen: {msg}");
+    }
+
+    #[test]
+    fn v3_ohne_pruefsumme_ist_ungueltig() {
+        let mut v = value(&ok_plan());
+        v.as_object_mut().unwrap().remove("integrity");
+        assert!(matches!(
+            Plan::from_json(&v.to_string()),
+            Err(PlanError::Invalid(m)) if m.contains("integrity")
+        ));
+        assert_eq!(Plan::parse(&v.to_string()).unwrap().1, Seal::Missing);
+    }
+
+    #[test]
+    fn falsch_formatierte_pruefsumme_ist_ungueltig() {
+        let good = ok_plan().integrity();
+        let hex = &good[7..];
+        for bad in [
+            serde_json::Value::from(format!("sha1:{hex}")),
+            format!("sha256:{}", &hex[1..]).into(),
+            format!("sha256:{hex}0").into(),
+            format!("sha256:{}", hex.to_uppercase()).into(),
+            format!("sha256:{}g", &hex[1..]).into(),
+            hex.into(),
+            1.into(),
+            serde_json::Value::Null,
+        ] {
+            let mut v = value(&ok_plan());
+            v["integrity"] = bad.clone();
+            assert!(
+                matches!(Plan::from_json(&v.to_string()), Err(PlanError::Invalid(_))),
+                "{bad}"
+            );
+            assert!(
+                matches!(Plan::parse(&v.to_string()), Err(PlanError::Invalid(_))),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn alte_versionen_mit_pruefsumme_sind_ungueltig() {
+        for version in [1, 2] {
+            let mut v = value(&ok_plan());
+            v["version"] = version.into();
+            assert!(
+                matches!(Plan::from_json(&v.to_string()), Err(PlanError::Invalid(m)) if m.contains("integrity")),
+                "Version {version}"
+            );
+        }
+    }
+
+    #[test]
+    fn alte_versionen_ohne_pruefsumme_sind_ungeschuetzt() {
+        let (p, seal) = Plan::parse(V1_JSON).unwrap();
+        assert_eq!(p.version, 1);
+        assert_eq!(seal, Seal::Unprotected { version: 1 });
+
+        let mut v2 = value(&ok_plan());
+        v2.as_object_mut().unwrap().remove("integrity");
+        v2["version"] = 2.into();
+        let text = v2.to_string();
+        let mut expected = ok_plan();
+        expected.version = 2;
+        assert_eq!(Plan::from_json(&text).unwrap(), expected);
+        assert_eq!(
+            Plan::parse(&text).unwrap().1,
+            Seal::Unprotected { version: 2 }
+        );
+    }
+
+    #[test]
+    fn parse_meldet_abweichung_ohne_abzulehnen() {
+        let mut v = value(&ok_plan());
+        let stored = v["integrity"].as_str().unwrap().to_owned();
+        v["actions"][0]["size"] = 11.into();
+        let (p, seal) = Plan::parse(&v.to_string()).unwrap();
+        assert_eq!(p.actions[0].size, 11);
+        assert_eq!(
+            seal,
+            Seal::Mismatch {
+                stored,
+                actual: p.integrity()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_prueft_die_struktur() {
+        let mut v = value(&ok_plan());
+        v["actions"][1]["id"] = 1.into();
+        assert!(matches!(
+            Plan::parse(&v.to_string()),
+            Err(PlanError::Invalid(m)) if m.contains("doppelt")
+        ));
+    }
+
+    /// Hängt der Hash an der Rust-Struktur (Feldreihenfolge, Defaults), schlägt dieser Test an.
+    /// Jede solche Änderung braucht eine neue Formatversion.
+    #[test]
+    fn eingecheckter_v3_plan_bleibt_gueltig() {
+        const V3_JSON: &str = r#"{
+  "integrity": "sha256:2c49d9c9cb030472cb412c6538ed6c2115d5f4cef24ffa528c5b3871e4fa58c1",
+  "version": 3,
+  "created": "2026-10-03T12:00:00+02:00",
+  "kind": "archive",
+  "root": "D:\\Daten",
+  "params": {
+    "older_than": "2y"
+  },
+  "protected_paths": [
+    "D:\\Daten\\wichtig"
+  ],
+  "actions": [
+    {
+      "id": 1,
+      "type": "move",
+      "path": "D:\\Daten\\alt",
+      "size": 10,
+      "mtime_ticks": 17000000000000000,
+      "mtime": "2023-11-14T23:13:20+01:00",
+      "reason": "archive",
+      "target": "D:\\Daten\\_Archiv\\2023\\alt",
+      "is_dir": true,
+      "files": 4
+    }
+  ],
+  "skipped": [
+    {
+      "path": "D:\\Daten\\x.txt",
+      "reason": "protected",
+      "detail": "Test"
+    }
+  ]
+}"#;
+        let (p, seal) = Plan::parse(V3_JSON).unwrap();
+        assert_eq!(seal, Seal::Valid, "{}", p.integrity());
+        assert_eq!(p.to_json(), V3_JSON);
+    }
+
+    #[test]
+    fn save_replacing_ersetzt_den_inhalt_ohne_restdatei() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plan.json");
+        std::fs::write(&path, "alter inhalt").unwrap();
+        let p = ok_plan();
+        p.save_replacing(&path).unwrap();
+        assert_eq!(Plan::load(&path).unwrap(), p);
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["plan.json"], "keine .tmp-Datei bleibt zurück");
+    }
+
+    #[test]
+    fn read_unverified_meldet_den_zustand_der_datei() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plan.json");
+        let mut v = value(&ok_plan());
+        v["actions"][0]["size"] = 11.into();
+        std::fs::write(&path, v.to_string()).unwrap();
+        let (p, seal) = Plan::read_unverified(&path).unwrap();
+        assert_eq!(p.actions[0].size, 11);
+        assert!(matches!(seal, Seal::Mismatch { .. }));
+        assert!(matches!(
+            Plan::read_unverified(&dir.path().join("fehlt.json")),
+            Err(PlanError::Unreadable(_))
+        ));
+    }
+
+    #[test]
+    fn unbekannte_version_4_wird_abgelehnt() {
+        let mut v = value(&ok_plan());
+        v["version"] = 4.into();
+        assert!(matches!(
+            Plan::from_json(&v.to_string()),
+            Err(PlanError::UnsupportedVersion {
+                found: 4,
+                expected: 3
+            })
+        ));
     }
 }

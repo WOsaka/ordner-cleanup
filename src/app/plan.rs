@@ -5,12 +5,15 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use super::global_cancel_flag;
+use super::{confirm, global_cancel_flag};
+use crate::change::plan::{short_integrity, Seal, PLAN_VERSION};
 use crate::cli::{
-    PlanArchiveArgs, PlanDedupeArgs, PlanEmptyDirsArgs, PlanJunkArgs, PlanRulesArgs,
-    PlanVersionsArgs,
+    PlanArchiveArgs, PlanDedupeArgs, PlanDedupeDirsArgs, PlanEmptyDirsArgs, PlanJunkArgs,
+    PlanRulesArgs, PlanSealArgs, PlanVersionsArgs,
 };
-use crate::ops::plan::{plan, PlanKindRequest, PlanOut, PlanOutcome, PlanRequest};
+use crate::ops::plan::{
+    plan, seal_preview, seal_write, PlanKindRequest, PlanOut, PlanOutcome, PlanRequest,
+};
 use crate::ops::target::TargetSpec;
 use crate::ops::OpCtx;
 use crate::paths;
@@ -70,6 +73,9 @@ fn print_outcome(outcome: &PlanOutcome) {
     if let Some(saved) = &outcome.saved {
         println!("Plan: {}", paths::display(saved));
     }
+    if let Some(integrity) = &outcome.integrity {
+        println!("Prüfsumme: sha256:{}…", short_integrity(integrity));
+    }
     println!("Es wurde nichts verändert. Plan prüfen, danach mit `apply` ausführen.");
 }
 
@@ -79,6 +85,18 @@ pub(super) fn plan_dedupe_command(args: &PlanDedupeArgs) -> Result<i32> {
         args.profile.as_deref(),
         PlanKindRequest::Dedupe {
             keep: args.keep.clone(),
+        },
+        args.out.as_ref(),
+    )
+}
+
+pub(super) fn plan_dedupe_dirs_command(args: &PlanDedupeDirsArgs) -> Result<i32> {
+    run_plan(
+        args.path.as_deref(),
+        args.profile.as_deref(),
+        PlanKindRequest::DedupeDirs {
+            keep: args.keep.clone(),
+            min_size: args.min_size,
         },
         args.out.as_ref(),
     )
@@ -144,4 +162,45 @@ pub(super) fn plan_rules_with(args: &PlanRulesArgs, lock_held: bool) -> Result<i
         },
         args.out.as_ref(),
     )
+}
+
+/// `plan seal`: zeigt, was versiegelt wird, fragt nach und schreibt die neue Prüfsumme.
+pub(super) fn plan_seal_command(args: &PlanSealArgs) -> Result<i32> {
+    let preview = seal_preview(&args.plan)?;
+    let new = short_integrity(&preview.integrity);
+    let before = match &preview.seal {
+        Seal::Valid => {
+            println!("Plan ist bereits versiegelt (sha256:{new}…).");
+            return Ok(0);
+        }
+        Seal::Unprotected { version } => {
+            format!("keine Prüfsumme (Format {version}), wird auf Format {PLAN_VERSION} gehoben")
+        }
+        Seal::Missing => "Prüfsumme fehlt".into(),
+        Seal::Mismatch { stored, .. } => format!(
+            "sha256:{}… (passt nicht zum Inhalt)",
+            short_integrity(stored)
+        ),
+    };
+    let plan = &preview.plan;
+    let kind = serde_json::to_value(plan.kind)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default();
+    println!("Plan {}", paths::display(&args.plan));
+    println!("  Art {kind}, Wurzel {}", plan.root);
+    println!(
+        "  {} Aktionen, {} übersprungen",
+        plan.actions.len(),
+        plan.skipped.len()
+    );
+    println!("  Bisher: {before}");
+    println!("  Neu: sha256:{new}…");
+    if !confirm("Plan mit diesem Inhalt versiegeln? [j/N] ", args.yes)? {
+        println!("Abgebrochen. Die Datei wurde nicht verändert.");
+        return Ok(1);
+    }
+    seal_write(&args.plan, plan)?;
+    println!("Plan versiegelt: {}", paths::display(&args.plan));
+    Ok(0)
 }

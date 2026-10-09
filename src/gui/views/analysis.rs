@@ -5,9 +5,11 @@ use std::path::PathBuf;
 use eframe::egui;
 
 use super::analysis_tabs as tabs;
-use crate::gui::shell::{Choice, Route, Shell, TaskResult};
+use crate::gui::help::Topic;
+use crate::gui::shell::{Choice, Page, Route, Shell, TaskResult};
 use crate::gui::tasks::TaskKind;
 use crate::gui::texts;
+use crate::gui::widgets::help_button::heading_with_help;
 use crate::ops::report::{export_report, report_model, ReportRequest, ReportView};
 use crate::report::Format;
 
@@ -76,7 +78,7 @@ impl Default for AnalysisView {
     }
 }
 
-fn request_for(choice: &Choice, old_after: &str, top: &str) -> ReportRequest {
+pub fn request_for(choice: &Choice, old_after: &str, top: &str) -> ReportRequest {
     let mut req = ReportRequest {
         old_after: Some(old_after.trim().to_string()).filter(|t| !t.is_empty()),
         top: top.trim().parse().ok(),
@@ -90,6 +92,15 @@ fn request_for(choice: &Choice, old_after: &str, top: &str) -> ReportRequest {
 }
 
 impl AnalysisView {
+    /// Öffnet einen Tab von außen (`problems` oder `content`); unbekannte Schlüssel ändern nichts.
+    pub fn preselect_tab(&mut self, key: &str) {
+        match key {
+            "problems" => self.tab = Tab::Problems,
+            "content" => self.tab = Tab::Content,
+            _ => {}
+        }
+    }
+
     fn load(&mut self, shell: &mut Shell, choice: Choice) {
         let key = (choice.clone(), shell.generation);
         self.requested = Some(key);
@@ -100,7 +111,7 @@ impl AnalysisView {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, shell: &mut Shell) {
-        ui.heading(texts::NAV_ANALYSIS);
+        heading_with_help(ui, texts::NAV_ANALYSIS, Topic::Page(Page::Analysis), shell);
         let Some(choice) = shell.target.clone() else {
             ui.label(texts::NO_ROOT_YET);
             return;
@@ -120,14 +131,20 @@ impl AnalysisView {
         });
         let Some(view) = &self.view else {
             if let Some(e) = &self.error {
-                ui.colored_label(egui::Color32::LIGHT_RED, e);
+                ui.colored_label(
+                    crate::gui::theme::tone_color(ui, crate::gui::format::Tone::Error),
+                    e,
+                );
             } else if !shell.is_running(Route::Analysis) {
                 ui.label("Für dieses Ziel gibt es noch keine Analyse. Erst scannen.");
             }
             return;
         };
         for w in &view.notes.warnings {
-            ui.colored_label(egui::Color32::YELLOW, w);
+            ui.colored_label(
+                crate::gui::theme::tone_color(ui, crate::gui::format::Tone::Warn),
+                w,
+            );
         }
         ui.horizontal_wrapped(|ui| {
             for (tab, label) in Tab::ALL {
@@ -255,5 +272,28 @@ impl AnalysisView {
             (_, Err(e)) => shell.show_error(name, &e),
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tab_laesst_sich_von_aussen_vorwaehlen() {
+        let mut view = AnalysisView::default();
+        assert_eq!(view.tab, Tab::SizeTree);
+        view.preselect_tab("problems");
+        assert_eq!(view.tab, Tab::Problems);
+        view.preselect_tab("content");
+        assert_eq!(view.tab, Tab::Content);
+    }
+
+    #[test]
+    fn unbekannter_tab_schluessel_aendert_nichts() {
+        let mut view = AnalysisView::default();
+        view.preselect_tab("content");
+        view.preselect_tab("gibt-es-nicht");
+        assert_eq!(view.tab, Tab::Content);
     }
 }

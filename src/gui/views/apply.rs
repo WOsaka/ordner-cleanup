@@ -12,13 +12,14 @@ use crate::gui::shell::{Answer, Dialog, Route, Shell, TaskResult};
 use crate::gui::tasks::TaskKind;
 use crate::gui::texts;
 use crate::index::Index;
-use crate::ops::apply::{apply_check, apply_execute, ApplyCheck, ApplyResult};
+use crate::ops::apply::{apply_check, apply_execute, plan_file_changed, ApplyCheck, ApplyResult};
 use crate::ops::plan::save_subset;
 use crate::ops::text::{apply_headline, status_line};
 use crate::ops::{index_age_note, load_config};
 use crate::paths;
 
 pub const ID_APPLY: &str = "cleanup.apply";
+pub const ID_RELOAD: &str = "cleanup.reload";
 pub const TASK_CHECK: &str = "Plan prüfen";
 pub const TASK_APPLY: &str = "Anwenden";
 
@@ -49,11 +50,21 @@ pub struct ApplyView {
     pub plan_file: Option<PathBuf>,
 }
 
+/// Ergebnis des Anwenden-Tasks.
+enum Applied {
+    /// Ausgeführt: Ergebnis, Plan-Datei (Original oder Teilplan), Wurzel
+    Done(ApplyResult, Option<PathBuf>, String),
+    /// Die Plan-Datei hat sich seit dem Laden verändert; nichts ausgeführt
+    Changed(PathBuf),
+}
+
 #[derive(Default)]
 pub struct ApplyFlow {
     pending: Option<Pending>,
     check_for: Option<Pending>,
     pub result: Option<ApplyView>,
+    /// Plan-Datei für „Plan neu laden“, nachdem sie sich vor dem Anwenden verändert hatte
+    pub reload: Option<PathBuf>,
 }
 
 /// Ziel der Aktionen als Text für den Dialog.
@@ -102,6 +113,35 @@ pub fn confirm_text(
         text.push_str(&format!("\n\n{limit}"));
     }
     text
+}
+
+/// Rumpf des Anwenden-Tasks: Plan-Datei prüfen, bei Teilauswahl den Teilplan speichern, ausführen.
+fn execute(p: Pending, allow_large: bool, ctx: &crate::ops::OpCtx) -> anyhow::Result<Applied> {
+    if let Some(path) = &p.original_path {
+        if plan_file_changed(path, &p.original)? {
+            return Ok(Applied::Changed(path.clone()));
+        }
+    }
+    let file = if p.subset {
+        let config = load_config()?;
+        Some(save_subset(
+            p.original_path
+                .as_deref()
+                .unwrap_or(std::path::Path::new("plan.json")),
+            &p.original,
+            &p.ids,
+            &config,
+        )?)
+    } else {
+        p.original_path.clone()
+    };
+    let name = file
+        .as_ref()
+        .and_then(|f| f.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "plan".into());
+    let result = apply_execute(&p.plan, &name, allow_large, ctx)?;
+    Ok(Applied::Done(result, file, p.plan.root.clone()))
 }
 
 impl ApplyFlow {
@@ -196,34 +236,30 @@ impl ApplyFlow {
         }
         let allow_large = answer.checked;
         shell.spawn(Route::Cleanup, TASK_APPLY, TaskKind::Write, move |ctx| {
-            let file = if p.subset {
-                let config = load_config()?;
-                Some(save_subset(
-                    p.original_path
-                        .as_deref()
-                        .unwrap_or(std::path::Path::new("plan.json")),
-                    &p.original,
-                    &p.ids,
-                    &config,
-                )?)
-            } else {
-                p.original_path.clone()
-            };
-            let name = file
-                .as_ref()
-                .and_then(|f| f.file_name())
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "plan".into());
-            let result = apply_execute(&p.plan, &name, allow_large, ctx)?;
-            Ok((result, file, p.plan.root.clone()))
+            execute(p, allow_large, ctx)
         });
     }
 
     pub fn on_applied(&mut self, result: TaskResult, shell: &mut Shell) {
         match result {
-            Ok(b) => {
-                if let Ok(done) = b.downcast::<(ApplyResult, Option<PathBuf>, String)>() {
-                    let (applied, file, root) = *done;
+            Ok(b) => match b.downcast::<Applied>().map(|a| *a) {
+                Ok(Applied::Changed(path)) => {
+                    shell.confirm(Dialog::Confirm {
+                        id: ID_RELOAD,
+                        title: "Plan wurde verändert".into(),
+                        text: format!(
+                            "Die Plan-Datei {} wurde seit dem Laden verändert. Es wurde nichts \
+                             ausgeführt.\n\nPlan neu laden und erneut prüfen?",
+                            paths::display(&path)
+                        ),
+                        ok_label: "Plan neu laden".into(),
+                        must_check: None,
+                        checked: false,
+                        danger: false,
+                    });
+                    self.reload = Some(path);
+                }
+                Ok(Applied::Done(applied, file, root)) => {
                     let o = &applied.outcome;
                     let lines: Vec<String> = o.results.iter().filter_map(status_line).collect();
                     self.result = Some(ApplyView {
@@ -238,7 +274,8 @@ impl ApplyFlow {
                     });
                     shell.generation += 1;
                 }
-            }
+                Err(_) => {}
+            },
             Err(e) => shell.show_error(TASK_APPLY, &e),
         }
     }
@@ -252,7 +289,7 @@ impl ApplyFlow {
             ui.label(egui::RichText::new(&r.headline).strong());
             if r.aborted {
                 ui.colored_label(
-                    egui::Color32::YELLOW,
+                    crate::gui::theme::tone_color(ui, crate::gui::format::Tone::Warn),
                     "Abgebrochen; der Lauf ist teilweise ausgeführt und lässt sich zurückdrehen.",
                 );
             }
@@ -346,6 +383,75 @@ mod tests {
         );
         assert!(text.contains("Obergrenze überschritten"), "{text}");
         assert!(text.contains("Cloud-only"), "{text}");
+    }
+
+    #[test]
+    fn veraenderte_plan_datei_wird_nicht_angewendet() {
+        use crate::change::plan::{ActionType, PlannedAction, PLAN_VERSION};
+        let dir = tempfile::tempdir().unwrap();
+        let victims: Vec<PathBuf> = (1..=2)
+            .map(|i| {
+                let path = dir.path().join(format!("x{i}.tmp"));
+                std::fs::write(&path, "x").unwrap();
+                path
+            })
+            .collect();
+        let action = |id: u32, path: &PathBuf| PlannedAction {
+            id,
+            action: ActionType::Quarantine,
+            path: path.display().to_string(),
+            size: 1,
+            mtime_ticks: 0,
+            mtime: String::new(),
+            hash: None,
+            keep: None,
+            keep_hash: None,
+            reason: "junk:temp".into(),
+            target: None,
+            is_dir: false,
+            keep_fingerprint: None,
+            source_fingerprint: None,
+            files: None,
+            rule: None,
+        };
+        let plan = Plan {
+            version: PLAN_VERSION,
+            created: "2026-10-09T10:00:00+02:00".into(),
+            kind: PlanKind::Junk,
+            root: dir.path().display().to_string(),
+            keep_strategy: None,
+            params: Default::default(),
+            protected_paths: Vec::new(),
+            actions: vec![action(1, &victims[0]), action(2, &victims[1])],
+            skipped: vec![],
+        };
+        let file = dir.path().join("plan.json");
+        let mut edited = plan.clone();
+        edited.actions.pop();
+        edited.save(&file).unwrap();
+
+        for subset in [false, true] {
+            let pending = Pending {
+                plan: plan.clone(),
+                original: plan.clone(),
+                original_path: Some(file.clone()),
+                ids: [1].into(),
+                subset,
+            };
+            match execute(pending, false, &crate::ops::OpCtx::default()).unwrap() {
+                Applied::Changed(path) => assert_eq!(path, file),
+                Applied::Done(..) => panic!("veränderter Plan wurde angewendet"),
+            }
+        }
+        assert!(victims.iter().all(|v| v.exists()), "nichts ausgeführt");
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            names.iter().all(|n| !n.contains("auswahl")),
+            "kein Teilplan gespeichert: {names:?}"
+        );
     }
 
     #[test]

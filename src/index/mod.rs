@@ -9,7 +9,7 @@ use std::path::Path;
 use rusqlite::Connection;
 
 pub use content_cache::{CachedContent, OcrTextEntry};
-pub use dups::{DupFile, DupGroup, HashCandidate, HashUpdate};
+pub use dups::{DupFile, DupGroup, FileHash, HashCandidate, HashUpdate};
 pub use exif_cache::ExifEntry;
 pub use listing::{DirRow, FileRow};
 pub use store::{DirRecord, FileRecord, PrevFile, RootInfo, RootRun, RootStatus, ScanErrorRecord};

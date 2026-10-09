@@ -43,6 +43,7 @@ mod tests {
             id: 1,
             path: r"D:\x.txt".into(),
             kind: ActionType::Quarantine,
+            is_dir: false,
             sorted: false,
             status,
         }

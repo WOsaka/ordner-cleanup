@@ -156,6 +156,11 @@ protected_paths = ['{}']
     let edited = env.home.path().join("edited.json");
     std::fs::write(&edited, plan.to_string()).unwrap();
     env.bin()
+        .args(["plan", "seal", "--yes"])
+        .arg(&edited)
+        .assert()
+        .success();
+    env.bin()
         .arg("apply")
         .arg(&edited)
         .arg("--yes")

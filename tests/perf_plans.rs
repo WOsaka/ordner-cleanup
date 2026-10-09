@@ -7,6 +7,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use ordner_cleanup::change::archive::{plan_archive, ArchiveOptions};
+use ordner_cleanup::change::dedupe_dirs::{plan_dedupe_dirs, DedupeDirsOptions};
 use ordner_cleanup::change::empty_dirs::plan_empty_dirs;
 use ordner_cleanup::change::junk::{plan_junk, JunkOptions};
 use ordner_cleanup::change::protect::{ProtectPaths, Protector};
@@ -382,11 +383,8 @@ fn plan_rules_mit_10000_jpegs_liest_beim_zweiten_lauf_aus_dem_cache() {
     );
 }
 
-/// `Plan::validate` bleibt bei vielen Aktionen schnell (Laden, Anwenden und Teilplan rufen es auf):
 /// 100.000 Datei-Verschiebungen und 1.000 Ordner-Verschiebungen ins Archiv.
-#[test]
-#[ignore = "Performance-Messung, siehe Modul-Dokumentation"]
-fn plan_validate_schafft_100000_aktionen_mit_1000_ordnern_in_unter_zwei_sekunden() {
+fn big_archive_plan() -> ordner_cleanup::change::plan::Plan {
     use ordner_cleanup::change::plan::{ActionType, Plan, PlanKind, PlannedAction, PLAN_VERSION};
 
     let root = r"Z:\Root";
@@ -404,6 +402,8 @@ fn plan_validate_schafft_100000_aktionen_mit_1000_ordnern_in_unter_zwei_sekunden
         target: Some(target),
         is_dir,
         files: is_dir.then_some(1),
+        keep_fingerprint: None,
+        source_fingerprint: None,
         rule: None,
     };
     let mut actions = Vec::new();
@@ -423,7 +423,7 @@ fn plan_validate_schafft_100000_aktionen_mit_1000_ordnern_in_unter_zwei_sekunden
             false,
         ));
     }
-    let plan = Plan {
+    Plan {
         version: PLAN_VERSION,
         created: "t".into(),
         kind: PlanKind::Archive,
@@ -433,7 +433,14 @@ fn plan_validate_schafft_100000_aktionen_mit_1000_ordnern_in_unter_zwei_sekunden
         protected_paths: Vec::new(),
         actions,
         skipped: Vec::new(),
-    };
+    }
+}
+
+/// `Plan::validate` bleibt bei vielen Aktionen schnell (Laden, Anwenden und Teilplan rufen es auf).
+#[test]
+#[ignore = "Performance-Messung, siehe Modul-Dokumentation"]
+fn plan_validate_schafft_100000_aktionen_mit_1000_ordnern_in_unter_zwei_sekunden() {
+    let plan = big_archive_plan();
     let start = Instant::now();
     plan.validate().unwrap();
     let elapsed = start.elapsed();
@@ -441,5 +448,146 @@ fn plan_validate_schafft_100000_aktionen_mit_1000_ordnern_in_unter_zwei_sekunden
     assert!(
         elapsed < Duration::from_secs(2),
         "validate braucht {elapsed:?} (Grenze 2 s)"
+    );
+}
+
+/// Laden eines großen Plans samt Prüfsumme (parsen, kanonisch serialisieren, SHA-256, validate)
+/// und versiegeltes Schreiben.
+#[test]
+#[ignore = "Performance-Messung, siehe Modul-Dokumentation"]
+fn plan_laden_mit_pruefsumme_schafft_100000_aktionen_in_unter_drei_sekunden() {
+    use ordner_cleanup::change::plan::Plan;
+
+    let plan = big_archive_plan();
+    let start = Instant::now();
+    let json = plan.to_json();
+    let written = start.elapsed();
+    let start = Instant::now();
+    let loaded = Plan::from_json(&json).unwrap();
+    let elapsed = start.elapsed();
+    println!(
+        "to_json: {written:.2?}, from_json: {elapsed:.2?} ({} MB)",
+        json.len() / 1_000_000
+    );
+    assert_eq!(loaded.actions.len(), plan.actions.len());
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "Laden braucht {elapsed:?} (Grenze 3 s)"
+    );
+}
+
+/// 20 × 50 Ordner mit je 100 Dateien und vollen Hashes; `projekt10..19` sind Kopien von
+/// `projekt00..09` (500 Ordnerpaare auf zwei Ebenen).
+fn build_with_hashes(root: &Path) -> Index {
+    let mut index = Index::open_in_memory().unwrap();
+    let root_str = paths::display(root);
+    let root_key = paths::dir_key(root);
+    let run = index.begin_root(&root_str, &root_key, "t").unwrap();
+    let mut dirs = vec![DirRecord {
+        path: root_str.clone(),
+        path_key: root_key.clone(),
+        mode: "full".into(),
+        attrs: 0x10,
+        direct_entries: TOP as i64,
+        ..DirRecord::default()
+    }];
+    let mut files = Vec::with_capacity(TOP * SUB * FILES);
+    for t in 0..TOP {
+        let top = root.join(format!("projekt{t:02}"));
+        dirs.push(DirRecord {
+            path: paths::display(&top),
+            path_key: paths::dir_key(&top),
+            parent_key: Some(root_key.clone()),
+            depth: 1,
+            mode: "full".into(),
+            attrs: 0x10,
+            direct_entries: SUB as i64,
+            ..DirRecord::default()
+        });
+        for s in 0..SUB {
+            let sub = top.join(format!("ordner{s:02}"));
+            dirs.push(DirRecord {
+                path: paths::display(&sub),
+                path_key: paths::dir_key(&sub),
+                parent_key: Some(paths::dir_key(&top)),
+                depth: 2,
+                mode: "full".into(),
+                attrs: 0x10,
+                direct_entries: FILES as i64,
+                ..DirRecord::default()
+            });
+            let sub_key = paths::dir_key(&sub);
+            for f in 0..FILES {
+                let name = format!("datei{f}.txt");
+                let path = sub.join(&name);
+                let hash = vec![
+                    (t % 10) as u8,
+                    s as u8,
+                    f as u8,
+                    7,
+                    7,
+                    7,
+                    7,
+                    7,
+                    7,
+                    7,
+                    7,
+                    7,
+                    7,
+                    7,
+                    7,
+                    7,
+                ];
+                files.push(FileRecord {
+                    dir_key: sub_key.clone(),
+                    path: paths::display(&path),
+                    path_key: paths::path_key(&path),
+                    name,
+                    size: 1000 + (s * FILES + f) as i64,
+                    mtime: NOW - (t as i64) * DAY,
+                    attrs: 0x20,
+                    partial_hash: Some(hash.clone()),
+                    full_hash: Some(hash),
+                    hash_status: Some("ok".into()),
+                    ..FileRecord::default()
+                });
+            }
+        }
+    }
+    index.upsert_dirs(&dirs, run.generation).unwrap();
+    for chunk in files.chunks(10_000) {
+        index.upsert_files(chunk, run.generation).unwrap();
+    }
+    index
+}
+
+/// Spec: 1 Mio. Dateien unter 30 s; hier 100.000 Dateien, also linear hochgerechnet unter 3 s.
+#[test]
+#[ignore = "Performance-Messung, siehe Modul-Dokumentation"]
+fn plan_dedupe_dirs_schafft_100000_dateien_in_unter_3_sekunden() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("Root");
+    let index = build_with_hashes(&root);
+    let protector = Protector::new(&root, &Config::default(), &ProtectPaths::default());
+    let start = Instant::now();
+    let result = plan_dedupe_dirs(
+        &index,
+        &root,
+        &"oldest".parse().unwrap(),
+        &protector,
+        "t",
+        &DedupeDirsOptions::default(),
+    )
+    .unwrap();
+    let elapsed = start.elapsed();
+    println!("plan dedupe-dirs (100.000 Dateien): {elapsed:.2?}");
+    assert_eq!(
+        result.plan.actions.len(),
+        10,
+        "zehn Kopien der Projektordner"
+    );
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "plan dedupe-dirs braucht {elapsed:?} (Grenze 3 s je 100.000 Dateien)"
     );
 }

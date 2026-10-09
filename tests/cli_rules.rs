@@ -200,7 +200,8 @@ fn plan_aendert_nichts_apply_sortiert_ein_und_undo_stellt_alles_her() {
     assert_eq!(env.snapshot(), before, "plan darf nichts verändern");
 
     let json = plan_json(&plan);
-    assert_eq!(json["version"], 2);
+    assert_eq!(json["version"], 3);
+    assert!(json["integrity"].as_str().unwrap().starts_with("sha256:"));
     assert_eq!(json["kind"], "rules");
     assert!(json["params"]["rules_file"]
         .as_str()
@@ -430,11 +431,23 @@ fn manipulierter_plan_mit_ziel_ausserhalb_der_wurzel_wird_abgelehnt() {
     let outside = env.out.path().join("ausserhalb");
     let mut json = plan_json(&plan);
     json["actions"][0]["target"] = outside.join("x.pdf").to_string_lossy().into_owned().into();
+    // Als ungeschützter v2-Plan, damit die Strukturprüfung greift und nicht die Prüfsumme;
+    // versiegeln lässt sich der ungültige Plan nicht.
+    json.as_object_mut().unwrap().remove("integrity");
+    json["version"] = 2.into();
     let bad = env.out.path().join("bad.json");
     std::fs::write(&bad, serde_json::to_string_pretty(&json).unwrap()).unwrap();
     let before = env.snapshot();
 
-    env.apply(&bad).failure();
+    env.bin()
+        .args(["plan", "seal", "--yes"])
+        .arg(&bad)
+        .assert()
+        .code(1)
+        .stderr(contains("Plan ist ungültig"));
+    env.apply(&bad)
+        .code(1)
+        .stderr(contains("Plan ist ungültig"));
 
     assert_eq!(env.snapshot(), before);
     assert!(!outside.exists());

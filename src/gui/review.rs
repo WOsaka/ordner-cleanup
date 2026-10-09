@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::change::plan::{dependents, ActionType, Plan, Skipped};
+use crate::change::plan::{dependents, ActionType, Plan, PlannedAction, Skipped};
 use crate::paths;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,11 +103,32 @@ fn key_of(path: &str) -> String {
     paths::path_key(Path::new(path))
 }
 
+/// Grund einer Aktion; ein doppelter Ordner nennt Dateianzahl und behaltenen Ordner.
+fn action_reason(a: &PlannedAction) -> String {
+    match (&a.keep, a.files) {
+        (Some(keep), Some(files)) if a.is_dir && a.action == ActionType::Quarantine => {
+            format!("{} · {files} Dateien · bleibt: {keep}", a.reason)
+        }
+        _ => a.reason.clone(),
+    }
+}
+
 fn skipped_reason(s: &Skipped) -> String {
     match &s.detail {
         Some(detail) => format!("{} ({detail})", s.reason),
         None => s.reason.to_string(),
     }
+}
+
+/// Zeilenfokus um `delta` verschieben, in `0..len` begrenzt. Ohne Fokus springt „vor“ auf die
+/// erste und „zurück“ auf die letzte Zeile. Bei leerer Liste gibt es keinen Fokus.
+pub fn step_focus(current: Option<usize>, delta: isize, len: usize) -> Option<usize> {
+    let last = len.checked_sub(1)?;
+    Some(match current {
+        None if delta >= 0 => 0,
+        None => last,
+        Some(i) => i.saturating_add_signed(delta).min(last),
+    })
 }
 
 impl ReviewModel {
@@ -120,7 +141,7 @@ impl ReviewModel {
                 &a.path,
                 a.target.clone(),
                 a.size,
-                a.reason.clone(),
+                action_reason(a),
                 a.rule.clone(),
                 a.mtime_ticks,
             ));
@@ -246,6 +267,12 @@ impl ReviewModel {
         }
     }
 
+    /// Wählt die Zeile `focus` an bzw. ab und gibt die nächste Zeile zurück (am Ende dieselbe).
+    pub fn toggle_and_advance(&mut self, focus: usize) -> usize {
+        self.toggle(focus);
+        (focus + 1).min(self.len().saturating_sub(1))
+    }
+
     fn set_rows(&mut self, indices: impl Iterator<Item = usize>, on: bool) {
         let mut turned_off = Vec::new();
         for i in indices {
@@ -364,6 +391,11 @@ impl ReviewModel {
             .collect()
     }
 
+    /// Anzahl der übersprungenen Einträge des Plans (unabhängig vom Filter).
+    pub fn skipped_count(&self) -> usize {
+        self.plan().skipped.len()
+    }
+
     pub fn all_selected(&self) -> bool {
         self.rows
             .iter()
@@ -443,6 +475,8 @@ mod tests {
             reason: "junk:temp".into(),
             target: None,
             is_dir: kind == ActionType::RemoveDir,
+            keep_fingerprint: None,
+            source_fingerprint: None,
             files: None,
             rule: None,
         }
@@ -493,6 +527,24 @@ mod tests {
         );
         assert_eq!(s.quarantine, 3);
         assert_eq!(m.selected_ids(), [1, 2, 3].into());
+    }
+
+    #[test]
+    fn doppelter_ordner_nennt_dateianzahl_und_behaltenen_ordner() {
+        let mut dir = action(1, ActionType::Quarantine, r"D:\Daten\Kopie von P", 500);
+        dir.is_dir = true;
+        dir.files = Some(12);
+        dir.keep = Some(r"D:\Daten\P".into());
+        dir.reason = "exact-duplicate-dir".into();
+        let m = ReviewModel::new(plan(vec![dir], vec![]));
+        let reason = &m.row(0).reason;
+        assert!(reason.starts_with("exact-duplicate-dir"), "{reason}");
+        assert!(reason.contains("12 Dateien"), "{reason}");
+        assert!(reason.contains(r"bleibt: D:\Daten\P"), "{reason}");
+        // Einzeldateien und leere Ordner behalten ihren Grund unverändert.
+        let file = action(2, ActionType::Quarantine, r"D:\Daten\x.tmp", 5);
+        let m = ReviewModel::new(plan(vec![file], vec![]));
+        assert_eq!(m.row(0).reason, "junk:temp");
     }
 
     #[test]
@@ -720,5 +772,41 @@ mod tests {
         // Release-Ziel < 300 ms; im Debug-Build großzügiger, es geht um Größenordnungen.
         let limit = if cfg!(debug_assertions) { 10 } else { 1 };
         assert!(elapsed.as_secs() < limit, "{elapsed:?}");
+    }
+
+    #[test]
+    fn uebersprungene_werden_gezaehlt() {
+        assert_eq!(sample().skipped_count(), 1);
+        assert_eq!(
+            ReviewModel::new(plan(Vec::new(), Vec::new())).skipped_count(),
+            0
+        );
+    }
+
+    #[test]
+    fn fokus_wandert_begrenzt_durch_die_liste() {
+        assert_eq!(step_focus(None, 1, 3), Some(0));
+        assert_eq!(step_focus(None, -1, 3), Some(2));
+        assert_eq!(step_focus(Some(0), 1, 3), Some(1));
+        assert_eq!(step_focus(Some(2), 1, 3), Some(2));
+        assert_eq!(step_focus(Some(0), -1, 3), Some(0));
+        assert_eq!(step_focus(Some(7), 1, 3), Some(2));
+        assert_eq!(step_focus(Some(1), 1, 0), None);
+        assert_eq!(step_focus(None, 1, 0), None);
+    }
+
+    #[test]
+    fn leertaste_waehlt_ab_und_springt_weiter() {
+        let mut m = sample();
+        assert!(m.is_selected(0));
+        assert_eq!(m.toggle_and_advance(0), 1);
+        assert!(!m.is_selected(0));
+        assert!(m.is_selected(1));
+        // Am Ende bleibt der Fokus stehen.
+        let last = m.len() - 1;
+        assert_eq!(m.toggle_and_advance(last), last);
+        // Nochmal: wieder angewählt.
+        m.toggle_and_advance(0);
+        assert!(m.is_selected(0));
     }
 }

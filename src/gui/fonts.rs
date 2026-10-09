@@ -9,6 +9,13 @@ fn load(file: &str) -> Option<Vec<u8>> {
     std::fs::read(std::path::Path::new(FONT_DIR).join(file)).ok()
 }
 
+/// Ist die Symbolschrift vorhanden? Sonst zeigt die Seitenleiste keine Symbole.
+pub fn symbols_available() -> bool {
+    std::path::Path::new(FONT_DIR)
+        .join("seguisym.ttf")
+        .is_file()
+}
+
 pub fn definitions() -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let mut add = |key: &str, file: &str, families: &[(FontFamily, bool)]| {

@@ -129,6 +129,8 @@ Dateien wandern in eine **Quarantäne** (`<wurzel>\.ordner-cleanup\quarantine\<r
 
 Jeder `apply` ist ein **Lauf** mit einer Lauf-ID. Vor jeder Änderung schreibt das Programm einen Eintrag in ein Journal. Damit kann `undo` einen Lauf vollständig zurückdrehen, auch nach einem Absturz.
 
+In der Oberfläche lassen sich auf der Seite **Quarantäne** auch einzelne Einträge eines Laufs zurückholen. Das Zurückholen schreibt je Eintrag ein `undo_done` ins Journal des Laufs, aber kein `undo_start`/`undo_end`: Der Lauf behält seinen Status, nur die Größe in der Quarantäne sinkt. Ein späteres `undo` des ganzen Laufs überspringt die schon zurückgeholten Einträge.
+
 ### Wurzel
 
 Die „Wurzel“ ist der Ordner, den man an `scan` übergibt. Quarantäne, Archiv und Journal liegen immer unterhalb der Wurzel und damit auf demselben Volume, damit Verschieben ein schnelles Umbenennen bleibt.
@@ -142,7 +144,7 @@ Die „Wurzel“ ist der Ordner, den man an `scan` übergibt. Quarantäne, Archi
 | `scan <pfad>` | Ordnerbaum erfassen, Duplikate hashen | nein (nur Index) |
 | `report [<pfad>]` | Bericht aus dem Index erzeugen | nein (nur Berichtsordner) |
 | `index list` / `index remove <pfad>` | Gescannte Wurzeln verwalten | nein (nur Index) |
-| `plan dedupe\|junk\|empty-dirs\|archive\|versions <pfad>` | Änderungsplan erzeugen | nein |
+| `plan dedupe\|dedupe-dirs\|junk\|empty-dirs\|archive\|versions <pfad>` | Änderungsplan erzeugen | nein |
 | `apply <plan.json>` | Plan ausführen | **ja** (umkehrbar) |
 | `undo <run-id>` | Lauf zurückdrehen | **ja** |
 | `runs [<wurzel>]` | Läufe auflisten | nein |
@@ -192,13 +194,15 @@ ordner-cleanup index remove <pfad>
 
 ```
 ordner-cleanup plan dedupe     <pfad> [--keep oldest|newest|path:<absoluter ordner>] [--out <plan.json>]
+ordner-cleanup plan dedupe-dirs <pfad> [--keep oldest|newest|path:<absoluter ordner>] [--min-size <größe>] [--out <plan.json>]
 ordner-cleanup plan junk       <pfad> [--category system,temp,downloads,installer,<eigene>] [--out <plan.json>]
 ordner-cleanup plan empty-dirs <pfad> [--out <plan.json>]
 ordner-cleanup plan archive    <pfad> [--older-than 2y] [--out <plan.json>]
 ordner-cleanup plan versions   <pfad> [--min-age 30d] [--out <plan.json>]
+ordner-cleanup plan seal       <plan.json> [--yes]
 ```
 
-Ohne `--out` heißt die Datei `plan-<zeitstempel>.json` und liegt im aktuellen Ordner.
+Ohne `--out` heißt die Datei `plan-<zeitstempel>.json` und liegt im aktuellen Ordner. `plan seal` versiegelt einen von Hand geänderten Plan neu (siehe [6.1](#61-ablauf)).
 
 ### apply, undo, runs, purge
 
@@ -280,6 +284,7 @@ Zusätzlich druckt `report` eine Terminal-Zusammenfassung und nennt die geschrie
 | **Dateitypen** | Anzahl und Größe je Endung und je Kategorie (Dokumente, Bilder, Video, Audio, Archive, Code, Ausführbar, Sonstige) |
 | **Alter** | Altersklassen nach Änderungsdatum (< 1 Monat, < 6 Monate, < 1 Jahr, < 3 Jahre, > 3 Jahre) und eine Liste „alter“ Dateien (Schwelle `--old-after`) |
 | **Exakte Duplikate** | Gruppen identischer Dateien (Voll-Hash) mit Pfaden, Größe und verschwendetem Platz (`Größe × (Anzahl − 1)`), nach Verschwendung sortiert |
+| **Ordner-Duplikate** | Gruppen gleicher Ordner (oberste Ebene, mit Platzgewinn) und „teilweise gleiche“ Ordnerpaare ab der Schwelle `dedupe_dirs_partial_threshold` (nur Hinweis; im HTML die 50 größten ab 1 MiB, vollständig in `folder-partial.csv` und im JSON) |
 | **Wahrscheinliche Duplikate** | Gruppen mit Cloud-Platzhaltern: gleicher Name und gleiche Größe, ausdrücklich als „nicht verifiziert“ markiert |
 | **Ähnliche Dateien / Versionen** | Gruppen im selben Ordner mit gleichem normalisiertem Namen (siehe unten) |
 | **Struktur** | Leere Ordner, Ordner mit nur einer Datei, zu tiefe Verschachtelung, Riesenordner |
@@ -332,23 +337,31 @@ Mehrere gescannte Wurzeln: Ohne Pfad listet `report` die vorhandenen Wurzeln und
 scan  →  plan <aktion>  →  Plan prüfen  →  apply  →  (undo)  →  (purge)
 ```
 
-Voraussetzung: Die Wurzel ist gescannt. `plan` liest nur den Index. Der Plan ist eine JSON-Datei (`version: 2`) mit
+Voraussetzung: Die Wurzel ist gescannt. `plan` liest nur den Index. Der Plan ist eine JSON-Datei (`version: 3`) mit
 
+- `integrity`: Prüfsumme des Inhalts (`sha256:<64 Hex-Zeichen>`), als erstes Feld; `plan` nennt sie gekürzt in der Ausgabe
 - `kind`, `root`, `created` und den Aufrufparametern
 - `actions`: jede geplante Aktion mit `id`, `type`, `path`, `size`, `mtime`, `reason` und je nach Typ `hash`, `keep`, `target`
 - `skipped`: Kandidaten, die nicht geplant wurden, mit Grund
 
-Pläne der Version 1 (Phase 2) und ihre Journale funktionieren unverändert weiter.
+Pläne der Versionen 1 und 2 und ihre Journale funktionieren weiter. Sie haben keine Prüfsumme; `apply` (und die GUI im Bestätigungsdialog und in der Kopfzeile des Plans) warnt deshalb „Ungeschützter Plan (Format N): Änderungen an der Datei werden nicht erkannt.“
+
+**Prüfsumme:** Die Prüfsumme ist SHA-256 über den Plan in kanonischer Form (geparst und kompakt neu geschrieben, ohne `integrity`). Einrückung, Zeilenenden (CRLF/LF) und die Reihenfolge der JSON-Schlüssel ändern sie deshalb nicht; ein Editor, der die Datei nur neu formatiert, löst keinen Fehlalarm aus. Jede inhaltliche Änderung (ein Wert, eine entfernte oder hinzugefügte Aktion, ein Übersprungener) ändert sie. Ein Plan im Format 3 ohne `integrity` oder mit falsch formatiertem Wert ist ungültig; ein Plan im Format 1 oder 2 darf das Feld nicht tragen. Die Prüfsumme schützt vor Versehen (Editor, Sync-Konflikt, halber Schreibvorgang), nicht vor Absicht: Wer die Datei schreiben kann, kann sie auch neu versiegeln.
+
+**Plan von Hand ändern:** Wer einen Plan bewusst bearbeitet (z. B. Aktionen streicht), versiegelt ihn danach mit `plan seal <plan.json>`. Der Befehl zeigt Art, Wurzel, Anzahl der Aktionen und Übersprungenen, den bisherigen Zustand der Prüfsumme und die neue Prüfsumme, fragt `j/N` und ersetzt die Datei dann atomar. Ein Plan im Format 1 oder 2 wird dabei auf Format 3 gehoben. Ein strukturell ungültiger Plan wird nicht versiegelt. Ist die Prüfsumme schon richtig, meldet `plan seal` „Plan ist bereits versiegelt“ und lässt die Datei unverändert. Ohne Terminal braucht `plan seal` wie `apply` die Option `--yes`. Eine Option, die Prüfung beim `apply` abzuschalten, gibt es nicht.
+
+**Teilplan aus der GUI:** Werden in der Review Einträge abgewählt, entsteht eine neue Datei `<name>-auswahl-<zeitstempel>.json` mit eigener Prüfsumme; das Original bleibt unverändert. Vor dem Anwenden prüft die GUI, ob die geöffnete Plan-Datei auf der Platte noch dem geladenen Plan entspricht. Wurde sie inzwischen verändert, führt sie nichts aus und bietet „Plan neu laden“ an.
 
 ### 6.2 apply
 
 `apply <plan.json>` führt den Plan aus:
 
-1. Zeigt eine Übersicht und fragt einmal `j/N`. In nicht interaktiven Sitzungen (Skript, Pipe) bricht `apply` **ohne `--yes` ab**, statt zu raten.
-2. Prüft unabhängig vom Plan noch einmal alle Schutzregeln.
-3. Prüft **je Aktion**, ob Größe, Änderungszeit und (bei `dedupe`) Hash von Datei und behaltener Kopie noch zum Plan passen. Weicht etwas ab, wird nur diese Aktion als `stale` übersprungen, der Rest läuft weiter. Fehlt die behaltene Datei, passiert in der Gruppe nichts.
-4. Schreibt vor jeder Änderung einen Journal-Eintrag (mit `fsync`) und führt dann die Aktion aus.
-5. Gibt am Ende die Lauf-ID und eine Bilanz je Aktionstyp aus.
+1. Prüft die Prüfsumme der Plan-Datei. Weicht sie ab, bricht `apply` vor jeder Dateioperation ab („Plan wurde nach dem Erstellen verändert“, mit erwarteter und gefundener Prüfsumme, je 12 Zeichen), Exit-Code `3`, kein Lauf im Journal.
+2. Zeigt eine Übersicht und fragt einmal `j/N`. In nicht interaktiven Sitzungen (Skript, Pipe) bricht `apply` **ohne `--yes` ab**, statt zu raten.
+3. Prüft unabhängig vom Plan noch einmal alle Schutzregeln.
+4. Prüft **je Aktion**, ob Größe, Änderungszeit und (bei `dedupe`) Hash von Datei und behaltener Kopie noch zum Plan passen. Weicht etwas ab, wird nur diese Aktion als `stale` übersprungen, der Rest läuft weiter. Fehlt die behaltene Datei, passiert in der Gruppe nichts.
+5. Schreibt vor jeder Änderung einen Journal-Eintrag (mit `fsync`) und führt dann die Aktion aus.
+6. Gibt am Ende die Lauf-ID und eine Bilanz je Aktionstyp aus.
 
 Ein zweiter `apply` desselben Plans ändert nichts (Idempotenz). Ein belegtes Ziel wird nie überschrieben; es bekommt ein Suffix wie `datei (2).txt`.
 
@@ -364,6 +377,8 @@ Ein zweiter `apply` desselben Plans ändert nichts (Idempotenz). Ein belegtes Zi
 - leere Ordner unter `quarantine\<run-id>` und `_Archiv` werden anschließend aufgeräumt
 
 `undo` prüft den echten Dateizustand und überschreibt **nie**. Kollisionen (am Ursprungsort liegt inzwischen etwas anderes) werden gemeldet, die Datei bleibt in der Quarantäne. Das funktioniert auch nach einem Absturz mitten im `apply`, weil das Journal vor der Änderung geschrieben wurde.
+
+Einträge, die vorher in der GUI einzeln zurückgeholt wurden (Seite „Quarantäne“), meldet `undo` als „nichts zu tun“ und lässt sie, wo sie sind. Kam eine Datei dabei unter einem neuen Namen zurück (`name (2).ext`, weil der Ursprungspfad belegt war), bleibt auch dieser Name unangetastet und `undo` meldet dafür keine Kollision.
 
 Findet `undo` die Wurzel nicht im Lauf-Register, hilft `--root <wurzel>`. Auch `undo` fragt `j/N` (oder `--yes`).
 
@@ -382,6 +397,7 @@ Findet `undo` die Wurzel nicht im Lauf-Register, hilft `--root <wurzel>`. Auch `
 | Befehl | Was geplant wird | Aktionstyp | Undo |
 |---|---|---|---|
 | `plan dedupe` | Exakte Duplikate in die Quarantäne | `quarantine` | Datei zurück aus der Quarantäne |
+| `plan dedupe-dirs` | Doppelte ganze Ordner in die Quarantäne | `quarantine` (`is_dir`) | Ordner zurück aus der Quarantäne |
 | `plan junk` | Müll nach Kategorien in die Quarantäne | `quarantine` (ohne Hash) | Datei zurück aus der Quarantäne |
 | `plan empty-dirs` | Rekursiv leere Ordner, von unten nach oben | `remove-dir` | Ordner neu anlegen, Attribute und Zeitstempel zurücksetzen |
 | `plan archive` | Lange unberührte Ordner nach `<wurzel>\_Archiv\<Jahr>\…` | `move` (ganzer Ordner) | Rückbenennung |
@@ -402,6 +418,22 @@ Pro Gruppe identischer Dateien (gleicher Voll-Hash) bleibt **immer mindestens ei
 | `path:D:\Ordner` | die älteste Kopie unterhalb dieses absoluten Ordners |
 
 Bei Gleichstand entscheidet der kürzeste, dann der alphabetisch erste Pfad. Geschützte Dateien werden weder entfernt noch als „keep“ gewählt. Hardlinks auf die behaltene Datei zählen nicht (sie würden keinen Platz freigeben). Cloud-Platzhalter und Links kennt der Index in Gruppen gar nicht, sie werden nie angefasst. Der Plan nennt den tatsächlich freiwerdenden Platz.
+
+### 7.1a plan dedupe-dirs: doppelte Ordner
+
+```
+ordner-cleanup plan dedupe-dirs <pfad> [--keep oldest|newest|path:<absoluter ordner>] [--min-size <größe>] [--out <plan.json>]
+```
+
+Die Erkennung arbeitet nur auf dem Index (kein zusätzliches Lesen von Dateien): Aus (Name, Größe, Voll-Hash) der Dateien und den Fingerabdrücken der Unterordner wird von unten nach oben ein Fingerabdruck je Ordner gebildet (Merkle-Prinzip). Ordner mit gleichem Fingerabdruck bilden eine Gruppe.
+
+**Gleichheit:** dieselben relativen Dateipfade (Groß-/Kleinschreibung egal) mit derselben Größe und demselben Hash; der Name des Ordners selbst zählt nicht. Ignoriert werden `Thumbs.db`, `ehthumbs.db`, `.DS_Store`, `desktop.ini`, `*.tmp`, `~$*`, `*.crdownload`, `*.part`, `*.partial` und leere Unterordner (ignorierte Dateien wandern bei der Verschiebung trotzdem mit). Ein Ordner braucht mindestens eine verglichene Datei mit Größe > 0. Ordner mit Cloud-Platzhaltern, Links, Lücken im Index oder Dateien ohne Hash sind nicht vergleichbar und werden nie angefasst (Dateien werden nie gelesen oder gehasht).
+
+**Welcher Ordner bleibt:** 1. ein schon behaltener Ordner (damit nichts innerhalb eines behaltenen Ordners entfernt wird), 2. der Name: „Kopie“, „Copy“, „Backup“, „Sicherung“, „alt“/„old“/„bak“ als ganzes Wort, „(2)“ am Ende und eigene Wörter aus `dedupe_dirs_copy_patterns` machen einen Ordner zur Kopie, normale Namen bleiben bevorzugt („Altbau“ und „Copyright“ zählen nicht), 3. `--keep` (nach der jüngsten Änderungszeit aller Dateien im Ordner), 4. kürzester, dann alphabetisch erster Pfad. Bei `path:<prefix>` hat das Präfix Vorrang vor dem Namen; liegt kein Ordner der Gruppe darunter, bleibt die Gruppe unberührt (`group-incomplete`).
+
+**Plan:** `type: quarantine` mit `is_dir: true`, `files` (Dateianzahl), `hash` = Inhalts-Fingerabdruck der Gruppe, `keep` = behaltener Ordner, `keep_fingerprint` (Metadaten des behaltenen Ordners, siehe unten) und `source_fingerprint` (dieselben Metadaten des entfernten Ordners); `reason` ist `exact-duplicate-dir`, bzw. `exact-duplicate-dir:copy-name`, wenn der Name entschieden hat. Es wird von oben nach unten gearbeitet (Gruppen mit der größeren Verschachtelungstiefe des Inhalts zuerst, nicht nach Pfadtiefe): Unterordner entfernter Ordner entfallen, nichts innerhalb eines behaltenen Ordners wird entfernt, und ein behaltener Ordner verliert nie einen Unterordner durch eine andere Gruppe. Geschützte Ordner (auch mit geschütztem Inhalt) werden weder entfernt noch behalten. Hardlinks auf den behaltenen Ordner geben keinen Platz frei (`hardlink`); der Plan nennt den tatsächlich freiwerdenden Platz. `--min-size` lässt kleine Gruppen weg.
+
+**Apply:** Der zu entfernende Ordner wird wie bei `archive` per Metadaten-Walk geprüft (Dateianzahl, Größensumme, jüngste Änderungszeit) und zusätzlich gegen `source_fingerprint` (relativer Pfad, Größe, Änderungszeit der nicht ignorierten Dateien; so fällt auch eine umbenannte Datei auf); sonst `stale`. Pläne ohne `source_fingerprint` (ältere Dateien) werden nur über Anzahl, Summe und jüngste Zeit geprüft. Der behaltene Ordner wird gegen `keep_fingerprint` geprüft (relativer Pfad, Größe, Änderungszeit der nicht ignorierten Dateien, ohne Hashen): fehlt er `keep-missing`, hat er sich geändert `keep-changed`; dann wird nichts entfernt. Danach folgt **ein** Rename in die Quarantäne; scheitert er (gesperrte Datei), bleibt der Ordner vollständig liegen. Undo, Purge und die OneDrive-Obergrenze (zählt die Dateianzahl) funktionieren wie bei `archive`.
 
 ### 7.2 plan junk: Müll
 
@@ -471,7 +503,7 @@ ordner-cleanup plan versions <pfad> [--min-age 30d]
 | **Bestätigung** | `apply`, `undo`, `purge` fragen `j/N`; ohne Terminal brechen sie ohne `--yes` ab |
 | **Stale-Prüfung** | Jede Aktion prüft unmittelbar vor der Ausführung, ob die Datei noch dem Plan entspricht |
 | **Quarantäne statt Löschen** | Verschieben per Rename auf demselben Volume; Zeitstempel und Inhalt bleiben erhalten; kein Verschieben über Laufwerksgrenzen |
-| **Kein Überschreiben** | Belegte Ziele bekommen ein Suffix (`datei (2).txt`); `undo` überschreibt nie |
+| **Kein Überschreiben** | Belegte Ziele bekommen ein Suffix (`datei (2).txt`); `undo` überschreibt nie, und das einzelne Zurückholen in der GUI auch nicht: ein belegter Ursprungspfad ergibt einen neuen Namen |
 | **Write-ahead-Journal** | `<wurzel>\.ordner-cleanup\journal\<run-id>.jsonl`, `fsync` je Eintrag, vor jeder Änderung |
 | **Lauf-Register** | `%LOCALAPPDATA%\ordner-cleanup\runs.jsonl`, damit `undo` die Wurzel findet (maßgeblich bleibt das Journal; sonst `--root`) |
 | **Idempotenz** | Ein zweiter `apply` desselben Plans ändert nichts |
@@ -520,6 +552,8 @@ Datei: `%APPDATA%\ordner-cleanup\config.toml`. Alle Schlüssel sind optional; ei
 | `downloads_dirs` | `[]` | Ersetzt den Windows-Downloads-Ordner, wenn nicht leer |
 | `archive_older_than` | `"2y"` | Default für `plan archive --older-than` |
 | `versions_min_age` | `"30d"` | Default für `plan versions --min-age` |
+| `dedupe_dirs_copy_patterns` | `[]` | Zusätzliche Wörter/Muster, die einen Ordnernamen als Kopie kennzeichnen (`plan dedupe-dirs`) |
+| `dedupe_dirs_partial_threshold` | `0.8` | Ab diesem Anteil gemeinsamer Bytes meldet der Bericht Ordner als „teilweise gleich“ (0,5 bis 1,0) |
 | `onedrive_max_move_files` | `1000` | OneDrive-Obergrenze: Dateianzahl |
 | `onedrive_max_move_bytes` | `"5GB"` | OneDrive-Obergrenze: Größe |
 
@@ -565,6 +599,12 @@ dirs = ["D:\\Logs"]           # optional: nur direkt in diesen Ordnern
 
 `scan` erfasst den Ordner `.ordner-cleanup` nie.
 
+**Journal-Eintrag `undo_done`:** `{"t":"undo_done","run":…,"action":…}` markiert eine Aktion als zurückgeholt, sei es durch `undo` oder durch das einzelne Zurückholen in der GUI. Das optionale Feld `to` steht nur, wenn die Datei unter einem anderen Pfad als dem ursprünglichen zurückkam (Ursprungspfad belegt). Alte Journale ohne das Feld bleiben lesbar, ältere Programmversionen ignorieren es.
+
+**Bekannte Grenze:** Das Zurückholen prüft wie `undo` den direkten Elternordner des Ursprungspfads auf Datei oder Link, nicht jeden Ordner weiter oben. Liegt weiter oben eine Verknüpfung (Junction), kann die Datei über sie an einen anderen Ort geraten. Die Tool-Ordner (`.ordner-cleanup`, `quarantine`, Lauf-Ordner) dürfen keine Links sein; sonst lehnt das Zurückholen ab.
+
+**Neben den Programmdateien** (`ordner-cleanup.exe`, `ordner-cleanup-bg.exe`, `ordner-cleanup-gui.exe`) liegen `README.md` und `docs\dokumentation.md`. Die Hilfe der Oberfläche („?“ an Seiten und Karten, `F1`) öffnet sie über „Ausführliche Doku öffnen“. Fehlen die Dateien, zeigt die Oberfläche den erwarteten Pfad an; die Kurztexte funktionieren auch ohne sie.
+
 ---
 
 ## 11. Exit-Codes
@@ -574,6 +614,7 @@ dirs = ["D:\\Logs"]           # optional: nur direkt in diesen Ordnern
 | `0` | Alles erledigt |
 | `1` | Fehler oder Abbruch (auch „N“ bei der Rückfrage, Strg+C beim Scan) |
 | `2` | Erfolg mit Teilfehlern: z. B. Zugriff verweigert beim Scan, unvollständiger Scan im `report`, bei `apply`/`undo` übersprungene oder `stale` Aktionen, Fehler einzelner Aktionen, Kollisionen beim `undo` |
+| `3` | Plan wurde nach dem Erstellen verändert (Integritätsprüfung bei `apply` fehlgeschlagen); nichts ausgeführt |
 
 ---
 
@@ -582,6 +623,8 @@ dirs = ["D:\\Logs"]           # optional: nur direkt in diesen Ordnern
 **„Kein Scan für … vorhanden“:** `report` und `plan` brauchen vorher `scan` auf demselben Pfad. `index list` zeigt, was im Index steht.
 
 **`apply` bricht ohne Rückfrage ab:** In einer Sitzung ohne Terminal (Skript, Pipe) muss `--yes` gesetzt sein.
+
+**„Plan wurde nach dem Erstellen verändert“ (Exit-Code `3`):** Der Inhalt der Plan-Datei passt nicht mehr zu ihrer Prüfsumme, z. B. weil sie in einem Editor geändert, von einem Sync-Konflikt ersetzt oder nur halb geschrieben wurde. Es wurde nichts ausgeführt. Den Plan prüfen: War die Änderung gewollt, mit `plan seal <plan.json>` neu versiegeln; sonst einen neuen Plan erzeugen. Reine Formatierung (Einrückung, Zeilenenden) löst den Fehler nicht aus. Bekannte Lücke: Wer `version` auf `2` zurücksetzt und `integrity` löscht, bekommt nur die Warnung „ungeschützter Plan“; die Prüfung schützt vor Versehen, nicht vor Absicht.
 
 **Viele Aktionen sind `stale`:** Die Dateien haben sich seit dem Plan geändert. Neu scannen und neuen Plan erzeugen.
 
@@ -627,7 +670,7 @@ Die CI (GitHub Actions, `windows-latest`) prüft `cargo fmt --check`, Clippy mit
 | `index/` | SQLite-Index (Schema, Speichern, Abfragen) |
 | `analysis/` | Dateitypen, Alter, ähnliche Dateien, Strukturprobleme, Problemdateien |
 | `report/` | Berichtsmodell und Ausgabe (Terminal, HTML, JSON, CSV) |
-| `change/` | Planer (`dedupe`, `junk`, `empty_dirs`, `archive`, `versions`), `apply`, `undo`, Journal, Quarantäne, Schutzregeln, Register |
+| `change/` | Planer (`dedupe`, `dedupe_dirs`, `junk`, `empty_dirs`, `archive`, `versions`), `apply`, `undo`, Journal, Quarantäne, Schutzregeln, Register |
 | `platform/` | Windows-spezifisches (Attribute, File-ID, Known Folders, Cloud-Erkennung) |
 | `paths.rs` | Pfad-Normalisierung (`\\?\`, Schlüssel, Vergleich) |
 | `templates/`, `assets/` | HTML-Vorlage, CSS und JS des Berichts |
@@ -641,6 +684,18 @@ Die CI (GitHub Actions, `windows-latest`) prüft `cargo fmt --check`, Clippy mit
 | Re-Scan ohne Änderungen | 5,6 s | 106 MB |
 | Report (alle Formate) | 0,6 s | 87 MB |
 | `plan junk` / `empty-dirs` / `archive` / `versions` | 0,33 s / 0,11 s / 2,2 s / 3,9 s | – |
+
+Quarantäne-Ansicht (Release, 2026-10-09, 100 Läufe à 1.000 Einträge = 100.000 echte Dateien; `cargo test --release --test perf_quarantine -- --ignored --nocapture`):
+
+| Schritt | Dauer | Ziel |
+|---|---|---|
+| Liste aus den Journalen laden (je Eintrag ein Metadaten-Zugriff, im Hintergrund-Task) | 5,2 s | < 10 s |
+| Zeilen mit Suchschlüsseln aufbauen | 76 ms | – |
+| Suchen (Name und Pfad) auf 100.000 Zeilen | 5 ms | < 100 ms |
+| Sortieren nach Name / Größe / Ablauf | 28 ms / 2 ms / 2 ms | < 100 ms |
+| Filter auf einen Lauf | 9 ms | < 100 ms |
+
+Die Tabelle zeichnet nur sichtbare Zeilen. Die Messung ist als ignorierter Test abgelegt.
 
 Die Planer-Messung ist als ignorierter Test abgelegt: `cargo test --release --test perf_plans -- --ignored --nocapture`. Einen Testbaum erzeugt `cargo run --release --example gen-tree -- <zielordner> [anzahl]`.
 

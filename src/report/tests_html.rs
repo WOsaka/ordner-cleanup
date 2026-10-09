@@ -53,7 +53,7 @@ fn keine_externen_referenzen() {
 #[test]
 fn alle_abschnitte_sind_vorhanden() {
     let html = page();
-    assert_eq!(SECTIONS.len(), 14);
+    assert_eq!(SECTIONS.len(), 15);
     for s in SECTIONS {
         assert!(
             html.contains(&format!(r#"<section id="{}""#, s.id)),
@@ -132,7 +132,7 @@ fn write_all_schreibt_alle_drei_formate() {
     let report = report_of(&fixture());
     let out = tempfile::tempdir().unwrap();
     let written = write_all(&report, &Format::parse_list(&[]).unwrap(), out.path()).unwrap();
-    assert_eq!(written.len(), 1 + 1 + 8);
+    assert_eq!(written.len(), 1 + 1 + 10);
     assert!(out.path().join("report.html").is_file());
     assert!(out.path().join("report.json").is_file());
     assert!(out.path().join("errors.csv").is_file());

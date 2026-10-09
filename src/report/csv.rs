@@ -76,6 +76,31 @@ pub fn render_all(report: &Report) -> Result<Vec<(&'static str, Vec<u8>)>> {
             ]);
         }
     }
+    let mut folder_groups = Vec::new();
+    for (i, g) in report.folder_duplicates.groups.iter().enumerate() {
+        for dir in &g.dirs {
+            folder_groups.push(vec![
+                (i + 1).to_string(),
+                dir.clone(),
+                g.files.to_string(),
+                g.bytes.to_string(),
+                g.reclaimable.to_string(),
+            ]);
+        }
+    }
+    let folder_partial: Vec<Vec<String>> = report
+        .folder_duplicates
+        .partial
+        .iter()
+        .map(|p| {
+            vec![
+                p.a.clone(),
+                p.b.clone(),
+                p.shared_bytes.to_string(),
+                format!("{:.2}", p.ratio),
+            ]
+        })
+        .collect();
     let mut similar = Vec::new();
     for (i, g) in report.similar.iter().enumerate() {
         for f in &g.files {
@@ -167,6 +192,26 @@ pub fn render_all(report: &Report) -> Result<Vec<(&'static str, Vec<u8>)>> {
                     "Hardlinks",
                 ],
                 &duplicates,
+            )?,
+        ),
+        (
+            "folder-duplicates.csv",
+            render(
+                &[
+                    "Gruppe",
+                    "Ordner",
+                    "Dateien",
+                    "Größe (Bytes)",
+                    "Platzgewinn (Bytes)",
+                ],
+                &folder_groups,
+            )?,
+        ),
+        (
+            "folder-partial.csv",
+            render(
+                &["Ordner A", "Ordner B", "Gemeinsame Bytes", "Anteil"],
+                &folder_partial,
             )?,
         ),
         (

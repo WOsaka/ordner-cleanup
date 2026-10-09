@@ -9,7 +9,7 @@ use super::{onedrive_roots_from_env, onedrive_warning, Error, Notes, OpCtx};
 use crate::change::apply::{apply_plan, ApplyEnv, ApplyOutcome};
 use crate::change::fsops::RealFs;
 use crate::change::limits;
-use crate::change::plan::Plan;
+use crate::change::plan::{Plan, PlanError, PLAN_VERSION};
 use crate::change::protect::{ProtectPaths, Protector};
 use crate::change::registry::{self, RunRecord};
 use crate::change::{ActionCounts, RunId};
@@ -24,7 +24,7 @@ pub struct ApplyCheck {
     pub bytes: u64,
     /// Meldung, wenn die OneDrive-Obergrenze überschritten ist (`allow_large` nötig)
     pub limit: Option<String>,
-    /// OneDrive-Warnung
+    /// OneDrive-Warnung, Warnung bei Plänen ohne Prüfsumme (Format 1 und 2)
     pub notes: Notes,
     pub empty: bool,
     /// Wie lange die Quarantäne Läufe vorhält (`quarantine_days` der Config), für den Dialog
@@ -39,6 +39,15 @@ pub struct ApplyResult {
     pub register_warning: Option<String>,
 }
 
+/// Warnung für Pläne ohne Prüfsumme (Format 1 und 2).
+pub fn unprotected_note(version: u32) -> Option<String> {
+    (version < PLAN_VERSION).then(|| {
+        format!(
+            "Ungeschützter Plan (Format {version}): Änderungen an der Datei werden nicht erkannt."
+        )
+    })
+}
+
 /// Prüft den Plan, ohne etwas zu verändern.
 pub fn apply_check(plan: &Plan) -> Result<ApplyCheck> {
     check_with(plan, &super::load_config()?, &onedrive_roots_from_env())
@@ -50,6 +59,9 @@ fn check_with(plan: &Plan, config: &Config, onedrive_roots: &[PathBuf]) -> Resul
         bail!("Wurzel {} des Plans existiert nicht", plan.root);
     }
     let mut notes = Notes::default();
+    if let Some(note) = unprotected_note(plan.version) {
+        notes.warn(note);
+    }
     if let Some(warning) = onedrive_warning(&root, onedrive_roots) {
         notes.warn(warning);
     }
@@ -140,10 +152,21 @@ pub fn load_plan(path: &Path) -> Result<Plan> {
     Ok(Plan::load(path)?)
 }
 
+/// Ist die Plan-Datei nicht mehr der geladene Plan? Vergleicht die Prüfsumme des Inhalts auf der
+/// Platte mit der des geladenen Plans (für die GUI vor dem Anwenden); reine Formatierung zählt
+/// nicht, ein veränderter Inhalt mit alter Prüfsumme schon.
+pub fn plan_file_changed(path: &Path, loaded: &Plan) -> Result<bool> {
+    match Plan::load(path) {
+        Ok(on_disk) => Ok(on_disk.integrity() != loaded.integrity()),
+        Err(PlanError::Tampered { .. }) => Ok(true),
+        Err(e) => Err(e.into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::change::plan::{ActionType, PlanKind, PlannedAction, PLAN_VERSION};
+    use crate::change::plan::{ActionType, PlanKind, PlannedAction};
 
     fn plan_in(root: &Path, files: usize, size: u64) -> Plan {
         let action = |id: u32| PlannedAction {
@@ -159,6 +182,8 @@ mod tests {
             reason: "junk:temp".into(),
             target: None,
             is_dir: false,
+            keep_fingerprint: None,
+            source_fingerprint: None,
             files: None,
             rule: None,
         };
@@ -231,5 +256,25 @@ mod tests {
         assert!(ok.limit.is_none());
         let big = check_with(&plan_in(dir.path(), 3, 1), &config, &onedrive).unwrap();
         assert!(big.limit.unwrap().contains("Obergrenze"));
+    }
+
+    #[test]
+    fn plan_ohne_pruefsumme_bekommt_eine_warnung() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut plan = plan_in(dir.path(), 1, 1);
+        assert!(check_with(&plan, &Config::default(), &[])
+            .unwrap()
+            .notes
+            .is_empty());
+        for version in [1, 2] {
+            plan.version = version;
+            let check = check_with(&plan, &Config::default(), &[]).unwrap();
+            assert_eq!(
+                check.notes.warnings,
+                [format!(
+                    "Ungeschützter Plan (Format {version}): Änderungen an der Datei werden nicht erkannt."
+                )]
+            );
+        }
     }
 }

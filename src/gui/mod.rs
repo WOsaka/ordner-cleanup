@@ -3,10 +3,16 @@
 
 pub mod app;
 pub mod fonts;
+pub mod format;
+pub mod header;
+pub mod help;
+pub mod keys;
+pub mod result;
 pub mod review;
 pub mod shell;
 pub mod tasks;
 pub mod texts;
+pub mod theme;
 pub mod views;
 pub mod widgets;
 

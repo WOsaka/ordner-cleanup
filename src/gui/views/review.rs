@@ -4,19 +4,41 @@ use eframe::egui;
 use egui_extras::{Column as TCol, TableBuilder};
 
 use crate::change::plan::ActionType;
-use crate::gui::review::{Column, Filter, ReviewModel, Show, Sort};
+use crate::gui::format;
+use crate::gui::help::Topic;
+use crate::gui::keys::KeyAction;
+use crate::gui::review::{step_focus, Column, Filter, ReviewModel, Show, Sort};
 use crate::gui::shell::{Dialog, Shell};
 use crate::gui::texts;
+use crate::gui::widgets::help_button::help_button;
 use crate::gui::widgets::table::path_menu;
+use crate::ops::apply::unprotected_note;
 
 pub const ID_DEPENDENTS: &str = "cleanup.dependents";
-const ROW_H: f32 = 20.0;
+const ROW_H: f32 = 24.0;
+const SEARCH_ID: &str = "review-search";
+
+/// Abstand zwischen Trennlinie und Zellinhalt.
+fn cell_padding(ui: &mut egui::Ui) {
+    ui.add_space(6.0);
+}
+
+/// Dünne Trennlinie am rechten Zellrand, in der Theme-Farbe.
+fn cell_rule(ui: &egui::Ui, stroke: egui::Stroke) {
+    let rect = ui.max_rect();
+    ui.painter()
+        .vline(rect.right() - 0.5, rect.y_range(), stroke);
+}
 
 pub struct ReviewState {
     pub model: ReviewModel,
     pub plan_path: Option<std::path::PathBuf>,
     pub headline: String,
     pub notes: Vec<String>,
+    /// Was mit den Dateien geschieht (Quarantäne, Verschieben), einmal beim Öffnen ermittelt
+    safety: String,
+    /// Hinweis bei Plänen ohne Prüfsumme (Format 1 und 2)
+    unprotected: Option<String>,
     text: String,
     folder: String,
     min_mb: String,
@@ -25,10 +47,28 @@ pub struct ReviewState {
     rule: Option<String>,
     show_skipped: bool,
     selected_row: Option<usize>,
+    /// Zeile, die beim nächsten Zeichnen in den sichtbaren Bereich soll
+    scroll_to: Option<usize>,
+    /// Strg+Enter wurde gedrückt; `ui` meldet es wie den Knopf „Anwenden“
+    apply_requested: bool,
     /// Nur ansehen (Regel-Vorschau): keine Auswahl, kein Anwenden
     pub read_only: bool,
     /// Abhängige Einträge, nach denen gerade gefragt wird
     dependents: Vec<u32>,
+}
+
+/// Sicherheitshinweis zum Plan; die Tage der Quarantäne kommen aus der Config.
+fn safety_for(plan: &crate::change::plan::Plan) -> String {
+    let has = |t: ActionType| plan.actions.iter().any(|a| a.action == t);
+    let days = crate::ops::load_config()
+        .unwrap_or_default()
+        .quarantine_days;
+    format::safety_note(
+        has(ActionType::Quarantine),
+        has(ActionType::Move),
+        has(ActionType::RemoveDir),
+        days,
+    )
 }
 
 fn action_label(a: Option<ActionType>) -> &'static str {
@@ -56,11 +96,15 @@ impl ReviewState {
         headline: String,
         notes: Vec<String>,
     ) -> Self {
+        let safety = safety_for(model.plan());
+        let unprotected = unprotected_note(model.plan().version);
         Self {
             model,
             plan_path,
             headline,
             notes,
+            safety,
+            unprotected,
             text: String::new(),
             folder: String::new(),
             min_mb: String::new(),
@@ -69,6 +113,8 @@ impl ReviewState {
             rule: None,
             show_skipped: false,
             selected_row: None,
+            scroll_to: None,
+            apply_requested: false,
             read_only: false,
             dependents: Vec::new(),
         }
@@ -103,7 +149,15 @@ impl ReviewState {
     /// Zeichnet die Review-Ansicht; `true`, wenn „Anwenden“ gedrückt wurde.
     pub fn ui(&mut self, ui: &mut egui::Ui, shell: &mut Shell) -> bool {
         let mut apply = false;
-        ui.label(egui::RichText::new(&self.headline).strong());
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(&self.headline).strong());
+            if help_button(ui, Topic::Review) {
+                shell.open_help(Topic::Review);
+            }
+        });
+        if let Some(note) = &self.unprotected {
+            ui.colored_label(crate::gui::theme::tone_color(ui, format::Tone::Warn), note);
+        }
         for n in &self.notes {
             ui.label(egui::RichText::new(format!("Hinweis: {n}")).weak());
         }
@@ -116,27 +170,36 @@ impl ReviewState {
                 texts::bytes(s.selected_bytes),
                 texts::bytes(s.total_bytes)
             ));
-            if !self.read_only
-                && ui
-                    .add_enabled(s.selected > 0, egui::Button::new("Anwenden …"))
+            if !self.read_only {
+                self.select_menu(ui);
+                let label =
+                    egui::RichText::new(format::apply_label(s.selected, s.selected_bytes)).strong();
+                if ui
+                    .add_enabled(s.selected > 0, egui::Button::new(label))
+                    .on_hover_text("Strg+Enter")
                     .clicked()
-            {
-                apply = true;
+                {
+                    apply = true;
+                }
             }
         });
-        self.filter_bar(ui);
-        if !self.read_only {
-            self.select_bar(ui);
+        if !self.read_only && !self.safety.is_empty() {
+            ui.label(egui::RichText::new(&self.safety).weak());
         }
+        self.filter_bar(ui);
         self.table(ui, shell);
         self.detail(ui);
-        apply
+        apply | std::mem::take(&mut self.apply_requested)
     }
 
     fn filter_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.label("Suche:");
-            ui.add(egui::TextEdit::singleline(&mut self.text).desired_width(150.0));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.text)
+                    .id(egui::Id::new(SEARCH_ID))
+                    .desired_width(150.0),
+            );
             ui.label("Unterhalb von:");
             ui.add(egui::TextEdit::singleline(&mut self.folder).desired_width(180.0));
             ui.label("Größe (MB) von/bis:");
@@ -165,7 +228,10 @@ impl ReviewState {
                         }
                     });
             }
-            ui.checkbox(&mut self.show_skipped, "Übersprungene zeigen");
+            ui.checkbox(
+                &mut self.show_skipped,
+                format!("Übersprungene zeigen ({})", self.model.skipped_count()),
+            );
         });
         let wanted = self.current_filter();
         if &wanted != self.model.filter() {
@@ -174,27 +240,35 @@ impl ReviewState {
         }
     }
 
-    fn select_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("Alle").clicked() {
+    fn select_menu(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("Auswahl ▾", |ui| {
+            if ui.button("Alle wählen").clicked() {
                 self.model.select_all(true);
+                ui.close();
             }
-            if ui.button("Keine").clicked() {
+            if ui.button("Keine wählen").clicked() {
                 self.model.select_all(false);
+                ui.close();
             }
+            ui.separator();
             if ui.button("Gefilterte wählen").clicked() {
                 self.model.select_filtered(true);
+                ui.close();
             }
             if ui.button("Gefilterte abwählen").clicked() {
                 self.model.select_filtered(false);
+                ui.close();
             }
             let folder = self.folder.trim().to_string();
             if !folder.is_empty() {
-                if ui.button("Ordner abwählen").clicked() {
-                    self.model.select_folder(&folder, false);
-                }
+                ui.separator();
                 if ui.button("Ordner wählen").clicked() {
                     self.model.select_folder(&folder, true);
+                    ui.close();
+                }
+                if ui.button("Ordner abwählen").clicked() {
+                    self.model.select_folder(&folder, false);
+                    ui.close();
                 }
             }
         });
@@ -206,29 +280,58 @@ impl ReviewState {
         let mut clicked: Option<usize> = None;
         let rows = self.model.len();
         let avail = (ui.available_height() - 140.0).max(160.0);
-        let mut header_cols: Vec<(&str, Column)> = vec![
-            ("Aktion", Column::Action),
-            ("Quelle", Column::Source),
-            ("Ziel", Column::Target),
+        let has_target = self.model.plan().actions.iter().any(|a| a.target.is_some());
+        let mut header_cols: Vec<(&str, Column)> =
+            vec![("Aktion", Column::Action), ("Quelle", Column::Source)];
+        if has_target {
+            header_cols.push(("Ziel", Column::Target));
+        }
+        header_cols.extend([
             ("Größe", Column::Size),
             ("Grund / Regel", Column::Reason),
             ("Alter", Column::Age),
-        ];
+        ]);
         let mut header_click: Option<Column> = None;
         let model = &self.model;
         let selected_row = self.selected_row;
-        TableBuilder::new(ui)
-            .id_salt("review-table")
+        let rule = ui.visuals().widgets.noninteractive.bg_stroke;
+        // Spaltenbreiten werden jedes Mal aus der verfügbaren Breite berechnet: egui_extras
+        // merkt sich dehnende Spalten nach dem ersten Zeichnen, sodass „Grund“ und „Alter“
+        // bei schmalerem Fenster hinausrutschen.
+        let (w_action, w_size, w_reason, w_age) = (100.0, 70.0, 170.0, 60.0);
+        let cols = if has_target { 7.0 } else { 6.0 };
+        let gaps = ui.spacing().item_spacing.x * cols + ui.spacing().scroll.bar_width + 34.0;
+        // `available_width` kann größer sein als der sichtbare Bereich (gemessen: 804 statt 711
+        // bei halber Bildschirmbreite); maßgeblich ist der Ausschnitt.
+        let visible = ui
+            .available_width()
+            .min(ui.clip_rect().right() - ui.next_widget_position().x);
+        let flex = (visible - 26.0 - w_action - w_size - w_reason - w_age - gaps)
+            .max(if has_target { 200.0 } else { 100.0 });
+        let (w_source, w_target) = if has_target {
+            (flex * 0.55, flex * 0.45)
+        } else {
+            (flex, 0.0)
+        };
+        let mut builder = TableBuilder::new(ui)
+            .id_salt("review-table-v3")
             .striped(true)
             .sense(egui::Sense::click())
             .max_scroll_height(avail)
             .column(TCol::exact(26.0))
-            .column(TCol::initial(110.0).resizable(true))
-            .column(TCol::initial(380.0).resizable(true).clip(true))
-            .column(TCol::initial(260.0).resizable(true).clip(true))
-            .column(TCol::initial(80.0))
-            .column(TCol::remainder().clip(true))
-            .column(TCol::initial(80.0))
+            .column(TCol::exact(w_action))
+            .column(TCol::exact(w_source));
+        if has_target {
+            builder = builder.column(TCol::exact(w_target));
+        }
+        builder = builder
+            .column(TCol::exact(w_size))
+            .column(TCol::exact(w_reason))
+            .column(TCol::remainder().clip(true));
+        if let Some(row) = self.scroll_to.take() {
+            builder = builder.scroll_to_row(row, None);
+        }
+        builder
             .header(ROW_H + 4.0, |mut h| {
                 h.col(|_| {});
                 for (title, column) in header_cols.drain(..) {
@@ -243,7 +346,10 @@ impl ReviewState {
                             }
                             _ => "",
                         };
-                        if ui.button(format!("{title}{mark}")).clicked() {
+                        cell_rule(ui, rule);
+                        cell_padding(ui);
+                        let text = egui::RichText::new(format!("{title}{mark}")).strong();
+                        if ui.add(egui::Button::new(text).frame(false)).clicked() {
                             header_click = Some(column);
                         }
                     });
@@ -263,27 +369,51 @@ impl ReviewState {
                         }
                     });
                     row.col(|ui| {
-                        ui.label(action_label(r.action));
+                        cell_rule(ui, rule);
+                        cell_padding(ui);
+                        ui.add(egui::Label::new(action_label(r.action)).truncate());
                     });
                     row.col(|ui| {
-                        ui.label(egui::RichText::new(&r.path).monospace());
+                        cell_rule(ui, rule);
+                        cell_padding(ui);
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(&r.path).monospace()).truncate(),
+                        )
+                        .on_hover_text(&r.path);
+                    });
+                    if has_target {
+                        row.col(|ui| {
+                            cell_rule(ui, rule);
+                            cell_padding(ui);
+                            let t = r.target.as_deref().unwrap_or("");
+                            let label = ui.add(
+                                egui::Label::new(egui::RichText::new(t).monospace()).truncate(),
+                            );
+                            if !t.is_empty() {
+                                label.on_hover_text(t);
+                            }
+                        });
+                    }
+                    row.col(|ui| {
+                        cell_rule(ui, rule);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.add_space(8.0);
+                            ui.label(texts::bytes(r.size));
+                        });
                     });
                     row.col(|ui| {
-                        ui.label(
-                            egui::RichText::new(r.target.as_deref().unwrap_or("")).monospace(),
-                        );
-                    });
-                    row.col(|ui| {
-                        ui.label(texts::bytes(r.size));
-                    });
-                    row.col(|ui| {
+                        cell_rule(ui, rule);
+                        cell_padding(ui);
                         let text = match &r.rule {
                             Some(rule) => format!("{rule}: {}", r.reason),
                             None => r.reason.clone(),
                         };
-                        ui.label(text);
+                        ui.add(egui::Label::new(&text).truncate())
+                            .on_hover_text(&text);
                     });
                     row.col(|ui| {
+                        cell_rule(ui, rule);
+                        cell_padding(ui);
                         ui.label(age_text(r.mtime_ticks));
                     });
                     let response = row.response();
@@ -312,12 +442,47 @@ impl ReviewState {
         }
         if let Some(i) = toggled {
             self.model.toggle(i);
-            if !self.model.is_selected(i) {
-                let deps = self.model.dependents_to_deselect(i);
-                if !deps.is_empty() {
-                    self.ask_dependents(shell, deps);
+            self.after_toggle(i, shell);
+        }
+    }
+
+    /// Fragt nach abhängigen Einträgen, wenn Zeile `i` gerade abgewählt wurde.
+    fn after_toggle(&mut self, i: usize, shell: &mut Shell) {
+        if !self.model.is_selected(i) {
+            let deps = self.model.dependents_to_deselect(i);
+            if !deps.is_empty() {
+                self.ask_dependents(shell, deps);
+            }
+        }
+    }
+
+    /// Eine Taste im Review. Schreibende Aktionen laufen weiter über den Bestätigungsdialog.
+    pub fn handle_key(&mut self, action: KeyAction, ctx: &egui::Context, shell: &mut Shell) {
+        let len = self.model.len();
+        match action {
+            KeyAction::Next | KeyAction::Prev => {
+                let delta = if action == KeyAction::Next { 1 } else { -1 };
+                self.selected_row = step_focus(self.selected_row, delta, len);
+                self.scroll_to = self.selected_row;
+            }
+            _ if self.read_only => {}
+            KeyAction::Toggle => {
+                if let Some(i) = self.selected_row.filter(|i| *i < len) {
+                    let next = self.model.toggle_and_advance(i);
+                    self.after_toggle(i, shell);
+                    self.selected_row = Some(next);
+                    self.scroll_to = Some(next);
                 }
             }
+            KeyAction::SelectFiltered => self.model.select_filtered(true),
+            KeyAction::DeselectFiltered => self.model.select_filtered(false),
+            KeyAction::FocusSearch => {
+                ctx.memory_mut(|m| m.request_focus(egui::Id::new(SEARCH_ID)));
+            }
+            KeyAction::Apply => {
+                self.apply_requested = self.model.summary().selected > 0;
+            }
+            _ => {}
         }
     }
 
@@ -395,6 +560,16 @@ fn age_text(mtime_ticks: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alter_plan_bekommt_den_hinweis_ungeschuetzt() {
+        assert_eq!(
+            unprotected_note(2).as_deref(),
+            Some("Ungeschützter Plan (Format 2): Änderungen an der Datei werden nicht erkannt.")
+        );
+        assert!(unprotected_note(1).unwrap().contains("Format 1"));
+        assert_eq!(unprotected_note(crate::change::plan::PLAN_VERSION), None);
+    }
 
     #[test]
     fn megabyte_eingaben_werden_in_bytes_umgerechnet() {

@@ -16,7 +16,7 @@ use super::plan::{
 };
 use super::protect::Protector;
 use super::quarantine::MAX_TARGET_LEN;
-use super::tree::Tree;
+use super::tree::{contains_protected, Tree};
 use super::SkipReason;
 use crate::analysis::age::is_old;
 use crate::index::{Index, IndexError};
@@ -46,30 +46,6 @@ pub struct ArchiveOptions<'a> {
     pub older_than: &'a str,
     pub older_than_days: i64,
     pub now_ticks: i64,
-}
-
-/// Schlüssel aller Ordner im Teilbaum (einschließlich `key`), ohne Rekursion.
-fn subtree_dirs<'a>(tree: &'a Tree, key: &'a str) -> Vec<&'a str> {
-    let mut found = Vec::new();
-    let mut stack = vec![key];
-    while let Some(dir) = stack.pop() {
-        found.push(dir);
-        stack.extend(tree.children(dir).iter().map(String::as_str));
-    }
-    found
-}
-
-/// Etwas im Teilbaum verbietet es, den Ordner als Ganzes zu verschieben: der Ordner selbst,
-/// ein Unterordner (Name, Marker, Config) oder eine Datei darin ist geschützt.
-fn contains_protected(tree: &Tree, protector: &Protector, key: &str) -> bool {
-    subtree_dirs(tree, key).into_iter().any(|dir| {
-        tree.row(dir)
-            .is_some_and(|row| protector.check_inside(Path::new(&row.path)).is_some())
-            || tree
-                .files(dir)
-                .iter()
-                .any(|f| protector.check(Path::new(&f.path)).is_some())
-    })
 }
 
 fn year_of(ticks: i64) -> i32 {
@@ -151,6 +127,8 @@ pub fn plan_archive(
                 reason: format!("archive:older-than-{}", options.older_than),
                 target: Some(paths::display(&target)),
                 is_dir: true,
+                keep_fingerprint: None,
+                source_fingerprint: None,
                 files: Some(stats.files),
                 rule: None,
             },

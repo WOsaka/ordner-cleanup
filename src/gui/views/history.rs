@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use chrono::Local;
 use eframe::egui;
 
 use super::undo_flow::{UndoFlow, TASK_CHECK as UNDO_CHECK, TASK_UNDO};
@@ -11,13 +12,17 @@ use crate::change::journal::{self, Entry};
 use crate::change::quarantine;
 use crate::change::undo::{RunStatus, RunSummary};
 use crate::change::RunId;
-use crate::gui::shell::{Answer, Dialog, Route, Shell, TaskResult};
+use crate::gui::format::{root_status, run_row};
+use crate::gui::help::Topic;
+use crate::gui::shell::{Answer, Dialog, Goto, Page, Route, Shell, TaskResult};
 use crate::gui::tasks::TaskKind;
 use crate::gui::texts;
+use crate::gui::widgets::help_button::heading_with_help;
+use crate::gui::widgets::table::{short_path_cell, status_cell};
 use crate::index::RootInfo;
 use crate::ops::admin::{index_remove, index_roots};
 use crate::ops::runs::{purge_candidates, purge_execute, runs, PurgeCandidate, PurgeCheck};
-use crate::ops::{local_time, status_label};
+use crate::ops::status_label;
 use crate::paths;
 
 const TASK_LOAD: &str = "Läufe laden";
@@ -78,9 +83,12 @@ pub fn detail_rows(entries: &[Entry]) -> Vec<DetailRow> {
                     rows[i].status = format!("Fehler: {error}");
                 }
             }
-            Entry::UndoDone { action, .. } => {
+            Entry::UndoDone { action, to, .. } => {
                 if let Some(&i) = index.get(action) {
-                    rows[i].status = "zurückgedreht".into();
+                    rows[i].status = match to {
+                        Some(to) => format!("zurückgeholt als {to}"),
+                        None => "zurückgedreht".into(),
+                    };
                 }
             }
             Entry::UndoConflict { action, reason, .. } => {
@@ -92,6 +100,11 @@ pub fn detail_rows(entries: &[Entry]) -> Vec<DetailRow> {
         }
     }
     rows
+}
+
+/// Hat der Lauf noch Dateien in der Quarantäne, die sich ansehen lassen?
+fn can_view_content(run: &RunSummary) -> bool {
+    run.bytes > 0 && !matches!(run.status, RunStatus::Purged | RunStatus::Unreadable)
 }
 
 struct HistoryData {
@@ -129,7 +142,7 @@ impl HistoryView {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, shell: &mut Shell) {
-        ui.heading(texts::NAV_HISTORY);
+        heading_with_help(ui, texts::NAV_HISTORY, Topic::Page(Page::History), shell);
         if self.loaded_generation != Some(shell.generation) && !shell.is_running(Route::History) {
             self.reload(shell);
         }
@@ -159,17 +172,11 @@ impl HistoryView {
         });
         let mut want_detail: Option<(PathBuf, RunId)> = None;
         let mut want_undo: Option<(PathBuf, RunId)> = None;
+        let mut want_view: Option<(PathBuf, RunId)> = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
+            let now = Local::now();
             egui::Grid::new("runs").striped(true).show(ui, |ui| {
-                for h in [
-                    "Lauf",
-                    "Wurzel",
-                    "Datum",
-                    "Inhalt",
-                    "Status",
-                    "Läuft ab",
-                    "",
-                ] {
+                for h in ["Wann", "Ordner", "Was", "Ergebnis", "Größe", "Läuft ab", ""] {
                     ui.strong(h);
                 }
                 ui.end_row();
@@ -178,29 +185,30 @@ impl HistoryView {
                         continue;
                     }
                     for r in list {
-                        ui.label(r.run.to_string());
-                        ui.label(paths::display(root));
-                        ui.label(r.started.as_deref().map(local_time).unwrap_or_default());
-                        ui.label(r.counts.short_text(r.bytes));
-                        ui.label(status_label(r.status));
-                        ui.label(
-                            r.expires
-                                .filter(|_| r.status != RunStatus::Purged)
-                                .map(|e| {
-                                    e.with_timezone(&chrono::Local)
-                                        .format("%d.%m.%Y")
-                                        .to_string()
-                                })
-                                .unwrap_or_default(),
-                        );
+                        let row = run_row(now, root, r);
+                        ui.label(&row.when)
+                            .on_hover_text(format!("{}\nLauf {}", row.when_tooltip, row.run_id));
+                        short_path_cell(ui, &row.root_full, 40, shell);
+                        ui.label(&row.kind);
+                        status_cell(ui, &row.status);
+                        ui.label(&row.size);
+                        ui.label(&row.expires);
                         ui.horizontal(|ui| {
                             if ui.button("Details").clicked() {
                                 want_detail = Some((root.clone(), r.run.clone()));
                             }
-                            let can_undo =
-                                !matches!(r.status, RunStatus::Undone | RunStatus::Purged);
                             if ui
-                                .add_enabled(can_undo, egui::Button::new("Rückgängig …"))
+                                .add_enabled(
+                                    can_view_content(r),
+                                    egui::Button::new(texts::HISTORY_VIEW_CONTENT),
+                                )
+                                .on_hover_text(texts::HISTORY_VIEW_CONTENT_TIP)
+                                .clicked()
+                            {
+                                want_view = Some((root.clone(), r.run.clone()));
+                            }
+                            if ui
+                                .add_enabled(row.can_undo, egui::Button::new("Rückgängig …"))
                                 .clicked()
                             {
                                 want_undo = Some((root.clone(), r.run.clone()));
@@ -214,7 +222,7 @@ impl HistoryView {
                 ui.label("Noch keine Läufe.");
             }
             if let Some((run, rows)) = &self.detail {
-                ui.add_space(8.0);
+                ui.add_space(crate::gui::theme::SPACE_M);
                 ui.heading(format!("Lauf {run}"));
                 for row in rows {
                     ui.label(
@@ -222,10 +230,10 @@ impl HistoryView {
                     );
                 }
             }
-            ui.add_space(12.0);
+            ui.add_space(crate::gui::theme::SPACE_L);
             ui.separator();
             self.purge_ui(ui, shell);
-            ui.add_space(12.0);
+            ui.add_space(crate::gui::theme::SPACE_L);
             ui.separator();
             self.index_ui(ui, shell, &data.roots);
         });
@@ -238,6 +246,13 @@ impl HistoryView {
         }
         if let Some((root, run)) = want_undo {
             self.undo.begin(shell, Route::History, run, Some(root));
+        }
+        if let Some(target) = want_view {
+            shell.goto = Some(Goto {
+                page: Page::Quarantine,
+                quarantine_run: Some(target),
+                ..Goto::default()
+            });
         }
     }
 
@@ -267,10 +282,8 @@ impl HistoryView {
         let mut remove: Option<PathBuf> = None;
         for r in roots {
             ui.horizontal(|ui| {
-                ui.label(format!(
-                    "{}  ({:?}, {} Fehler)",
-                    r.path, r.status, r.error_count
-                ));
+                short_path_cell(ui, &r.path, 56, shell);
+                status_cell(ui, &root_status(r.status, r.error_count));
                 if ui.button("Aus dem Index entfernen …").clicked() {
                     remove = Some(PathBuf::from(&r.path));
                 }
@@ -456,6 +469,7 @@ mod tests {
             Entry::UndoDone {
                 run: run(),
                 action: 1,
+                to: None,
             },
             Entry::RunEnd {
                 run: run(),
@@ -468,6 +482,56 @@ mod tests {
         assert_eq!(rows[0].text, r"D:\a.txt → D:\q\a.txt");
         assert!(rows[1].status.starts_with("übersprungen"), "{:?}", rows[1]);
         assert_eq!(rows[2].status, "Fehler: gesperrt");
+    }
+
+    #[test]
+    fn einzeln_zurueckgeholte_datei_nennt_den_neuen_namen() {
+        let entries = vec![
+            Entry::Intent {
+                run: run(),
+                action: 1,
+                from: r"D:\a.txt".into(),
+                to: r"D:\q\a.txt".into(),
+                size: 1,
+                hash: None,
+                dest: Default::default(),
+                is_dir: false,
+            },
+            Entry::Done {
+                run: run(),
+                action: 1,
+            },
+            Entry::UndoDone {
+                run: run(),
+                action: 1,
+                to: Some(r"D:\a (2).txt".into()),
+            },
+        ];
+        assert_eq!(
+            detail_rows(&entries)[0].status,
+            r"zurückgeholt als D:\a (2).txt"
+        );
+    }
+
+    fn summary(bytes: u64, status: RunStatus) -> RunSummary {
+        RunSummary {
+            run: run(),
+            started: None,
+            moved: 1,
+            counts: Default::default(),
+            bytes,
+            status,
+            expires: None,
+        }
+    }
+
+    #[test]
+    fn inhalt_ansehen_nur_bei_dateien_in_der_quarantaene() {
+        assert!(can_view_content(&summary(10, RunStatus::Complete)));
+        assert!(can_view_content(&summary(10, RunStatus::PartiallyUndone)));
+        assert!(!can_view_content(&summary(0, RunStatus::Complete)));
+        assert!(!can_view_content(&summary(10, RunStatus::Purged)));
+        assert!(!can_view_content(&summary(10, RunStatus::Unreadable)));
     }
 
     #[test]

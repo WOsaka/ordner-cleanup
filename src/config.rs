@@ -27,13 +27,14 @@ pub struct JunkRule {
 }
 
 /// Pläne, die ein Profil bei `run` zusätzlich erzeugen darf.
-pub const PROFILE_PLAN_KINDS: [&str; 6] = [
+pub const PROFILE_PLAN_KINDS: [&str; 7] = [
     "rules",
     "junk",
     "empty-dirs",
     "archive",
     "versions",
     "dedupe",
+    "dedupe-dirs",
 ];
 
 /// Profilnamen: Kleinbuchstaben, Ziffern und `-` (sie landen in Dateipfaden und Aufgabennamen).
@@ -52,7 +53,7 @@ pub struct Profile {
     pub root: String,
     /// Regeldatei für `plan rules`, relativ zum Config-Ordner
     pub rules_file: Option<String>,
-    /// Was `run` zusätzlich plant (`rules`, `junk`, `empty-dirs`, `archive`, `versions`, `dedupe`)
+    /// Was `run` zusätzlich plant (`rules`, `junk`, `empty-dirs`, `archive`, `versions`, `dedupe`, `dedupe-dirs`)
     pub plans: Vec<String>,
     /// Eingebaute Vorlage oder Pfad (relativ zum Config-Ordner)
     pub template: Option<String>,
@@ -301,6 +302,10 @@ pub struct Config {
     pub junk_rules: Vec<JunkRule>,
     pub archive_older_than: String,
     pub versions_min_age: String,
+    /// Zusätzliche Wörter/Muster, die einen Ordnernamen als Kopie kennzeichnen (`plan dedupe-dirs`).
+    pub dedupe_dirs_copy_patterns: Vec<String>,
+    /// Ab diesem Anteil gemeinsamer Bytes gelten Ordner als „teilweise gleich“ (0,5 bis 1,0).
+    pub dedupe_dirs_partial_threshold: f64,
     pub onedrive_max_move_files: u64,
     pub onedrive_max_move_bytes: String,
     /// Regeldatei für `plan rules`; ohne Angabe `rules.toml` neben der Config.
@@ -340,6 +345,8 @@ impl Default for Config {
             junk_rules: Vec::new(),
             archive_older_than: "2y".to_string(),
             versions_min_age: "30d".to_string(),
+            dedupe_dirs_copy_patterns: Vec::new(),
+            dedupe_dirs_partial_threshold: 0.8,
             onedrive_max_move_files: 1000,
             onedrive_max_move_bytes: "5GB".to_string(),
             rules_file: None,
@@ -518,6 +525,16 @@ impl Config {
         anyhow::ensure!(
             self.onedrive_max_move_files >= 1,
             "onedrive_max_move_files muss mindestens 1 sein"
+        );
+        anyhow::ensure!(
+            (0.5..=1.0).contains(&self.dedupe_dirs_partial_threshold),
+            "dedupe_dirs_partial_threshold muss zwischen 0,5 und 1,0 liegen"
+        );
+        anyhow::ensure!(
+            self.dedupe_dirs_copy_patterns
+                .iter()
+                .all(|p| !p.trim().is_empty()),
+            "dedupe_dirs_copy_patterns: leere Muster sind nicht erlaubt"
         );
 
         let mut names = std::collections::HashSet::new();
@@ -765,6 +782,46 @@ patterns = ["*.dmp"]
                 "{text}: Fehlertext nennt {needle} nicht: {err:#}"
             );
         }
+    }
+
+    #[test]
+    fn ordner_duplikate_haben_sinnvolle_defaults() {
+        let c = Config::default();
+        assert!(c.dedupe_dirs_copy_patterns.is_empty());
+        assert_eq!(c.dedupe_dirs_partial_threshold, 0.8);
+    }
+
+    #[test]
+    fn ordner_duplikate_einstellungen_werden_gelesen_und_geprueft() {
+        let c = Config::parse(
+            "dedupe_dirs_copy_patterns = [\"archiv\", \"entwurf\"]\ndedupe_dirs_partial_threshold = 0.9",
+        )
+        .unwrap();
+        assert_eq!(c.dedupe_dirs_copy_patterns, ["archiv", "entwurf"]);
+        assert_eq!(c.dedupe_dirs_partial_threshold, 0.9);
+        for text in [
+            "dedupe_dirs_partial_threshold = 0.4",
+            "dedupe_dirs_partial_threshold = 1.1",
+            "dedupe_dirs_copy_patterns = [\"\"]",
+        ] {
+            let err = Config::parse(text).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("dedupe_dirs"),
+                "{text}: {err:#}"
+            );
+        }
+        assert!(Config::parse("dedupe_dirs_partial_threshold = 0.5").is_ok());
+        assert!(Config::parse("dedupe_dirs_partial_threshold = 1.0").is_ok());
+    }
+
+    #[test]
+    fn profil_darf_dedupe_dirs_planen() {
+        assert_eq!(PROFILE_PLAN_KINDS.len(), 7);
+        let c = Config::parse(
+            "[profiles.p]\nroot = \"D:\\\\Daten\"\nplans = [\"dedupe-dirs\", \"dedupe\"]",
+        )
+        .unwrap();
+        assert_eq!(c.profiles["p"].plans, ["dedupe-dirs", "dedupe"]);
     }
 
     #[test]

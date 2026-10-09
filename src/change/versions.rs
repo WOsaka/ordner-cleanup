@@ -124,6 +124,8 @@ pub fn plan_versions(
                         reason: "older-version".into(),
                         target: Some(paths::display(&target)),
                         is_dir: false,
+                        keep_fingerprint: None,
+                        source_fingerprint: None,
                         files: None,
                         rule: None,
                     },

@@ -30,6 +30,7 @@ pub(super) fn params(top: usize) -> ReportParams {
             huge_entries: 1000,
         },
         problem_ctx: ProblemCtx::with_hosts(&["zzz-host"]),
+        partial_threshold: 0.8,
     }
 }
 

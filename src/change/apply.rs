@@ -16,6 +16,7 @@ use super::plan::{hex, ActionType, Plan, PlanError, PlanKind, PlannedAction, ARC
 use super::protect::Protector;
 use super::quarantine::{self, MAX_TARGET_LEN};
 use super::{ActionCounts, RunId, SkipReason};
+use crate::analysis::folder_dups;
 use crate::analysis::problems::MAX_PATH_CHARS;
 use crate::paths;
 use crate::scan::hasher;
@@ -57,6 +58,8 @@ pub struct ActionResult {
     pub id: u32,
     pub path: String,
     pub kind: ActionType,
+    /// Aktion auf einem ganzen Ordner (`quarantine` in `dedupe-dirs`).
+    pub is_dir: bool,
     /// `move` einer Regel (Einsortieren oder Umbenennen).
     pub sorted: bool,
     pub status: ActionStatus,
@@ -86,7 +89,7 @@ impl ApplyOutcome {
             if r.sorted {
                 counts.count_sorted();
             } else {
-                counts.count(r.kind);
+                counts.count(r.kind, r.is_dir);
             }
         }
         counts
@@ -311,7 +314,12 @@ fn process_quarantine(
     journal: &mut JournalWriter,
     keeps: &mut HashMap<String, Option<SkipReason>>,
 ) -> Result<ActionStatus, ApplyError> {
-    let target = match verify_quarantine(a, root, env, keeps) {
+    let verified = if a.is_dir {
+        verify_quarantine_dir(a, root, env, keeps)
+    } else {
+        verify_quarantine(a, root, env, keeps)
+    };
+    let target = match verified {
         Ok(target) => target,
         Err(verdict) => return record_verdict(verdict, env.run.clone(), a.id, journal),
     };
@@ -322,9 +330,9 @@ fn process_quarantine(
         from: a.path.clone(),
         to: paths::display(&target),
         size: a.size,
-        hash: a.hash.clone(),
+        hash: if a.is_dir { None } else { a.hash.clone() },
         dest: Dest::Quarantine,
-        is_dir: false,
+        is_dir: a.is_dir,
     })?;
     finish_rename(env, journal, a, &target)
 }
@@ -519,6 +527,153 @@ fn verify_keep_present(a: &PlannedAction, keep: &str, env: &ApplyEnv) -> Result<
     Ok(())
 }
 
+/// Quelle eines ganzen Ordners prüfen: Existenz, Platzhalter, Link, Schutz, dann Dateianzahl,
+/// Summe und jüngste mtime per Metadaten-Walk gegen den Plan.
+fn verify_dir_source(a: &PlannedAction, env: &ApplyEnv) -> Result<(), Verdict> {
+    let src = Path::new(&a.path);
+    let meta = match env.fs.metadata(src) {
+        Ok(m) => m,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(Verdict::Skip(SkipReason::AlreadyDone))
+        }
+        Err(e) => return Err(Verdict::Fail(io_message(&e))),
+    };
+    if meta.is_cloud_only() {
+        return Err(Verdict::Skip(SkipReason::CloudPlaceholder));
+    }
+    if meta.is_link || meta.is_reparse_point() {
+        return Err(Verdict::Skip(SkipReason::Link));
+    }
+    if !meta.is_dir {
+        return Err(Verdict::Skip(SkipReason::Stale));
+    }
+    if env.protector.check_inside(src).is_some() {
+        return Err(Verdict::Skip(SkipReason::Protected));
+    }
+    let summary = summarize_dir(a, env)?;
+    if summary.files != a.files.unwrap_or(0)
+        || summary.bytes != a.size
+        || summary.newest != Some(a.mtime_ticks)
+    {
+        return Err(Verdict::Skip(SkipReason::Stale));
+    }
+    Ok(())
+}
+
+/// Metadaten-Fingerabdruck eines Ordners (relativer Pfad, Größe, mtime der nicht ignorierten
+/// Dateien) ohne etwas zu öffnen. Fehlt der Ordner oder ist er keiner, ist das
+/// [`KeepProblem::Missing`]; Link, Platzhalter oder etwas Nichtlesbares darin ist
+/// [`KeepProblem::Unusable`].
+fn dir_fingerprint(dir: &Path, env: &ApplyEnv) -> Result<u128, KeepProblem> {
+    let meta = env.fs.metadata(dir).map_err(|e| read_problem(&e))?;
+    if !meta.is_dir {
+        return Err(KeepProblem::Missing);
+    }
+    if meta.is_link || meta.is_reparse_point() || meta.is_cloud_only() {
+        return Err(KeepProblem::Unusable);
+    }
+    let mut entries = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        for (path, meta) in env.fs.read_dir(&current).map_err(|e| read_problem(&e))? {
+            if meta.is_link || meta.is_reparse_point() || meta.is_cloud_only() {
+                return Err(KeepProblem::Unusable);
+            }
+            if meta.is_dir {
+                stack.push(path);
+                continue;
+            }
+            let name = path
+                .file_name()
+                .ok_or(KeepProblem::Unusable)?
+                .to_string_lossy()
+                .into_owned();
+            if folder_dups::is_ignored_name(&name) {
+                continue;
+            }
+            let rel = path
+                .strip_prefix(dir)
+                .map_err(|_| KeepProblem::Unusable)?
+                .to_string_lossy()
+                .into_owned();
+            entries.push((rel, meta.size as i64, meta.mtime_ticks));
+        }
+    }
+    Ok(folder_dups::meta_fingerprint(entries.into_iter()))
+}
+
+/// Warum sich der behaltene Ordner nicht fingerabdrucken lässt.
+enum KeepProblem {
+    /// Der Ordner fehlt (mehr) oder ist keiner.
+    Missing,
+    /// Link, Platzhalter oder etwas darin nicht lesbar.
+    Unusable,
+}
+
+fn read_problem(e: &io::Error) -> KeepProblem {
+    if e.kind() == io::ErrorKind::NotFound {
+        KeepProblem::Missing
+    } else {
+        KeepProblem::Unusable
+    }
+}
+
+/// `dedupe-dirs`: Der entfernte Ordner muss noch dieselben Dateien (relativer Pfad, Größe, mtime)
+/// haben wie beim Planen. Pläne ohne `source_fingerprint` bleiben bei der groben Prüfung.
+fn verify_source_fingerprint(a: &PlannedAction, env: &ApplyEnv) -> Result<(), Verdict> {
+    let Some(expected) = &a.source_fingerprint else {
+        return Ok(());
+    };
+    match dir_fingerprint(Path::new(&a.path), env) {
+        Ok(print) if format!("{print:032x}") == *expected => Ok(()),
+        Ok(_) | Err(KeepProblem::Missing) => Err(Verdict::Skip(SkipReason::Stale)),
+        Err(KeepProblem::Unusable) => Err(Verdict::Skip(SkipReason::Unverifiable)),
+    }
+}
+
+/// `dedupe-dirs`: Der behaltene Ordner muss noch so aussehen wie beim Planen (einmal je Ordner
+/// und Fingerabdruck, Ergebnis wird gemerkt).
+fn verify_keep_dir(
+    keep_path: &str,
+    expected: &str,
+    env: &ApplyEnv,
+    cache: &mut HashMap<String, Option<SkipReason>>,
+) -> Option<SkipReason> {
+    let key = format!("dir|{}|{expected}", paths::path_key(Path::new(keep_path)));
+    *cache
+        .entry(key)
+        .or_insert_with(|| match dir_fingerprint(Path::new(keep_path), env) {
+            Err(KeepProblem::Missing) => Some(SkipReason::KeepMissing),
+            Err(KeepProblem::Unusable) => Some(SkipReason::Unverifiable),
+            Ok(print) if format!("{print:032x}") == expected => None,
+            Ok(_) => Some(SkipReason::KeepChanged),
+        })
+}
+
+/// Alle Prüfungen vor dem Journal für einen ganzen Ordner. `Ok` liefert das freie Ziel.
+fn verify_quarantine_dir(
+    a: &PlannedAction,
+    root: &Path,
+    env: &ApplyEnv,
+    keeps: &mut HashMap<String, Option<SkipReason>>,
+) -> Result<std::path::PathBuf, Verdict> {
+    if env.protector.check(Path::new(&a.path)).is_some() {
+        return Err(Verdict::Skip(SkipReason::Protected));
+    }
+    if is_in_archive(root, Path::new(&a.path)) {
+        return Err(Verdict::Skip(SkipReason::InArchive));
+    }
+    verify_dir_source(a, env)?;
+    verify_source_fingerprint(a, env)?;
+    let (Some(keep), Some(expected)) = (&a.keep, &a.keep_fingerprint) else {
+        return Err(Verdict::Fail("Ordner-Aktion ohne behaltenen Ordner".into()));
+    };
+    if let Some(reason) = verify_keep_dir(keep, expected, env, keeps) {
+        return Err(Verdict::Skip(reason));
+    }
+    quarantine_target(a, root, env)
+}
+
 /// Alle Prüfungen vor dem Journal. `Ok` liefert das freie Ziel unter `_Archiv`.
 fn verify_move(
     a: &PlannedAction,
@@ -537,32 +692,7 @@ fn verify_move(
         return Err(Verdict::Skip(SkipReason::InArchive));
     }
     if a.is_dir {
-        let meta = match env.fs.metadata(src) {
-            Ok(m) => m,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                return Err(Verdict::Skip(SkipReason::AlreadyDone))
-            }
-            Err(e) => return Err(Verdict::Fail(io_message(&e))),
-        };
-        if meta.is_cloud_only() {
-            return Err(Verdict::Skip(SkipReason::CloudPlaceholder));
-        }
-        if meta.is_link || meta.is_reparse_point() {
-            return Err(Verdict::Skip(SkipReason::Link));
-        }
-        if !meta.is_dir {
-            return Err(Verdict::Skip(SkipReason::Stale));
-        }
-        if env.protector.check_inside(src).is_some() {
-            return Err(Verdict::Skip(SkipReason::Protected));
-        }
-        let summary = summarize_dir(a, env)?;
-        if summary.files != a.files.unwrap_or(0)
-            || summary.bytes != a.size
-            || summary.newest != Some(a.mtime_ticks)
-        {
-            return Err(Verdict::Skip(SkipReason::Stale));
-        }
+        verify_dir_source(a, env)?;
     } else {
         verify_source(a, env)?;
         if let Some(keep) = &a.keep {
@@ -796,6 +926,7 @@ pub fn apply_plan(plan: &Plan, env: &ApplyEnv) -> Result<ApplyOutcome, ApplyErro
             id: action.id,
             path: action.path.clone(),
             kind: action.action,
+            is_dir: action.is_dir,
             sorted: plan.kind == PlanKind::Rules && action.action == ActionType::Move,
             status,
         };
@@ -2094,6 +2225,7 @@ mod tests {
                     id: 1,
                     path: String::new(),
                     kind: ActionType::Quarantine,
+                    is_dir: false,
                     sorted: false,
                     status,
                 })
@@ -2377,5 +2509,319 @@ mod tests {
             ActionStatus::Skipped(SkipReason::Protected)
         );
         assert!(fx.exists("x.txt") && !fx.exists("Tabu"));
+    }
+
+    // --- dedupe-dirs: ganze Ordner in die Quarantäne ---
+
+    /// Änderung am Dateisystem samt Beschreibung für die Fehlermeldung.
+    type FxChange = (fn(&Fx), &'static str);
+
+    fn dup_dirs(fx: &Fx) {
+        for dir in ["Projekt", "Kopie von Projekt"] {
+            fx.write(&format!("{dir}/a.txt"), "eins");
+            fx.write(&format!("{dir}/sub/b.txt"), "zwei");
+        }
+    }
+
+    fn dir_intents(entries: &[Entry]) -> usize {
+        entries
+            .iter()
+            .filter(|e| matches!(e, Entry::Intent { is_dir: true, .. }))
+            .count()
+    }
+
+    #[test]
+    fn doppelter_ordner_geht_als_ganzes_in_die_quarantaene() {
+        let fx = fx();
+        dup_dirs(&fx);
+        let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!((out.executed(), out.exit_code()), (1, 0));
+        assert!(!fx.exists("Kopie von Projekt"));
+        assert_eq!(
+            std::fs::read_to_string(fx.quarantined(RUN, "Kopie von Projekt/sub/b.txt")).unwrap(),
+            "zwei"
+        );
+        assert!(fx.exists("Projekt/a.txt") && fx.exists("Projekt/sub/b.txt"));
+        assert_eq!(dir_intents(&fx.journal(RUN)), 1);
+        let counts = out.counts();
+        assert_eq!((counts.dirs_quarantined, counts.quarantined), (1, 0));
+    }
+
+    #[test]
+    fn neue_oder_geaenderte_datei_im_entfernten_ordner_ist_stale() {
+        let changes: [FxChange; 3] = [
+            (
+                |fx| drop(fx.write("Kopie von Projekt/neu.txt", "x")),
+                "neue Datei",
+            ),
+            (
+                |fx| std::fs::remove_file(fx.root.join("Kopie von Projekt/sub/b.txt")).unwrap(),
+                "gelöschte Datei",
+            ),
+            (
+                |fx| drop(fx.write("Kopie von Projekt/a.txt", "anders lang")),
+                "geänderte Datei",
+            ),
+        ];
+        for (change, what) in changes {
+            let fx = fx();
+            dup_dirs(&fx);
+            let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+            change(&fx);
+
+            let out = apply(&fx, &plan);
+
+            assert_eq!(
+                (out.executed(), out.stale(), out.exit_code()),
+                (0, 1, 2),
+                "{what}"
+            );
+            assert!(fx.exists("Kopie von Projekt"), "{what}");
+            assert_eq!(dir_intents(&fx.journal(RUN)), 0, "{what}: kein intent");
+        }
+    }
+
+    #[test]
+    fn umbenannte_datei_im_entfernten_ordner_ist_stale() {
+        let fx = fx();
+        dup_dirs(&fx);
+        let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+        // Anzahl, Summe und jüngste mtime bleiben gleich.
+        std::fs::rename(
+            fx.root.join("Kopie von Projekt/a.txt"),
+            fx.root.join("Kopie von Projekt/umbenannt.txt"),
+        )
+        .unwrap();
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::Stale)
+        );
+        assert!(fx.exists("Kopie von Projekt/umbenannt.txt"));
+        assert_eq!(dir_intents(&fx.journal(RUN)), 0, "kein intent");
+    }
+
+    #[test]
+    fn plan_ohne_source_fingerprint_wird_wie_bisher_grob_geprueft() {
+        let fx = fx();
+        dup_dirs(&fx);
+        let mut plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+        plan.actions[0].source_fingerprint = None;
+        std::fs::rename(
+            fx.root.join("Kopie von Projekt/a.txt"),
+            fx.root.join("Kopie von Projekt/umbenannt.txt"),
+        )
+        .unwrap();
+
+        assert_eq!(apply(&fx, &plan).executed(), 1);
+    }
+
+    #[test]
+    fn geaenderter_behaltener_ordner_verhindert_das_entfernen() {
+        let changes: [FxChange; 3] = [
+            (|fx| drop(fx.write("Projekt/neu.txt", "x")), "neue Datei"),
+            (
+                |fx| drop(fx.write("Projekt/a.txt", "anders lang")),
+                "geänderte Datei",
+            ),
+            (
+                |fx| std::fs::remove_file(fx.root.join("Projekt/sub/b.txt")).unwrap(),
+                "gelöschte Datei",
+            ),
+        ];
+        for (change, what) in changes {
+            let fx = fx();
+            dup_dirs(&fx);
+            let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+            change(&fx);
+
+            let out = apply(&fx, &plan);
+
+            assert_eq!(
+                out.results[0].status,
+                ActionStatus::Skipped(SkipReason::KeepChanged),
+                "{what}"
+            );
+            assert!(fx.exists("Kopie von Projekt/a.txt"), "{what}");
+        }
+    }
+
+    #[test]
+    fn fehlender_behaltener_ordner_verhindert_das_entfernen() {
+        let fx = fx();
+        dup_dirs(&fx);
+        let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+        std::fs::remove_dir_all(fx.root.join("Projekt")).unwrap();
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::KeepMissing)
+        );
+        assert!(fx.exists("Kopie von Projekt/a.txt"));
+    }
+
+    #[test]
+    fn ordner_quelle_unterhalb_von_archiv_wird_nicht_entfernt() {
+        let fx = fx();
+        fx.write("Projekt/a.txt", "eins");
+        fx.write("_Archiv/2019/Projekt/a.txt", "eins");
+        let plan = fx.dir_dedupe_plan(&[("_Archiv/2019/Projekt", "Projekt")]);
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::InArchive)
+        );
+        assert!(fx.exists("_Archiv/2019/Projekt/a.txt"));
+        assert_eq!(dir_intents(&fx.journal(RUN)), 0, "kein intent");
+    }
+
+    #[test]
+    fn nicht_pruefbarer_behaltener_ordner_ist_unverifiable_und_nichts_wird_gelesen() {
+        type Setup = fn(&Fx, FaultyFs) -> FaultyFs;
+        let cases: [(Setup, &str); 3] = [
+            (
+                |fx, f| f.cloud_only(&fx.root.join("Projekt/a.txt")),
+                "Platzhalter im Ordner",
+            ),
+            (
+                |fx, f| f.cloud_only(&fx.root.join("Projekt")),
+                "Ordner selbst",
+            ),
+            (
+                |fx, f| f.fail(Op::ReadDir, &fx.root.join("Projekt/sub")),
+                "Unterordner nicht lesbar",
+            ),
+        ];
+        for (setup, what) in cases {
+            let fx = fx();
+            dup_dirs(&fx);
+            let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+            let faulty = setup(&fx, FaultyFs::new());
+
+            let out = run_with(&fx, &plan, &faulty, &fx.protector(), RUN).unwrap();
+
+            assert_eq!(
+                out.results[0].status,
+                ActionStatus::Skipped(SkipReason::Unverifiable),
+                "{what}"
+            );
+            assert!(fx.exists("Kopie von Projekt/a.txt"), "{what}");
+            assert!(faulty.hashed().is_empty(), "{what}");
+        }
+    }
+
+    #[test]
+    fn behaltener_ordner_der_jetzt_eine_datei_ist_gilt_als_fehlend() {
+        let fx = fx();
+        dup_dirs(&fx);
+        let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+        std::fs::remove_dir_all(fx.root.join("Projekt")).unwrap();
+        fx.write("Projekt", "jetzt eine Datei");
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::KeepMissing)
+        );
+    }
+
+    #[test]
+    fn junk_im_behaltenen_ordner_aendert_den_fingerabdruck_nicht() {
+        let fx = fx();
+        dup_dirs(&fx);
+        let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+        fx.write("Projekt/Thumbs.db", "zusatz");
+
+        assert_eq!(apply(&fx, &plan).executed(), 1);
+    }
+
+    #[test]
+    fn zwei_kopien_desselben_ordners_gehen_beide() {
+        let fx = fx();
+        dup_dirs(&fx);
+        fx.write("Backup/a.txt", "eins");
+        fx.write("Backup/sub/b.txt", "zwei");
+        let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt"), ("Backup", "Projekt")]);
+
+        let out = apply(&fx, &plan);
+
+        assert_eq!(out.executed(), 2);
+        assert!(fx.exists("Projekt/a.txt") && !fx.exists("Backup"));
+    }
+
+    #[test]
+    fn gesperrte_datei_laesst_den_ordner_vollstaendig_an_ort_und_stelle() {
+        let fx = fx();
+        dup_dirs(&fx);
+        let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+        let faulty = FaultyFs::new().fail(Op::Rename, &fx.root.join("Kopie von Projekt"));
+
+        let out = run_with(&fx, &plan, &faulty, &fx.protector(), RUN).unwrap();
+
+        assert!(matches!(out.results[0].status, ActionStatus::Failed(_)));
+        assert_eq!(out.exit_code(), 2);
+        assert!(fx.exists("Kopie von Projekt/a.txt") && fx.exists("Kopie von Projekt/sub/b.txt"));
+        assert!(!fx.quarantined(RUN, "Kopie von Projekt").exists());
+    }
+
+    #[test]
+    fn zweiter_lauf_ist_bereits_erledigt() {
+        let fx = fx();
+        dup_dirs(&fx);
+        let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+        assert_eq!(apply(&fx, &plan).executed(), 1);
+
+        let second =
+            run_with(&fx, &plan, &RealFs, &fx.protector(), "20261003-130000-cd34").unwrap();
+
+        assert_eq!((second.executed(), second.already_done()), (0, 1));
+        assert_eq!(second.exit_code(), 0);
+    }
+
+    #[test]
+    fn cloud_platzhalter_im_entfernten_ordner_verhindert_das_verschieben() {
+        let fx = fx();
+        dup_dirs(&fx);
+        let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+        let faulty = FaultyFs::new().cloud_only(&fx.root.join("Kopie von Projekt/sub/b.txt"));
+
+        let out = run_with(&fx, &plan, &faulty, &fx.protector(), RUN).unwrap();
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::CloudPlaceholder)
+        );
+        assert!(fx.exists("Kopie von Projekt/sub/b.txt"));
+        assert!(faulty.hashed().is_empty());
+    }
+
+    #[test]
+    fn geschuetzter_inhalt_im_entfernten_ordner_verhindert_das_verschieben() {
+        let fx = fx();
+        dup_dirs(&fx);
+        let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+        let config = Config {
+            protected_paths: vec![paths::display(&fx.root.join("Kopie von Projekt/sub"))],
+            ..Config::default()
+        };
+        let protector = Protector::new(&fx.root, &config, &ProtectPaths::default());
+
+        let out = run_with(&fx, &plan, &RealFs, &protector, RUN).unwrap();
+
+        assert_eq!(
+            out.results[0].status,
+            ActionStatus::Skipped(SkipReason::Protected)
+        );
+        assert!(fx.exists("Kopie von Projekt/sub/b.txt"));
     }
 }

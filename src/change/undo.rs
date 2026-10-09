@@ -117,12 +117,15 @@ pub struct RunSummary {
 }
 
 /// Was eine Aktion laut Journal bewirkt hat.
-enum OpKind {
+pub(super) enum OpKind {
     Move {
         from: String,
         to: String,
         size: u64,
         dest: Dest,
+        is_dir: bool,
+        /// Nur `dedupe`; bei Ordnern ein Fingerprint.
+        hash: Option<String>,
     },
     RemoveDir {
         path: String,
@@ -133,18 +136,18 @@ enum OpKind {
 }
 
 /// Eine Aktion aus dem Journal mit ihrem bekannten Ausgang.
-struct Op {
-    action: u32,
-    kind: OpKind,
-    done: bool,
+pub(super) struct Op {
+    pub(super) action: u32,
+    pub(super) kind: OpKind,
+    pub(super) done: bool,
     /// Fehlgeschlagen oder nach dem `intent` übersprungen: es wurde nichts verändert.
-    failed: bool,
-    undone: bool,
+    pub(super) failed: bool,
+    pub(super) undone: bool,
 }
 
 impl Op {
     /// Ursprungspfad: dorthin führt Undo zurück.
-    fn origin(&self) -> &str {
+    pub(super) fn origin(&self) -> &str {
         match &self.kind {
             OpKind::Move { from, .. } => from,
             OpKind::RemoveDir { path, .. } => path,
@@ -153,7 +156,7 @@ impl Op {
 
     /// Nach `purge` ist nur der Inhalt der Quarantäne verloren; Archiv-Moves und entfernte
     /// leere Ordner bleiben wiederherstellbar.
-    fn lives_in_quarantine(&self) -> bool {
+    pub(super) fn lives_in_quarantine(&self) -> bool {
         matches!(
             self.kind,
             OpKind::Move {
@@ -164,7 +167,7 @@ impl Op {
     }
 }
 
-fn collect_ops(entries: &[Entry]) -> Vec<Op> {
+pub(super) fn collect_ops(entries: &[Entry]) -> Vec<Op> {
     let mut ops: Vec<Op> = Vec::new();
     for entry in entries {
         let started = match entry {
@@ -174,6 +177,8 @@ fn collect_ops(entries: &[Entry]) -> Vec<Op> {
                 to,
                 size,
                 dest,
+                is_dir,
+                hash,
                 ..
             } => Some((
                 *action,
@@ -182,6 +187,8 @@ fn collect_ops(entries: &[Entry]) -> Vec<Op> {
                     to: to.clone(),
                     size: *size,
                     dest: *dest,
+                    is_dir: *is_dir,
+                    hash: hash.clone(),
                 },
             )),
             Entry::IntentRemoveDir {
@@ -227,8 +234,22 @@ fn collect_ops(entries: &[Entry]) -> Vec<Op> {
     ops
 }
 
+/// Prüft einen Journal-Move vor jeder Dateioperation: `from` liegt echt unter der Wurzel,
+/// `to` echt unter `stop` (Quarantäne- bzw. Archivordner des Laufs), keine `.`/`..`-Teile.
+pub(super) fn move_is_sane(root_key: &str, stop: &Path, from: &str, to: &str) -> bool {
+    let stop_key = paths::path_key(stop);
+    let (from, to) = (Path::new(from), Path::new(to));
+    let (from_key, to_key) = (paths::path_key(from), paths::path_key(to));
+    !has_dot_component(&paths::display(from))
+        && !has_dot_component(&paths::display(to))
+        && from_key != root_key
+        && paths::is_under(&from_key, root_key)
+        && to_key != stop_key
+        && paths::is_under(&to_key, &stop_key)
+}
+
 /// Lädt und prüft das Journal: gehört es zu dieser Wurzel und zu diesem Lauf?
-fn load(root: &Path, run: &RunId) -> Result<Vec<Entry>, UndoError> {
+pub(super) fn load(root: &Path, run: &RunId) -> Result<Vec<Entry>, UndoError> {
     let path = quarantine::journal_path(root, run);
     if std::fs::metadata(paths::extended(&path)).is_err() {
         return Err(UndoError::NotFound(run.clone()));
@@ -292,22 +313,13 @@ impl Restore<'_> {
         stop: &Path,
         cleanup: bool,
     ) -> Result<RestoreStatus, UndoError> {
-        let allowed_key = paths::path_key(stop);
-        let allowed_key = allowed_key.as_str();
-        let (from, to) = (Path::new(from), Path::new(to));
-        let (from_key, to_key) = (paths::path_key(from), paths::path_key(to));
-        let sane = !has_dot_component(&paths::display(from))
-            && !has_dot_component(&paths::display(to))
-            && from_key != self.root_key
-            && paths::is_under(&from_key, self.root_key)
-            && to_key != allowed_key
-            && paths::is_under(&to_key, allowed_key);
-        if !sane {
+        if !move_is_sane(self.root_key, stop, from, to) {
             return Ok(RestoreStatus::Failed(
                 "Journal-Eintrag verweist außerhalb von Wurzel oder Quarantäne".into(),
             ));
         }
-        if from_key == to_key {
+        let (from, to) = (Path::new(from), Path::new(to));
+        if paths::path_key(from) == paths::path_key(to) {
             return self.rename_back_case(action, from, to);
         }
         let (in_quarantine, at_origin) = (self.env.fs.exists(to), self.env.fs.exists(from));
@@ -323,6 +335,7 @@ impl Restore<'_> {
                         self.journal.append(&Entry::UndoDone {
                             run: self.run.clone(),
                             action,
+                            to: None,
                         })?;
                         if let Some(parent) = to.parent().filter(|_| cleanup) {
                             quarantine::cleanup_empty_parents(self.env.fs, parent, stop);
@@ -376,6 +389,7 @@ impl Restore<'_> {
                 self.journal.append(&Entry::UndoDone {
                     run: self.run.clone(),
                     action,
+                    to: None,
                 })?;
                 Ok(RestoreStatus::Restored)
             }
@@ -560,6 +574,7 @@ pub fn undo_run(root: &Path, run: &RunId, env: &UndoEnv) -> Result<UndoOutcome, 
             Ok(()) => journal.append(&Entry::UndoDone {
                 run: run.clone(),
                 action: op.action,
+                to: None,
             })?,
             Err(e) => {
                 results[*index].status = RestoreStatus::Failed(format!(
@@ -580,7 +595,7 @@ pub fn undo_run(root: &Path, run: &RunId, env: &UndoEnv) -> Result<UndoOutcome, 
     Ok(result)
 }
 
-fn summarize(run: RunId, entries: &[Entry], quarantine_days: u32) -> RunSummary {
+pub(super) fn summarize(run: RunId, entries: &[Entry], quarantine_days: u32) -> RunSummary {
     let ops = collect_ops(entries);
     let started = entries.iter().find_map(|e| match e {
         Entry::RunStart { started, .. } => Some(started.clone()),
@@ -609,6 +624,11 @@ fn summarize(run: RunId, entries: &[Entry], quarantine_days: u32) -> RunSummary 
             ActionCounts::default(),
             |mut counts, o| {
                 match o.kind {
+                    OpKind::Move {
+                        dest: Dest::Quarantine,
+                        is_dir: true,
+                        ..
+                    } => counts.dirs_quarantined += 1,
                     OpKind::Move {
                         dest: Dest::Quarantine,
                         ..
@@ -745,6 +765,26 @@ mod tests {
 
     fn run_id() -> RunId {
         RunId::parse(RUN).unwrap()
+    }
+
+    #[test]
+    fn move_is_sane_prueft_wurzel_und_quarantaene() {
+        let root = paths::path_key(Path::new(r"D:\Daten"));
+        let stop = Path::new(r"D:\Daten\.ordner-cleanup\quarantine\r");
+        let ok = |from: &str, to: &str| move_is_sane(&root, stop, from, to);
+        let q = r"D:\Daten\.ordner-cleanup\quarantine\r\a.txt";
+        assert!(ok(r"D:\Daten\a.txt", q));
+        assert!(!ok(r"D:\Anders\a.txt", q), "Ursprung außerhalb der Wurzel");
+        assert!(!ok(r"D:\Daten", q), "Ursprung ist die Wurzel selbst");
+        assert!(!ok(r"D:\Daten\..\a.txt", q), "Punkt-Komponente");
+        assert!(
+            !ok(r"D:\Daten\a.txt", r"D:\Daten\x\a.txt"),
+            "Ziel außerhalb der Quarantäne"
+        );
+        assert!(
+            !ok(r"D:\Daten\a.txt", r"D:\Daten\.ordner-cleanup\quarantine\r"),
+            "Ziel gleich Stop-Ordner"
+        );
     }
 
     fn undo(fx: &Fx) -> UndoOutcome {
@@ -1319,6 +1359,113 @@ mod tests {
             list_runs(&fx.root, 30).unwrap()[0].status,
             RunStatus::Undone
         );
+    }
+
+    // --- dedupe-dirs: ganze Ordner aus der Quarantäne ---
+
+    /// Wurzel mit `Projekt` und seiner Kopie; Apply von `dedupe-dirs` ist gelaufen.
+    fn applied_dir_dedupe() -> Fx {
+        let fx = fx();
+        for dir in ["Projekt", "Kopie von Projekt"] {
+            fx.write(&format!("{dir}/a.txt"), "alpha");
+            fx.write(&format!("{dir}/sub/b.txt"), "bravo bravo");
+        }
+        let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+        let out = run_with(&fx, &plan, &RealFs, &fx.protector(), RUN).unwrap();
+        assert_eq!(out.executed(), 1);
+        assert!(!fx.exists("Kopie von Projekt"));
+        fx
+    }
+
+    #[test]
+    fn undo_stellt_den_doppelten_ordner_byteidentisch_her_und_raeumt_die_quarantaene_auf() {
+        let fx = fx();
+        for dir in ["Projekt", "Kopie von Projekt"] {
+            fx.write(&format!("{dir}/a.txt"), "alpha");
+            fx.write(&format!("{dir}/sub/b.txt"), "bravo bravo");
+        }
+        let (m_a, m_b) = (
+            mtime(&fx, "Kopie von Projekt/a.txt"),
+            mtime(&fx, "Kopie von Projekt/sub/b.txt"),
+        );
+        let plan = fx.dir_dedupe_plan(&[("Kopie von Projekt", "Projekt")]);
+        run_with(&fx, &plan, &RealFs, &fx.protector(), RUN).unwrap();
+
+        let out = undo(&fx);
+
+        assert_eq!((out.restored(), out.exit_code()), (1, 0));
+        assert_eq!(fx.read("Kopie von Projekt/a.txt"), "alpha");
+        assert_eq!(fx.read("Kopie von Projekt/sub/b.txt"), "bravo bravo");
+        assert_eq!(
+            (
+                mtime(&fx, "Kopie von Projekt/a.txt"),
+                mtime(&fx, "Kopie von Projekt/sub/b.txt")
+            ),
+            (m_a, m_b)
+        );
+        assert_eq!(fx.read("Projekt/a.txt"), "alpha");
+        assert!(
+            !quarantine::run_dir(&fx.root, &run_id()).exists(),
+            "unter quarantine bleibt nichts zurück"
+        );
+    }
+
+    #[test]
+    fn neuer_ordner_gleichen_namens_ist_ein_konflikt_und_die_quarantaene_bleibt() {
+        let fx = applied_dir_dedupe();
+        fx.write("Kopie von Projekt/neu.txt", "inzwischen angelegt");
+
+        let out = undo(&fx);
+
+        assert_eq!(
+            (out.restored(), out.conflicts(), out.exit_code()),
+            (0, 1, 2)
+        );
+        assert_eq!(fx.read("Kopie von Projekt/neu.txt"), "inzwischen angelegt");
+        assert!(fx.quarantined(RUN, "Kopie von Projekt/a.txt").exists());
+
+        std::fs::remove_dir_all(fx.root.join("Kopie von Projekt")).unwrap();
+        let retry = undo(&fx);
+        assert_eq!((retry.restored(), retry.exit_code()), (1, 0));
+        assert!(fx.exists("Kopie von Projekt/sub/b.txt"));
+    }
+
+    #[test]
+    fn purge_loescht_den_ordner_aus_der_quarantaene_und_undo_meldet_es() {
+        let fx = applied_dir_dedupe();
+        purge_run(&fx.root, &run_id(), &env()).unwrap();
+
+        assert!(!quarantine::run_dir(&fx.root, &run_id()).exists());
+        assert_eq!(fx.read("Projekt/a.txt"), "alpha");
+
+        let out = undo(&fx);
+
+        assert!(out.purged);
+        assert_eq!(out.restored(), 0);
+        assert!(!fx.exists("Kopie von Projekt"));
+    }
+
+    #[test]
+    fn runs_nennt_ordner_in_der_quarantaene() {
+        let fx = applied_dir_dedupe();
+        let runs = list_runs(&fx.root, 30).unwrap();
+        assert_eq!(runs[0].moved, 1);
+        assert_eq!(
+            runs[0].counts,
+            ActionCounts {
+                dirs_quarantined: 1,
+                ..ActionCounts::default()
+            }
+        );
+        assert_eq!(
+            runs[0].counts.short_text(runs[0].bytes),
+            "1 Ordner (Quarantäne)"
+        );
+        assert_eq!(
+            runs[0].bytes,
+            "alpha".len() as u64 + "bravo bravo".len() as u64
+        );
+        assert_eq!(runs[0].status, RunStatus::Complete);
     }
 
     #[test]

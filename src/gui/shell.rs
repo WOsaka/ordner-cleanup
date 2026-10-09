@@ -15,10 +15,13 @@ use crate::ops::OpCtx;
 /// Welche Ansicht ein Task-Ergebnis erhält.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Route {
+    /// Kopfleiste: Ziel prüfen, Scan, Klassifizieren
+    Header,
     Overview,
     Analysis,
     Cleanup,
     History,
+    Quarantine,
     Settings,
 }
 
@@ -32,17 +35,40 @@ pub enum Page {
     Analysis,
     Cleanup,
     History,
+    Quarantine,
     Settings,
 }
 
 impl Page {
-    pub const ALL: [Page; 5] = [
+    pub const ALL: [Page; 6] = [
         Page::Overview,
         Page::Analysis,
         Page::Cleanup,
         Page::History,
+        Page::Quarantine,
         Page::Settings,
     ];
+
+    /// Symbol der Seitenleiste (Segoe UI Symbol); ohne die Schrift entfällt es.
+    pub fn icon(self) -> &'static str {
+        match self {
+            Page::Overview => "\u{2302}",
+            Page::Analysis => "\u{25D4}",
+            Page::Cleanup => "\u{2702}",
+            Page::History => "\u{21BA}",
+            Page::Quarantine => "\u{25A3}",
+            Page::Settings => "\u{2699}",
+        }
+    }
+
+    /// Beschriftung in der Seitenleiste, mit Symbol, wenn die Symbolschrift geladen ist.
+    pub fn nav_label(self, icons: bool) -> String {
+        if icons {
+            format!("{}  {}", self.icon(), self.label())
+        } else {
+            self.label().to_string()
+        }
+    }
 
     pub fn label(self) -> &'static str {
         match self {
@@ -50,17 +76,29 @@ impl Page {
             Page::Analysis => texts::NAV_ANALYSIS,
             Page::Cleanup => texts::NAV_CLEANUP,
             Page::History => texts::NAV_HISTORY,
+            Page::Quarantine => texts::NAV_QUARANTINE,
             Page::Settings => texts::NAV_SETTINGS,
         }
     }
 }
 
 /// Sprung in eine andere Ansicht (z. B. aus der Analyse zum passenden Plan).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Goto {
     pub page: Page,
     /// Vorgewählte Plan-Art (nur `Page::Cleanup`): `dedupe`, `junk`, `empty-dirs`, …
     pub plan_kind: Option<&'static str>,
+    /// Vorgewählter Tab (nur `Page::Analysis`): `problems` oder `content`
+    pub analysis_tab: Option<&'static str>,
+    /// Nur `Page::Quarantine`: Wurzel und Lauf, auf die die Liste gefiltert wird
+    pub quarantine_run: Option<(std::path::PathBuf, crate::change::RunId)>,
+}
+
+/// Was eine Ansicht von der Kopfleiste verlangt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderRequest {
+    /// Ordner wählen und danach sofort scannen (Leerzustand der Übersicht)
+    PickAndScan,
 }
 
 /// Antwort auf einen Bestätigungsdialog.
@@ -99,6 +137,41 @@ pub struct Shell {
     pub goto: Option<Goto>,
     /// Zählt Änderungen an Index oder Dateien (Scan, Classify, Apply, Undo); Ansichten laden danach neu
     pub generation: u64,
+    /// Zuletzt gewählte Ziele, das neueste zuerst (höchstens [`RECENT_MAX`])
+    pub recent_targets: Vec<Choice>,
+    pub header_request: Option<HeaderRequest>,
+    /// Ein „?“ wurde geklickt; das Hauptfenster öffnet die Hilfe zu diesem Thema
+    pub help_request: Option<super::help::Topic>,
+}
+
+/// So viele zuletzt gewählte Ziele merkt sich die Oberfläche.
+pub const RECENT_MAX: usize = 8;
+
+/// Dasselbe Ziel? Ordner werden wie im Index verglichen (Groß-/Kleinschreibung, Schrägstriche).
+fn same_target(a: &Choice, b: &Choice) -> bool {
+    match (a, b) {
+        (Choice::Folder(x), Choice::Folder(y)) => {
+            crate::paths::path_key(x) == crate::paths::path_key(y)
+        }
+        (Choice::Profile(x), Choice::Profile(y)) => x == y,
+        _ => false,
+    }
+}
+
+/// Einträge des Ordner-Dropdowns: zuerst die zuletzt gewählten Ziele, danach alle gescannten
+/// Wurzeln aus dem Index, jeweils ohne Dubletten.
+pub fn dropdown_targets(recent: &[Choice], scanned: &[std::path::PathBuf]) -> Vec<Choice> {
+    let mut out: Vec<Choice> = Vec::new();
+    let all = recent
+        .iter()
+        .cloned()
+        .chain(scanned.iter().cloned().map(Choice::Folder));
+    for choice in all {
+        if !out.iter().any(|c| same_target(c, &choice)) {
+            out.push(choice);
+        }
+    }
+    out
 }
 
 /// Ordner oder Profil, mit dem gearbeitet wird.
@@ -139,7 +212,29 @@ impl Shell {
             target: None,
             goto: None,
             generation: 0,
+            recent_targets: Vec::new(),
+            header_request: None,
+            help_request: None,
         }
+    }
+
+    /// Bittet das Hauptfenster, die Hilfe zu einem Thema zu öffnen.
+    pub fn open_help(&mut self, topic: super::help::Topic) {
+        self.help_request = Some(topic);
+    }
+
+    /// Merkt sich ein gewähltes Ziel als neuestes. Leere Pfade und Namen werden ignoriert.
+    pub fn remember(&mut self, choice: Choice) {
+        let empty = match &choice {
+            Choice::Folder(path) => path.as_os_str().is_empty(),
+            Choice::Profile(name) => name.trim().is_empty(),
+        };
+        if empty {
+            return;
+        }
+        self.recent_targets.retain(|c| !same_target(c, &choice));
+        self.recent_targets.insert(0, choice);
+        self.recent_targets.truncate(RECENT_MAX);
     }
 
     /// Startet einen Task für eine Ansicht. Ein zweiter schreibender Task wird mit einem Hinweis
@@ -227,3 +322,92 @@ impl Shell {
 
 /// Ergebnis eines Tasks, vom Typ gelöst.
 pub type TaskResult = Result<Box<dyn Any + Send>, TaskError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn folder(p: &str) -> Choice {
+        Choice::Folder(PathBuf::from(p))
+    }
+
+    fn shell() -> Shell {
+        Shell::new(egui::Context::default())
+    }
+
+    #[test]
+    fn neuestes_ziel_steht_vorn() {
+        let mut s = shell();
+        s.remember(folder(r"D:\A"));
+        s.remember(Choice::Profile("downloads".into()));
+        assert_eq!(
+            s.recent_targets,
+            [Choice::Profile("downloads".into()), folder(r"D:\A")]
+        );
+    }
+
+    #[test]
+    fn dasselbe_ziel_rueckt_nach_vorn_statt_doppelt_zu_stehen() {
+        let mut s = shell();
+        s.remember(folder(r"D:\A"));
+        s.remember(folder(r"D:\B"));
+        s.remember(folder(r"d:\a\"));
+        assert_eq!(s.recent_targets, [folder(r"d:\a\"), folder(r"D:\B")]);
+    }
+
+    #[test]
+    fn es_bleiben_hoechstens_acht_ziele() {
+        let mut s = shell();
+        for i in 0..12 {
+            s.remember(folder(&format!(r"D:\Ordner{i}")));
+        }
+        assert_eq!(s.recent_targets.len(), RECENT_MAX);
+        assert_eq!(s.recent_targets[0], folder(r"D:\Ordner11"));
+        assert_eq!(s.recent_targets[7], folder(r"D:\Ordner4"));
+    }
+
+    #[test]
+    fn leere_ziele_werden_nicht_gemerkt() {
+        let mut s = shell();
+        s.remember(folder(""));
+        s.remember(Choice::Profile("  ".into()));
+        assert!(s.recent_targets.is_empty());
+    }
+
+    #[test]
+    fn dropdown_zeigt_gewaehlte_zuerst_dann_gescannte_ohne_dubletten() {
+        let recent = [folder(r"D:\B"), Choice::Profile("p".into())];
+        let scanned = [PathBuf::from(r"d:\b"), PathBuf::from(r"D:\C")];
+        assert_eq!(
+            dropdown_targets(&recent, &scanned),
+            [
+                folder(r"D:\B"),
+                Choice::Profile("p".into()),
+                folder(r"D:\C")
+            ]
+        );
+    }
+
+    #[test]
+    fn dropdown_ohne_gemerkte_ziele_zeigt_die_gescannten() {
+        let scanned = [PathBuf::from(r"D:\C")];
+        assert_eq!(dropdown_targets(&[], &scanned), [folder(r"D:\C")]);
+        assert!(dropdown_targets(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn seitenleiste_zeigt_symbole_nur_mit_symbolschrift() {
+        for page in Page::ALL {
+            assert!(!page.icon().is_empty());
+            assert_eq!(page.nav_label(false), page.label());
+            let with = page.nav_label(true);
+            assert!(
+                with.starts_with(page.icon()) && with.ends_with(page.label()),
+                "{with}"
+            );
+        }
+        let icons: std::collections::HashSet<_> = Page::ALL.iter().map(|p| p.icon()).collect();
+        assert_eq!(icons.len(), Page::ALL.len(), "jedes Symbol nur einmal");
+    }
+}

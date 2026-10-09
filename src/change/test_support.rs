@@ -65,6 +65,8 @@ impl Fx {
                     reason: "exact-duplicate".into(),
                     target: None,
                     is_dir: false,
+                    keep_fingerprint: None,
+                    source_fingerprint: None,
                     files: None,
                     rule: None,
                 }
@@ -105,6 +107,8 @@ impl Fx {
                     reason: "junk:temp".into(),
                     target: None,
                     is_dir: false,
+                    keep_fingerprint: None,
+                    source_fingerprint: None,
                     files: None,
                     rule: None,
                 }
@@ -150,6 +154,8 @@ impl Fx {
                     reason: "empty-dir".into(),
                     target: None,
                     is_dir: true,
+                    keep_fingerprint: None,
+                    source_fingerprint: None,
                     files: None,
                     rule: None,
                 }
@@ -193,6 +199,8 @@ impl Fx {
                     reason: "archive:older-than-2y".into(),
                     target: Some(paths::display(&target)),
                     is_dir: true,
+                    keep_fingerprint: None,
+                    source_fingerprint: None,
                     files: Some(files),
                     rule: None,
                 }
@@ -232,6 +240,8 @@ impl Fx {
                     reason: "older-version".into(),
                     target: Some(paths::display(&self.root.join("_Archiv").join(target))),
                     is_dir: false,
+                    keep_fingerprint: None,
+                    source_fingerprint: None,
                     files: None,
                     rule: None,
                 }
@@ -272,6 +282,8 @@ impl Fx {
                     reason: "rule:r".into(),
                     target: Some(paths::display(&self.root.join(target))),
                     is_dir: false,
+                    keep_fingerprint: None,
+                    source_fingerprint: None,
                     files: None,
                     rule: Some("r".into()),
                 }
@@ -283,6 +295,56 @@ impl Fx {
             kind: PlanKind::Rules,
             root: paths::display(&self.root),
             keep_strategy: None,
+            params: Default::default(),
+            protected_paths: Vec::new(),
+            actions,
+            skipped: vec![],
+        }
+    }
+
+    /// `dedupe-dirs`-Plan aus `(Duplikat-Ordner, behaltener Ordner)`-Paaren, Werte wie der Planer
+    /// sie schreibt (Fingerabdruck des behaltenen Ordners aus dem Dateisystem).
+    pub fn dir_dedupe_plan(&self, pairs: &[(&str, &str)]) -> Plan {
+        let actions = pairs
+            .iter()
+            .zip(1u32..)
+            .map(|((dup, keep), id)| {
+                let (dup, keep) = (self.root.join(dup), self.root.join(keep));
+                let (files, bytes, newest) = walk_stats(&dup);
+                let print =
+                    crate::analysis::folder_dups::meta_fingerprint(walk_entries(&keep).into_iter());
+                let fingerprint = "0123456789abcdef0123456789abcdef".to_string();
+                PlannedAction {
+                    id,
+                    action: ActionType::Quarantine,
+                    path: paths::display(&dup),
+                    size: bytes,
+                    mtime_ticks: newest,
+                    mtime: String::new(),
+                    hash: Some(fingerprint.clone()),
+                    keep: Some(paths::display(&keep)),
+                    keep_hash: Some(fingerprint),
+                    reason: "exact-duplicate-dir".into(),
+                    target: None,
+                    is_dir: true,
+                    keep_fingerprint: Some(format!("{print:032x}")),
+                    source_fingerprint: Some(format!(
+                        "{:032x}",
+                        crate::analysis::folder_dups::meta_fingerprint(
+                            walk_entries(&dup).into_iter()
+                        )
+                    )),
+                    files: Some(files),
+                    rule: None,
+                }
+            })
+            .collect();
+        Plan {
+            version: PLAN_VERSION,
+            created: "t".into(),
+            kind: PlanKind::DedupeDirs,
+            root: paths::display(&self.root),
+            keep_strategy: Some("oldest".into()),
             params: Default::default(),
             protected_paths: Vec::new(),
             actions,
@@ -347,4 +409,30 @@ fn walk_stats(dir: &std::path::Path) -> (u64, u64, i64) {
         }
     }
     (files, bytes, newest)
+}
+
+/// `(relativer Pfad, Größe, mtime)` aller nicht ignorierten Dateien unterhalb von `dir`.
+pub fn walk_entries(dir: &std::path::Path) -> Vec<(String, i64, i64)> {
+    let mut entries = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        for entry in std::fs::read_dir(&current).unwrap() {
+            let path = entry.unwrap().path();
+            let meta = RealFs.metadata(&path).unwrap();
+            if meta.is_dir {
+                stack.push(path);
+            } else {
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                if !crate::analysis::folder_dups::is_ignored_name(&name) {
+                    let rel = path
+                        .strip_prefix(dir)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned();
+                    entries.push((rel, meta.size as i64, meta.mtime_ticks));
+                }
+            }
+        }
+    }
+    entries
 }

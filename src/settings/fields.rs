@@ -186,6 +186,20 @@ pub static CONFIG_FIELDS: &[FieldSpec] = &[
         |c| c.versions_min_age.clone(),
     ),
     spec(
+        "dedupe_dirs_copy_patterns",
+        "Doppelte Ordner: Kopie-Wörter",
+        "Zusätzliche Wörter, an denen `plan dedupe-dirs` einen Kopie-Ordner erkennt (eins je Zeile)",
+        FieldKind::TextList,
+        |c| list_text(&c.dedupe_dirs_copy_patterns),
+    ),
+    spec(
+        "dedupe_dirs_partial_threshold",
+        "Doppelte Ordner: teilweise gleich",
+        "Ab diesem Anteil gemeinsamer Bytes meldet der Bericht Ordner als teilweise gleich (0,5 bis 1)",
+        FieldKind::Float { min: 0.5, max: 1.0 },
+        |c| c.dedupe_dirs_partial_threshold.to_string(),
+    ),
+    spec(
         "onedrive_max_move_files",
         "OneDrive: höchstens Dateien",
         "Obergrenze je Plan unter OneDrive",

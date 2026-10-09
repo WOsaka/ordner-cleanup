@@ -160,6 +160,8 @@ pub mod testing {
         RemoveDir,
         /// `remove_dir` scheitert mit „Ordner nicht leer“ (Rennen nach der Vorprüfung).
         RemoveDirNotEmpty,
+        /// `read_dir` scheitert mit „Zugriff verweigert“.
+        ReadDir,
         CreateDir,
     }
 
@@ -269,6 +271,9 @@ pub mod testing {
         }
 
         fn read_dir(&self, path: &Path) -> io::Result<Vec<(PathBuf, FileMeta)>> {
+            if self.is_failing(Op::ReadDir, path) {
+                return Err(io::Error::from_raw_os_error(5)); // ERROR_ACCESS_DENIED
+            }
             let mut entries = RealFs.read_dir(path)?;
             let cloud = self.cloud.lock().unwrap();
             for (p, meta) in &mut entries {

@@ -1,16 +1,25 @@
 //! Ansicht „Übersicht“: gescannte Wurzeln und Profile mit Score, letzte Läufe, ausstehende
-//! Quarantäne, darüber das Scannen und Klassifizieren.
+//! Quarantäne. Scannen und Klassifizieren liegen in der Kopfleiste.
 
 use std::path::PathBuf;
 
 use anyhow::Result;
+use chrono::Local;
 use eframe::egui;
 
-use super::scan::ScanPanel;
+use super::undo_flow::{UndoFlow, TASK_CHECK as UNDO_CHECK, TASK_UNDO};
 use crate::change::undo::{RunStatus, RunSummary};
-use crate::gui::shell::{Choice, Goto, Page, Route, Shell, TaskResult};
+use crate::change::RunId;
+use crate::gui::format::{
+    quarantine_text, review_text, root_status, run_row, score_style, time_of, trend, Tone,
+};
+use crate::gui::help::Topic;
+use crate::gui::shell::{Answer, Choice, Goto, HeaderRequest, Page, Route, Shell, TaskResult};
 use crate::gui::tasks::TaskKind;
 use crate::gui::texts;
+use crate::gui::theme;
+use crate::gui::widgets::help_button::heading_with_help;
+use crate::gui::widgets::table::{short_path_cell, status_cell, time_cell};
 use crate::history::History;
 use crate::index::RootInfo;
 use crate::ops::admin::{index_roots, profiles, ProfileInfo};
@@ -18,6 +27,7 @@ use crate::ops::runs::runs;
 use crate::paths;
 
 const TASK_LOAD: &str = "Übersicht laden";
+pub const ID_UNDO: &str = "overview.undo";
 
 /// Eine gescannte Wurzel mit dem letzten Score.
 pub struct RootRow {
@@ -43,15 +53,8 @@ pub fn pending_quarantine(runs: &[(PathBuf, Vec<RunSummary>)]) -> (usize, u64) {
         .fold((0, 0), |(n, b), r| (n + 1, b + r.bytes))
 }
 
-/// „n Dateien zum Prüfen“ aus dem letzten Lauf (nur Profile mit `classify = true`).
-fn review_text(last_run: Option<&crate::runlog::RunRecord>) -> Option<String> {
-    match last_run?.review? {
-        1 => Some("1 Datei zum Prüfen".into()),
-        n => Some(format!("{n} Dateien zum Prüfen")),
-    }
-}
-
-fn load() -> Result<OverviewData> {
+/// Alle gescannten Wurzeln mit dem letzten und vorletzten Score (liest nur).
+pub fn root_rows() -> Result<Vec<RootRow>> {
     let roots = match paths::index_path() {
         Ok(file) if file.exists() => index_roots()?,
         _ => Vec::new(),
@@ -60,7 +63,7 @@ fn load() -> Result<OverviewData> {
         .ok()
         .filter(|p| p.exists())
         .and_then(|p| History::open(&p).ok());
-    let roots = roots
+    Ok(roots
         .into_iter()
         .map(|info| {
             let series = history
@@ -75,7 +78,11 @@ fn load() -> Result<OverviewData> {
                 previous_score,
             }
         })
-        .collect();
+        .collect())
+}
+
+fn load() -> Result<OverviewData> {
+    let roots = root_rows()?;
     let (profiles, profile_error) = match profiles() {
         Ok(p) => (p, None),
         Err(e) => (Vec::new(), Some(format!("{e:#}"))),
@@ -91,38 +98,38 @@ fn load() -> Result<OverviewData> {
 #[derive(Default)]
 pub struct OverviewView {
     data: Option<OverviewData>,
-    scan: ScanPanel,
+    /// Stand von `Shell::generation`, für den `data` geladen wurde
+    loaded_generation: u64,
+    undo: UndoFlow,
 }
 
-fn trend(score: Option<u8>, previous: Option<u8>) -> String {
-    match (score, previous) {
-        (Some(s), Some(p)) if s > p => format!("{s} (▲ {})", s - p),
-        (Some(s), Some(p)) if s < p => format!("{s} (▼ {})", p - s),
-        (Some(s), Some(_)) => format!("{s} (=)"),
-        (Some(s), None) => s.to_string(),
-        _ => "–".into(),
+/// Score mit Trend, in der Farbe seiner Einordnung; der Tooltip nennt sie in Worten.
+fn score_cell(ui: &mut egui::Ui, score: Option<u8>, previous: Option<u8>) {
+    match score {
+        Some(s) => {
+            let style = score_style(s);
+            let color = theme::tone_color(ui, style.tone);
+            ui.colored_label(color, trend(score, previous))
+                .on_hover_text(format!("{s} – {}", style.text));
+        }
+        None => {
+            ui.label("–");
+        }
     }
 }
 
 impl OverviewView {
     pub fn refresh(&mut self, shell: &mut Shell) {
+        self.loaded_generation = shell.generation;
         shell.spawn(Route::Overview, TASK_LOAD, TaskKind::Read, |_| load());
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, shell: &mut Shell) {
+        if shell.generation != self.loaded_generation {
+            self.refresh(shell);
+        }
         egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.heading(texts::NAV_OVERVIEW);
-            let before = shell.generation;
-            let names: Vec<String> = self
-                .data
-                .as_ref()
-                .map(|d| d.profiles.iter().map(|p| p.name.clone()).collect())
-                .unwrap_or_default();
-            self.scan.ui(ui, shell, &names);
-            if shell.generation != before {
-                self.refresh(shell);
-            }
-            ui.add_space(12.0);
+            heading_with_help(ui, texts::NAV_OVERVIEW, Topic::Page(Page::Overview), shell);
             self.data_ui(ui, shell);
         });
     }
@@ -135,8 +142,19 @@ impl OverviewView {
         ui.separator();
         ui.heading("Gescannte Ordner");
         if data.roots.is_empty() {
-            ui.label(texts::NO_ROOT_YET);
+            ui.add_space(crate::gui::theme::SPACE_L);
+            ui.vertical_centered(|ui| {
+                ui.heading(texts::EMPTY_TITLE);
+                ui.label(texts::EMPTY_TEXT);
+                ui.add_space(crate::gui::theme::SPACE_M);
+                let button = egui::Button::new(texts::EMPTY_BUTTON);
+                if ui.add_sized([260.0, 36.0], button).clicked() {
+                    shell.header_request = Some(HeaderRequest::PickAndScan);
+                }
+            });
+            ui.add_space(crate::gui::theme::SPACE_L);
         }
+        let now = Local::now();
         let mut chosen: Option<(PathBuf, Page)> = None;
         egui::Grid::new("roots").striped(true).show(ui, |ui| {
             for h in ["Ordner", "Letzter Scan", "Score", "Status", ""] {
@@ -145,15 +163,11 @@ impl OverviewView {
             ui.end_row();
             for row in &data.roots {
                 let r = &row.info;
-                ui.label(&r.path);
-                ui.label(
-                    r.finished_at
-                        .as_deref()
-                        .or(r.started_at.as_deref())
-                        .unwrap_or("–"),
-                );
-                ui.label(trend(row.score, row.previous_score));
-                ui.label(format!("{:?}, {} Fehler", r.status, r.error_count));
+                short_path_cell(ui, &r.path, 48, shell);
+                let stamp = r.finished_at.as_deref().or(r.started_at.as_deref());
+                time_cell(ui, &time_of(now, stamp));
+                score_cell(ui, row.score, row.previous_score);
+                status_cell(ui, &root_status(r.status, r.error_count));
                 ui.horizontal(|ui| {
                     if ui.button("Analyse").clicked() {
                         chosen = Some((PathBuf::from(&r.path), Page::Analysis));
@@ -169,46 +183,66 @@ impl OverviewView {
             shell.target = Some(Choice::Folder(path));
             shell.goto = Some(Goto {
                 page,
-                plan_kind: None,
+                ..Goto::default()
             });
         }
 
-        ui.add_space(12.0);
+        ui.add_space(crate::gui::theme::SPACE_L);
         ui.heading("Profile");
         if let Some(e) = &data.profile_error {
             ui.colored_label(
-                egui::Color32::LIGHT_RED,
+                theme::tone_color(ui, Tone::Error),
                 format!("Config nicht lesbar: {e}"),
             );
         } else if data.profiles.is_empty() {
             ui.label("Keine Profile in der config.toml.");
         }
+        let mut open_review: Option<String> = None;
         egui::Grid::new("profiles").striped(true).show(ui, |ui| {
             for p in &data.profiles {
                 ui.label(&p.name);
-                ui.label(&p.profile.root);
-                ui.label(match &p.last_run {
-                    Some(r) => format!(
-                        "{} – {}",
-                        crate::ops::local_time(&r.started),
-                        r.status.label()
-                    ),
-                    None => "noch kein Lauf".into(),
-                });
-                ui.label(
-                    p.last_point
-                        .as_ref()
-                        .map_or("–".to_string(), |pt| format!("Score {}", pt.score)),
-                );
-                ui.label(review_text(p.last_run.as_ref()).unwrap_or_default());
-                if ui.button("Wählen").clicked() {
+                short_path_cell(ui, &p.profile.root, 40, shell);
+                match &p.last_run {
+                    Some(r) => {
+                        time_cell(ui, &time_of(now, Some(&r.started)));
+                        ui.label(r.status.label());
+                    }
+                    None => {
+                        ui.label("noch kein Lauf");
+                        ui.label("");
+                    }
+                }
+                score_cell(ui, p.last_point.as_ref().map(|pt| pt.score), None);
+                match review_text(p.last_run.as_ref()) {
+                    Some(text) => {
+                        if ui
+                            .link(text)
+                            .on_hover_text("Inhalte in der Analyse ansehen")
+                            .clicked()
+                        {
+                            open_review = Some(p.name.clone());
+                        }
+                    }
+                    None => {
+                        ui.label("");
+                    }
+                }
+                if ui.button("Öffnen").clicked() {
                     shell.target = Some(Choice::Profile(p.name.clone()));
                 }
                 ui.end_row();
             }
         });
+        if let Some(name) = open_review {
+            shell.target = Some(Choice::Profile(name));
+            shell.goto = Some(Goto {
+                page: Page::Analysis,
+                analysis_tab: Some("content"),
+                ..Goto::default()
+            });
+        }
 
-        ui.add_space(12.0);
+        ui.add_space(crate::gui::theme::SPACE_L);
         ui.heading("Letzte Läufe");
         let mut recent: Vec<(&PathBuf, &RunSummary)> = data
             .runs
@@ -219,28 +253,59 @@ impl OverviewView {
         if recent.is_empty() {
             ui.label("Noch keine Läufe.");
         }
-        for (root, run) in recent.into_iter().take(5) {
-            ui.label(format!(
-                "{}  {}  {}  {}  ({})",
-                run.run,
-                run.started
-                    .as_deref()
-                    .map(crate::ops::local_time)
-                    .unwrap_or_default(),
-                run.counts.short_text(run.bytes),
-                crate::ops::status_label(run.status),
-                paths::display(root)
-            ));
+        let mut want_undo: Option<(PathBuf, RunId)> = None;
+        if !recent.is_empty() {
+            egui::Grid::new("recent-runs").striped(true).show(ui, |ui| {
+                for h in ["Wann", "Ordner", "Was", "Ergebnis", "Größe", ""] {
+                    ui.strong(h);
+                }
+                ui.end_row();
+                for (root, run) in recent.into_iter().take(5) {
+                    let row = run_row(now, root, run);
+                    ui.label(&row.when)
+                        .on_hover_text(format!("{}\nLauf {}", row.when_tooltip, row.run_id));
+                    ui.label(&row.root).on_hover_text(&row.root_full);
+                    ui.label(&row.kind);
+                    status_cell(ui, &row.status);
+                    ui.label(&row.size);
+                    if ui
+                        .add_enabled(row.can_undo, egui::Button::new("Rückgängig …"))
+                        .clicked()
+                    {
+                        want_undo = Some(((*root).clone(), run.run.clone()));
+                    }
+                    ui.end_row();
+                }
+            });
         }
         let (count, bytes) = pending_quarantine(&data.runs);
-        ui.add_space(8.0);
-        ui.label(format!(
-            "Quarantäne: {count} Läufe warten auf „Quarantäne leeren“ ({})",
-            texts::bytes(bytes)
-        ));
+        ui.add_space(crate::gui::theme::SPACE_M);
+        ui.horizontal(|ui| {
+            ui.label(quarantine_text(count, bytes));
+            if count > 0 && ui.button("Quarantäne leeren …").clicked() {
+                shell.goto = Some(Goto {
+                    page: Page::History,
+                    ..Goto::default()
+                });
+            }
+        });
+        if let Some((root, run)) = want_undo {
+            self.undo.begin(shell, Route::Overview, run, Some(root));
+        }
+    }
+
+    pub fn on_answer(&mut self, id: &str, answer: Answer, shell: &mut Shell) {
+        if id == ID_UNDO {
+            self.undo.on_answer(shell, Route::Overview, answer);
+        }
     }
 
     pub fn on_finished(&mut self, name: &str, result: TaskResult, shell: &mut Shell) {
+        match name {
+            UNDO_CHECK => return self.undo.on_checked(result, shell, ID_UNDO),
+            TASK_UNDO => return self.undo.on_done(result, shell),
+            _ => {}
+        }
         if name == TASK_LOAD {
             match result.and_then(|b| {
                 b.downcast::<OverviewData>()
@@ -249,9 +314,7 @@ impl OverviewView {
                 Ok(data) => self.data = Some(*data),
                 Err(e) => shell.show_error(name, &e),
             }
-            return;
         }
-        self.scan.on_finished(name, result, shell);
     }
 }
 
@@ -285,39 +348,5 @@ mod tests {
             ],
         )];
         assert_eq!(pending_quarantine(&runs), (2, 105));
-    }
-
-    #[test]
-    fn zum_pruefen_kommt_aus_dem_letzten_lauf() {
-        assert_eq!(review_text(None), None);
-        let mut r = crate::runlog::RunRecord {
-            started: "2026-10-03T12:00:00+02:00".into(),
-            ended: "2026-10-03T12:01:00+02:00".into(),
-            status: crate::runlog::RunStatus::Ok,
-            score: None,
-            score_delta: None,
-            report: None,
-            plans: Vec::new(),
-            errors: Vec::new(),
-            notified: false,
-            review: None,
-        };
-        assert_eq!(review_text(Some(&r)), None);
-        r.review = Some(1);
-        assert_eq!(review_text(Some(&r)).as_deref(), Some("1 Datei zum Prüfen"));
-        r.review = Some(19);
-        assert_eq!(
-            review_text(Some(&r)).as_deref(),
-            Some("19 Dateien zum Prüfen")
-        );
-    }
-
-    #[test]
-    fn trend_zeigt_richtung_und_differenz() {
-        assert_eq!(trend(Some(80), Some(70)), "80 (▲ 10)");
-        assert_eq!(trend(Some(60), Some(70)), "60 (▼ 10)");
-        assert_eq!(trend(Some(60), Some(60)), "60 (=)");
-        assert_eq!(trend(Some(60), None), "60");
-        assert_eq!(trend(None, None), "–");
     }
 }

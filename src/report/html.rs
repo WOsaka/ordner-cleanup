@@ -18,7 +18,7 @@ pub struct Section {
     pub title: &'static str,
 }
 
-pub const SECTIONS: [Section; 14] = [
+pub const SECTIONS: [Section; 15] = [
     Section {
         id: "overview",
         title: "Übersicht",
@@ -50,6 +50,10 @@ pub const SECTIONS: [Section; 14] = [
     Section {
         id: "age",
         title: "Alter",
+    },
+    Section {
+        id: "folder-duplicates",
+        title: "Ordner-Duplikate",
     },
     Section {
         id: "duplicates",

@@ -135,6 +135,8 @@ pub fn plan_empty_dirs(
                 reason: "empty-dir".into(),
                 target: None,
                 is_dir: true,
+                keep_fingerprint: None,
+                source_fingerprint: None,
                 files: None,
                 rule: None,
             });

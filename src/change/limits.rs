@@ -70,6 +70,8 @@ mod tests {
             reason: "test".into(),
             target: None,
             is_dir: false,
+            keep_fingerprint: None,
+            source_fingerprint: None,
             files: None,
             rule: None,
         }
@@ -99,6 +101,15 @@ mod tests {
 
     fn onedrive() -> Vec<PathBuf> {
         vec![PathBuf::from(r"C:\Users\me\OneDrive")]
+    }
+
+    #[test]
+    fn ordner_in_der_quarantaene_zaehlen_mit_ihrer_dateianzahl() {
+        let mut dir = action(1, ActionType::Quarantine, 5_000);
+        dir.is_dir = true;
+        dir.files = Some(900);
+        let p = plan(vec![dir, action(2, ActionType::Quarantine, 10)]);
+        assert_eq!(move_volume(&p), (901, 5_010));
     }
 
     #[test]

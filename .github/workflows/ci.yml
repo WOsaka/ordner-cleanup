@@ -23,10 +23,15 @@ jobs:
           $hits = cargo tree -e normal --prefix none | Select-String -Pattern '^(reqwest|hyper|curl|isahc|attohttpc|rustls|native-tls|openssl)\b'
           if ($hits) { $hits; exit 1 }
       - run: cargo build --release
+      - name: Auslieferung zusammenstellen
+        shell: pwsh
+        run: |
+          # Die Hilfe der GUI öffnet README.md und docs\dokumentation.md neben den exe-Dateien
+          New-Item -ItemType Directory -Force dist\docs | Out-Null
+          Copy-Item target\release\ordner-cleanup.exe, target\release\ordner-cleanup-bg.exe, target\release\ordner-cleanup-gui.exe dist\
+          Copy-Item README.md dist\
+          Copy-Item docs\dokumentation.md dist\docs\
       - uses: actions/upload-artifact@v4
         with:
           name: ordner-cleanup-windows
-          path: |
-            target/release/ordner-cleanup.exe
-            target/release/ordner-cleanup-bg.exe
-            target/release/ordner-cleanup-gui.exe
+          path: dist/

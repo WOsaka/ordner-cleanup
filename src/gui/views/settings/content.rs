@@ -42,7 +42,7 @@ impl ContentTab {
                     &defaults,
                     &mut form_state,
                 );
-                ui.add_space(10.0);
+                ui.add_space(crate::gui::theme::SPACE_L);
                 ui.heading("Lokales LLM (optional)");
                 form::show(
                     ui,
@@ -73,12 +73,15 @@ impl ContentTab {
                     match &self.llm_result {
                         Some(Ok(())) => {
                             ui.colored_label(
-                                egui::Color32::LIGHT_GREEN,
+                                crate::gui::theme::tone_color(ui, crate::gui::format::Tone::Ok),
                                 "Erreichbar, Modell vorhanden",
                             );
                         }
                         Some(Err(e)) => {
-                            ui.colored_label(egui::Color32::LIGHT_RED, e);
+                            ui.colored_label(
+                                crate::gui::theme::tone_color(ui, crate::gui::format::Tone::Error),
+                                e,
+                            );
                         }
                         None => {}
                     }
