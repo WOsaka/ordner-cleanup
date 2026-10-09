@@ -200,7 +200,8 @@ fn plan_aendert_nichts_apply_sortiert_ein_und_undo_stellt_alles_her() {
     assert_eq!(env.snapshot(), before, "plan darf nichts verändern");
 
     let json = plan_json(&plan);
-    assert_eq!(json["version"], 2);
+    assert_eq!(json["version"], 3);
+    assert!(json["integrity"].as_str().unwrap().starts_with("sha256:"));
     assert_eq!(json["kind"], "rules");
     assert!(json["params"]["rules_file"]
         .as_str()

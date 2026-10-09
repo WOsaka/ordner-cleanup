@@ -185,7 +185,8 @@ fn plan_veraendert_nichts_apply_und_undo_stellen_den_zustand_her() {
     assert_eq!(env.snapshot(), before, "plan darf nichts verändern");
 
     let json = plan_json(&plan);
-    assert_eq!(json["version"], 2);
+    assert_eq!(json["version"], 3);
+    assert!(json["integrity"].as_str().unwrap().starts_with("sha256:"));
     assert_eq!(json["kind"], "dedupe-dirs");
     assert_eq!(action_paths(&json, env.root()), ["Kopie von Projekt"]);
     let action = &json["actions"][0];

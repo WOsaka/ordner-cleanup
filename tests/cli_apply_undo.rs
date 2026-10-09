@@ -437,11 +437,11 @@ fn plan_mit_unbekannter_version_wird_klar_abgelehnt() {
     dup_tree(&env);
     let plan = env.plan("plan.json");
     let mut json = plan_json(&plan);
-    json["version"] = 3.into();
+    json["version"] = 4.into();
     std::fs::write(&plan, json.to_string()).unwrap();
     let before = env.snapshot();
 
-    env.apply(&plan).code(1).stderr(contains("Version 3"));
+    env.apply(&plan).code(1).stderr(contains("Version 4"));
 
     assert_eq!(env.snapshot(), before);
 }

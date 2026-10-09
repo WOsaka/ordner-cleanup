@@ -1,7 +1,7 @@
 ---
 title: "Implementation Plan: Plan-Integrität (Hash der Plan-Datei, vor dem Apply geprüft)"
 feature_spec: docs/features/plan-integritaet.md
-status: pending-approval   # pending-approval | approved | implemented
+status: approved   # pending-approval | approved | implemented
 created: 2026-10-09
 updated: 2026-10-09
 ---

@@ -1,0 +1,162 @@
+//! Plan-Integrität über die echte CLI: Prüfsumme in der Plan-Datei, Abbruch mit Exit-Code 3 bei
+//! Veränderung, Warnung bei alten Plänen und `plan seal`.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
+
+use assert_cmd::assert::Assert;
+use assert_cmd::Command;
+use ordner_cleanup::paths;
+use predicates::str::contains;
+
+const CONTENT: &str = "gleicher inhalt";
+
+struct Env {
+    home: tempfile::TempDir,
+    tree: tempfile::TempDir,
+    out: tempfile::TempDir,
+}
+
+impl Env {
+    fn new() -> Self {
+        let env = Self {
+            home: tempfile::tempdir().unwrap(),
+            tree: tempfile::tempdir().unwrap(),
+            out: tempfile::tempdir().unwrap(),
+        };
+        let orig = env.write("a/orig.txt", CONTENT);
+        env.write("b/kopie.txt", CONTENT);
+        env.write("c/kopie 2.txt", CONTENT);
+        let file = std::fs::File::options()
+            .write(true)
+            .open(paths::extended(&orig))
+            .unwrap();
+        file.set_modified(SystemTime::now() - Duration::from_secs(1000))
+            .unwrap();
+        env
+    }
+
+    fn root(&self) -> &Path {
+        self.tree.path()
+    }
+
+    fn bin(&self) -> Command {
+        let mut cmd = Command::cargo_bin("ordner-cleanup").unwrap();
+        cmd.env("ORDNER_CLEANUP_HOME", self.home.path())
+            .current_dir(self.out.path());
+        cmd
+    }
+
+    fn write(&self, rel: &str, content: &str) -> PathBuf {
+        let path = self.root().join(rel);
+        std::fs::create_dir_all(paths::extended(path.parent().unwrap())).unwrap();
+        std::fs::write(paths::extended(&path), content).unwrap();
+        path
+    }
+
+    /// `scan` und `plan dedupe`; liefert den Pfad der Plan-Datei und die Ausgabe von `plan`.
+    fn plan(&self) -> (PathBuf, String) {
+        self.bin().arg("scan").arg(self.root()).assert().success();
+        let plan = self.out.path().join("plan.json");
+        let text = stdout(
+            self.bin()
+                .args(["plan", "dedupe"])
+                .arg(self.root())
+                .arg("--out")
+                .arg(&plan)
+                .assert()
+                .success(),
+        );
+        (plan, text)
+    }
+
+    fn apply(&self, plan: &Path) -> Assert {
+        self.bin().arg("apply").arg(plan).arg("--yes").assert()
+    }
+
+    fn assert_no_runs(&self) {
+        self.bin()
+            .arg("runs")
+            .assert()
+            .success()
+            .stdout(contains("Keine Läufe gefunden."));
+    }
+
+    /// Dateien unter der Wurzel mit Inhalt (ohne den Werkzeugordner).
+    fn snapshot(&self) -> BTreeMap<PathBuf, Vec<u8>> {
+        fn walk(dir: &Path, out: &mut BTreeMap<PathBuf, Vec<u8>>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.file_name().is_some_and(|n| n == ".ordner-cleanup") {
+                    continue;
+                }
+                if path.is_dir() {
+                    walk(&path, out);
+                } else {
+                    let content = std::fs::read(&path).unwrap();
+                    out.insert(path, content);
+                }
+            }
+        }
+        let mut out = BTreeMap::new();
+        walk(&paths::extended(self.root()), &mut out);
+        out
+    }
+}
+
+fn stdout(assert: Assert) -> String {
+    String::from_utf8_lossy(&assert.get_output().stdout).into_owned()
+}
+
+fn plan_json(path: &Path) -> serde_json::Value {
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+fn write_json(path: &Path, json: &serde_json::Value) {
+    std::fs::write(path, serde_json::to_string_pretty(json).unwrap()).unwrap();
+}
+
+#[test]
+fn geaenderter_plan_bricht_mit_exit_code_3_ab_und_aendert_nichts() {
+    let env = Env::new();
+    let (plan, _) = env.plan();
+    let mut json = plan_json(&plan);
+    json["actions"][0]["reason"] = "von Hand".into();
+    write_json(&plan, &json);
+    let before = env.snapshot();
+
+    env.apply(&plan)
+        .code(3)
+        .stderr(contains("Plan wurde nach dem Erstellen verändert"))
+        .stderr(contains("plan seal"));
+
+    assert_eq!(env.snapshot(), before);
+    env.assert_no_runs();
+}
+
+#[test]
+fn entfernte_aktion_bricht_mit_exit_code_3_ab() {
+    let env = Env::new();
+    let (plan, _) = env.plan();
+    let mut json = plan_json(&plan);
+    json["actions"].as_array_mut().unwrap().pop();
+    write_json(&plan, &json);
+    let before = env.snapshot();
+
+    env.apply(&plan).code(3);
+
+    assert_eq!(env.snapshot(), before);
+    env.assert_no_runs();
+}
+
+#[test]
+fn nur_formatierung_zeilenenden_und_schluesselreihenfolge_geaendert_laeuft_durch() {
+    let env = Env::new();
+    let (plan, _) = env.plan();
+    // `Value` sortiert die Schlüssel alphabetisch; dazu kompakt und mit CRLF.
+    let text = plan_json(&plan).to_string().replace(',', ",\r\n");
+    std::fs::write(&plan, text).unwrap();
+
+    env.apply(&plan).success().stdout(contains("Lauf "));
+}
