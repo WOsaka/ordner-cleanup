@@ -1,5 +1,5 @@
-//! Rundreise über die echte CLI mit zufälligen Bäumen: alle Planer (dedupe, junk, versions,
-//! archive, rules, empty-dirs) in zufälliger Reihenfolge, jeweils scan → plan → apply, danach
+//! Rundreise über die echte CLI mit zufälligen Bäumen: alle Planer (dedupe, dedupe-dirs, junk,
+//! versions, archive, rules, empty-dirs) in zufälliger Reihenfolge, jeweils scan → plan → apply, danach
 //! alle Läufe rückwärts per `undo`. Erwartet wird der Ausgangsbaum byteidentisch (Pfade, Größen,
 //! mtime, Inhalt).
 //!
@@ -268,6 +268,38 @@ fn random_tree(env: &Env, rng: &mut Rng) {
         }
     }
 
+    // Ordnerkopien: Original und 1 bis 2 Kopien, teils mit Unterordner und mit Müll-Zusätzen
+    // (Thumbs.db, desktop.ini) in einer Kopie, die beim Vergleich nicht zählen.
+    for c in 0..rng.below(3) {
+        let mut files = Vec::new();
+        for f in 0..(1 + rng.below(3)) {
+            let sub = if rng.chance(50) { "tief/" } else { "" };
+            let age = 1 + rng.below(500) as u64;
+            files.push((format!("{sub}f{f}.txt"), unique(rng), age));
+        }
+        for k in 0..=(1 + rng.below(2)) {
+            let name = match (k, rng.chance(50)) {
+                (0, _) => format!("Quelle{c}"),
+                (_, true) => format!("Kopie von Quelle{c}"),
+                (_, false) => format!("Quelle{c} ({k})"),
+            };
+            let dir = if k == 0 {
+                join(&random_dir(rng), &name)
+            } else {
+                join(&random_dir(rng), &format!("{name} {k}"))
+            };
+            for (rel, content, age) in &files {
+                env.write(&join(&dir, rel), content, age + k as u64 * 10);
+            }
+            if k > 0 && rng.chance(50) {
+                let junk = unique(rng);
+                env.write(&join(&dir, "Thumbs.db"), &junk, 1);
+                let ini = unique(rng);
+                env.write(&join(&dir, "tief/desktop.ini"), &ini, 1);
+            }
+        }
+    }
+
     // Leere Ordner, auch verschachtelt
     for e in 0..rng.below(4) {
         let dir = join(&random_dir(rng), &format!("Leer{e}"));
@@ -278,6 +310,7 @@ fn random_tree(env: &Env, rng: &mut Rng) {
 
 const ACTIONS: &[&str] = &[
     "dedupe",
+    "dedupe-dirs",
     "junk",
     "versions",
     "archive",
