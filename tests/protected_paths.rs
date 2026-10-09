@@ -114,7 +114,6 @@ fn config_geschuetzter_pfad_kommt_nicht_in_den_plan() {
 }
 
 #[test]
-#[ignore = "bis plan seal"]
 fn profil_geschuetzter_pfad_gilt_auch_beim_anwenden_eines_veraenderten_plans() {
     let env = Env::new();
     let victim = env.write("wichtig/x.txt", "gleich");
@@ -156,6 +155,11 @@ protected_paths = ['{}']
     plan["actions"] = json!([action(1, &in_plan("wichtig/x.txt"), &in_plan("a/x.txt"))]);
     let edited = env.home.path().join("edited.json");
     std::fs::write(&edited, plan.to_string()).unwrap();
+    env.bin()
+        .args(["plan", "seal", "--yes"])
+        .arg(&edited)
+        .assert()
+        .success();
     env.bin()
         .arg("apply")
         .arg(&edited)

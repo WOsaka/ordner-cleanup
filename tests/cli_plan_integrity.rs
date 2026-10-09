@@ -191,3 +191,94 @@ fn alter_plan_laeuft_mit_warnung_durch() {
         .stderr(contains("Ungeschützter Plan (Format 1)"))
         .stdout(contains("Lauf "));
 }
+
+fn seal(env: &Env, plan: &Path, yes: bool) -> Assert {
+    let mut cmd = env.bin();
+    cmd.args(["plan", "seal"]).arg(plan);
+    if yes {
+        cmd.arg("--yes");
+    }
+    cmd.assert()
+}
+
+#[test]
+fn geaenderter_plan_laeuft_nach_seal_durch() {
+    let env = Env::new();
+    let (plan, _) = env.plan();
+    let mut json = plan_json(&plan);
+    json["actions"].as_array_mut().unwrap().pop();
+    write_json(&plan, &json);
+
+    let text = stdout(seal(&env, &plan, true).success());
+    assert!(text.contains("1 Aktionen"), "{text}");
+    assert!(text.contains("passt nicht zum Inhalt"), "{text}");
+    assert!(text.contains("Plan versiegelt"), "{text}");
+    let sealed = plan_json(&plan);
+    assert_ne!(sealed["integrity"], json["integrity"]);
+    assert_eq!(sealed["actions"], json["actions"]);
+
+    env.apply(&plan).success().stdout(contains("Lauf "));
+}
+
+#[test]
+fn seal_ohne_bestaetigung_laesst_die_datei_unveraendert() {
+    let env = Env::new();
+    let (plan, _) = env.plan();
+    let mut json = plan_json(&plan);
+    json["actions"].as_array_mut().unwrap().pop();
+    write_json(&plan, &json);
+    let before = std::fs::read(&plan).unwrap();
+
+    seal(&env, &plan, false).code(1).stderr(contains("--yes"));
+
+    assert_eq!(std::fs::read(&plan).unwrap(), before);
+    env.apply(&plan).code(3);
+}
+
+#[test]
+fn seal_auf_versiegeltem_plan_aendert_nichts() {
+    let env = Env::new();
+    let (plan, _) = env.plan();
+    let before = std::fs::read(&plan).unwrap();
+
+    seal(&env, &plan, false)
+        .success()
+        .stdout(contains("Plan ist bereits versiegelt"));
+
+    assert_eq!(std::fs::read(&plan).unwrap(), before);
+}
+
+#[test]
+fn seal_hebt_alten_plan_auf_format_3() {
+    let env = Env::new();
+    let (plan, _) = env.plan();
+    downgrade_to_v1(&plan);
+
+    seal(&env, &plan, true)
+        .success()
+        .stdout(contains("keine Prüfsumme (Format 1)"))
+        .stdout(contains("wird auf Format 3 gehoben"));
+
+    let json = plan_json(&plan);
+    assert_eq!(json["version"], 3);
+    assert!(json["integrity"].as_str().unwrap().starts_with("sha256:"));
+    let out = env.apply(&plan).success();
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(!stderr.contains("Ungeschützter Plan"), "{stderr}");
+}
+
+#[test]
+fn strukturell_ungueltiger_plan_wird_nicht_versiegelt() {
+    let env = Env::new();
+    let (plan, _) = env.plan();
+    let mut json = plan_json(&plan);
+    json["actions"][1]["id"] = json["actions"][0]["id"].clone();
+    write_json(&plan, &json);
+    let before = std::fs::read(&plan).unwrap();
+
+    seal(&env, &plan, true)
+        .code(1)
+        .stderr(contains("Plan ist ungültig"));
+
+    assert_eq!(std::fs::read(&plan).unwrap(), before);
+}

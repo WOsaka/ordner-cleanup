@@ -51,6 +51,7 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Plan(PlanCommand::Archive(args)) => plan::plan_archive_command(&args),
         Command::Plan(PlanCommand::Versions(args)) => plan::plan_versions_command(&args),
         Command::Plan(PlanCommand::Rules(args)) => plan::plan_rules_command(&args),
+        Command::Plan(PlanCommand::Seal(args)) => plan::plan_seal_command(&args),
         Command::Apply(args) => apply_command(&args),
         Command::Undo(args) => undo_command(&args),
         Command::Runs(args) => runs_command(&args),

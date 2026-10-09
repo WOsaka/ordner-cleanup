@@ -186,6 +186,18 @@ pub enum PlanCommand {
     Versions(PlanVersionsArgs),
     /// Dateien nach Regeln aus einer Regeldatei einsortieren und umbenennen
     Rules(PlanRulesArgs),
+    /// Von Hand geänderten Plan neu versiegeln (Prüfsumme neu berechnen; alte Pläne auf Format 3
+    /// heben)
+    Seal(PlanSealArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PlanSealArgs {
+    /// Plan-Datei
+    pub plan: PathBuf,
+    /// Ohne Rückfrage versiegeln (nötig in nicht interaktiven Sitzungen)
+    #[arg(long)]
+    pub yes: bool,
 }
 
 #[derive(Debug, Args)]

@@ -301,9 +301,13 @@ impl Plan {
     }
 
     pub fn load(path: &Path) -> Result<Self, PlanError> {
-        let text = std::fs::read_to_string(paths::extended(path))
-            .map_err(|e| PlanError::Unreadable(format!("{}: {e}", paths::display(path))))?;
-        Self::from_json(&text)
+        Self::from_json(&read_text(path)?)
+    }
+
+    /// Liest die Datei wie `parse`, ohne eine abweichende Prüfsumme abzulehnen (nur für
+    /// `plan seal`).
+    pub fn read_unverified(path: &Path) -> Result<(Self, Seal), PlanError> {
+        Self::parse(&read_text(path)?)
     }
 
     /// SHA-256 der kanonischen Form (kompaktes JSON in Feldreihenfolge der Struktur, ohne
@@ -342,6 +346,25 @@ impl Plan {
             .open(paths::extended(path))?;
         file.write_all(self.to_json().as_bytes())?;
         file.sync_all()
+    }
+
+    /// Ersetzt eine vorhandene Plan-Datei atomar: erst `<datei>.tmp` schreiben, dann darüber
+    /// umbenennen (nur für `plan seal`).
+    pub fn save_replacing(&self, path: &Path) -> std::io::Result<()> {
+        let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
+        tmp_name.push(".tmp");
+        let tmp = path.with_file_name(tmp_name);
+        let written = (|| {
+            let mut file = std::fs::File::create(paths::extended(&tmp))?;
+            file.write_all(self.to_json().as_bytes())?;
+            file.sync_all()?;
+            drop(file);
+            std::fs::rename(paths::extended(&tmp), paths::extended(path))
+        })();
+        if written.is_err() {
+            let _ = std::fs::remove_file(paths::extended(&tmp));
+        }
+        written
     }
 
     pub fn total_bytes(&self) -> u64 {
@@ -616,6 +639,11 @@ impl Plan {
         }
         Ok(())
     }
+}
+
+fn read_text(path: &Path) -> Result<String, PlanError> {
+    std::fs::read_to_string(paths::extended(path))
+        .map_err(|e| PlanError::Unreadable(format!("{}: {e}", paths::display(path))))
 }
 
 /// `key` und seine Vorfahren (je Ebene bis vor das letzte `\`), von innen nach außen.
@@ -1703,6 +1731,37 @@ mod tests {
         let (p, seal) = Plan::parse(V3_JSON).unwrap();
         assert_eq!(seal, Seal::Valid, "{}", p.integrity());
         assert_eq!(p.to_json(), V3_JSON);
+    }
+
+    #[test]
+    fn save_replacing_ersetzt_den_inhalt_ohne_restdatei() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plan.json");
+        std::fs::write(&path, "alter inhalt").unwrap();
+        let p = ok_plan();
+        p.save_replacing(&path).unwrap();
+        assert_eq!(Plan::load(&path).unwrap(), p);
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["plan.json"], "keine .tmp-Datei bleibt zurück");
+    }
+
+    #[test]
+    fn read_unverified_meldet_den_zustand_der_datei() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plan.json");
+        let mut v = value(&ok_plan());
+        v["actions"][0]["size"] = 11.into();
+        std::fs::write(&path, v.to_string()).unwrap();
+        let (p, seal) = Plan::read_unverified(&path).unwrap();
+        assert_eq!(p.actions[0].size, 11);
+        assert!(matches!(seal, Seal::Mismatch { .. }));
+        assert!(matches!(
+            Plan::read_unverified(&dir.path().join("fehlt.json")),
+            Err(PlanError::Unreadable(_))
+        ));
     }
 
     #[test]

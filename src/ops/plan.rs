@@ -21,7 +21,7 @@ use crate::change::dedupe_dirs::{plan_dedupe_dirs, DedupeDirsOptions};
 use crate::change::empty_dirs::plan_empty_dirs;
 use crate::change::junk::{plan_junk, JunkOptions};
 use crate::change::limits;
-use crate::change::plan::Plan;
+use crate::change::plan::{Plan, Seal, PLAN_VERSION};
 use crate::change::protect::{ProtectPaths, Protector};
 use crate::change::rules::{
     plan_rules, CachedExif, ContentLookup, LiveContent, NoContent, RuleStats, RulesEnv, RulesPlan,
@@ -638,6 +638,37 @@ fn plan_rules_kind(
 
 /// Teilplan neben dem Original speichern: `<stem>-auswahl-<Zeitstempel>.json`, sonst im
 /// GUI-Planordner. Das Original bleibt unverändert; `params` nennt Herkunft und Anzahl.
+/// Vorschau für `plan seal`: der gelesene Plan, der Zustand seiner Prüfsumme und die Prüfsumme
+/// nach dem Versiegeln.
+#[derive(Debug)]
+pub struct SealPreview {
+    pub plan: Plan,
+    pub seal: Seal,
+    pub integrity: String,
+}
+
+/// Liest eine Plan-Datei für `plan seal`. Ein strukturell ungültiger Plan ist ein Fehler und
+/// wird nicht versiegelt.
+pub fn seal_preview(path: &Path) -> Result<SealPreview> {
+    let (plan, seal) = Plan::read_unverified(path)?;
+    let integrity = Plan {
+        version: PLAN_VERSION,
+        ..plan.clone()
+    }
+    .integrity();
+    Ok(SealPreview {
+        plan,
+        seal,
+        integrity,
+    })
+}
+
+/// Schreibt den Plan aus der Vorschau versiegelt (Format 3) über die Datei.
+pub fn seal_write(path: &Path, plan: &Plan) -> Result<()> {
+    plan.save_replacing(path)
+        .with_context(|| format!("Plan-Datei {} nicht schreibbar", paths::display(path)))
+}
+
 pub fn save_subset(
     original: &Path,
     plan: &Plan,
@@ -809,8 +840,10 @@ mod tests {
         assert!(text.contains("ohne passende Regel: 5 Dateien"), "{text}");
     }
 
+    use crate::change::plan::{Seal, PLAN_VERSION};
+
     fn sample_plan(root: &Path) -> Plan {
-        use crate::change::plan::{ActionType, PlanKind, PlannedAction, PLAN_VERSION};
+        use crate::change::plan::{ActionType, PlanKind, PlannedAction};
         let action = |id: u32| PlannedAction {
             id,
             action: ActionType::Quarantine,
@@ -860,6 +893,12 @@ mod tests {
             "{name}"
         );
         let loaded = Plan::load(&file).unwrap();
+        let (_, seal) = Plan::parse(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(
+            seal,
+            Seal::Valid,
+            "Teilplan hat eine eigene, gültige Prüfsumme"
+        );
         assert_eq!(loaded.actions.len(), 3);
         assert_eq!(loaded.params["auswahl"], "3/5");
         assert_eq!(loaded.params["auswahl_von"], "plan-20261005-101500.json");
@@ -881,5 +920,76 @@ plans_dir = '{}'
         let file = save_subset(Path::new("plan.json"), &plan, &keep, &config).unwrap();
         assert_eq!(file.parent(), Some(target.as_path()));
         assert_eq!(Plan::load(&file).unwrap().actions.len(), 1);
+    }
+
+    fn write_value(path: &Path, v: &serde_json::Value) {
+        std::fs::write(path, v.to_string()).unwrap();
+    }
+
+    #[test]
+    fn seal_preview_meldet_jeden_zustand() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = sample_plan(dir.path());
+        let path = dir.path().join("plan.json");
+        plan.save(&path).unwrap();
+        let preview = seal_preview(&path).unwrap();
+        assert_eq!(preview.seal, Seal::Valid);
+        assert_eq!(preview.integrity, plan.integrity());
+
+        let mut v: serde_json::Value = serde_json::from_str(&plan.to_json()).unwrap();
+        v["actions"].as_array_mut().unwrap().pop();
+        write_value(&path, &v);
+        let preview = seal_preview(&path).unwrap();
+        assert!(matches!(preview.seal, Seal::Mismatch { .. }));
+        assert_eq!(preview.plan.actions.len(), 4);
+        assert_eq!(preview.integrity, preview.plan.integrity());
+
+        v.as_object_mut().unwrap().remove("integrity");
+        write_value(&path, &v);
+        assert_eq!(seal_preview(&path).unwrap().seal, Seal::Missing);
+
+        v["version"] = 2.into();
+        write_value(&path, &v);
+        let preview = seal_preview(&path).unwrap();
+        assert_eq!(preview.seal, Seal::Unprotected { version: 2 });
+        let mut lifted = preview.plan.clone();
+        lifted.version = PLAN_VERSION;
+        assert_eq!(
+            preview.integrity,
+            lifted.integrity(),
+            "Prüfsumme nach dem Heben"
+        );
+    }
+
+    #[test]
+    fn seal_preview_lehnt_strukturfehler_ab() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plan.json");
+        let mut v: serde_json::Value =
+            serde_json::from_str(&sample_plan(dir.path()).to_json()).unwrap();
+        v["actions"][1]["id"] = 1.into();
+        write_value(&path, &v);
+        let err = seal_preview(&path).unwrap_err();
+        assert!(err.to_string().contains("doppelt"), "{err}");
+    }
+
+    #[test]
+    fn seal_write_versiegelt_den_gezeigten_plan_im_format_3() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plan.json");
+        let mut v: serde_json::Value =
+            serde_json::from_str(&sample_plan(dir.path()).to_json()).unwrap();
+        v.as_object_mut().unwrap().remove("integrity");
+        v["version"] = 1.into();
+        v["actions"].as_array_mut().unwrap().pop();
+        write_value(&path, &v);
+
+        let preview = seal_preview(&path).unwrap();
+        seal_write(&path, &preview.plan).unwrap();
+
+        let loaded = Plan::load(&path).unwrap();
+        assert_eq!(loaded.version, PLAN_VERSION);
+        assert_eq!(loaded.actions.len(), 4);
+        assert_eq!(loaded.integrity(), preview.integrity);
     }
 }
