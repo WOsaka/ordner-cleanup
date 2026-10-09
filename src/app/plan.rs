@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use super::global_cancel_flag;
+use crate::change::plan::short_integrity;
 use crate::cli::{
     PlanArchiveArgs, PlanDedupeArgs, PlanDedupeDirsArgs, PlanEmptyDirsArgs, PlanJunkArgs,
     PlanRulesArgs, PlanVersionsArgs,
@@ -69,6 +70,9 @@ fn print_outcome(outcome: &PlanOutcome) {
     }
     if let Some(saved) = &outcome.saved {
         println!("Plan: {}", paths::display(saved));
+    }
+    if let Some(integrity) = &outcome.integrity {
+        println!("Prüfsumme: sha256:{}…", short_integrity(integrity));
     }
     println!("Es wurde nichts verändert. Plan prüfen, danach mit `apply` ausführen.");
 }

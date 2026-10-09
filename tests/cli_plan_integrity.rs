@@ -160,3 +160,34 @@ fn nur_formatierung_zeilenenden_und_schluesselreihenfolge_geaendert_laeuft_durch
 
     env.apply(&plan).success().stdout(contains("Lauf "));
 }
+
+#[test]
+fn plan_nennt_die_pruefsumme_gekuerzt() {
+    let env = Env::new();
+    let (plan, text) = env.plan();
+    let integrity = plan_json(&plan)["integrity"].as_str().unwrap().to_owned();
+    assert!(
+        text.contains(&format!("Prüfsumme: {}…", &integrity[..19])),
+        "{text}"
+    );
+}
+
+/// Ein Plan im Format 1 (Phase 2): ohne Prüfsumme und ohne v2/v3-Felder.
+fn downgrade_to_v1(plan: &Path) {
+    let mut json = plan_json(plan);
+    json.as_object_mut().unwrap().remove("integrity");
+    json["version"] = 1.into();
+    write_json(plan, &json);
+}
+
+#[test]
+fn alter_plan_laeuft_mit_warnung_durch() {
+    let env = Env::new();
+    let (plan, _) = env.plan();
+    downgrade_to_v1(&plan);
+
+    env.apply(&plan)
+        .success()
+        .stderr(contains("Ungeschützter Plan (Format 1)"))
+        .stdout(contains("Lauf "));
+}

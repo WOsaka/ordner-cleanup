@@ -103,6 +103,8 @@ pub struct PlanOutcome {
     pub plan: Plan,
     /// Pfad der Plan-Datei (nicht bei `PlanOut::DontSave`)
     pub saved: Option<PathBuf>,
+    /// Prüfsumme der gespeicherten Plan-Datei (`sha256:<hex>`)
+    pub integrity: Option<String>,
     /// Betroffene Bytes (`dedupe`: freiwerdende; bei `remove-dir` 0)
     pub bytes: u64,
     /// Kopfzeile der Zusammenfassung (bei Regeln mehrzeilig)
@@ -197,9 +199,11 @@ fn finish(
             .or_insert(0usize) += 1;
     }
     let limit = limits::exceeds(&plan, &onedrive_roots_from_env(), config);
+    let integrity = saved.as_ref().map(|_| plan.integrity());
     Ok(PlanOutcome {
         plan,
         saved,
+        integrity,
         bytes,
         headline,
         skipped_by_reason,
