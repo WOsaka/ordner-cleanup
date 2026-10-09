@@ -404,6 +404,7 @@ fn plan_validate_schafft_100000_aktionen_mit_1000_ordnern_in_unter_zwei_sekunden
         target: Some(target),
         is_dir,
         files: is_dir.then_some(1),
+        keep_fingerprint: None,
         rule: None,
     };
     let mut actions = Vec::new();

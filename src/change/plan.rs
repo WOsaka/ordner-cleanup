@@ -372,7 +372,7 @@ impl Plan {
                         return invalid("Pfad entspricht der behaltenen Datei".into());
                     }
                     if a.is_dir
-                        && (paths::is_under(&key, &keep_key) || paths::is_under(&keep_key, &key))
+                        && (paths::is_under(key, &keep_key) || paths::is_under(&keep_key, key))
                     {
                         return invalid("Ordner liegt im oder über dem behaltenen Ordner".into());
                     }
