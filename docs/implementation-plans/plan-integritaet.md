@@ -1,7 +1,7 @@
 ---
 title: "Implementation Plan: Plan-Integrität (Hash der Plan-Datei, vor dem Apply geprüft)"
 feature_spec: docs/features/plan-integritaet.md
-status: approved   # pending-approval | approved | implemented
+status: implemented   # pending-approval | approved | implemented
 created: 2026-10-09
 updated: 2026-10-09
 ---
@@ -149,4 +149,4 @@ Jeder Schritt nach `test-driven-development`: zuerst der rote Test, dann der Cod
 - **`#[serde(flatten)]` und `deny_unknown_fields`:** `flatten` wird nur zum Serialisieren benutzt. Die Deserialisierung bleibt bei `Plan` mit `deny_unknown_fields`, also kein Konflikt.
 - **Atomares Ersetzen mit `rename` unter Windows:** `std::fs::rename` ersetzt vorhandene Dateien (`MoveFileExW` mit `MOVEFILE_REPLACE_EXISTING`). In OneDrive-Ordnern kann ein Sync-Lock das Ersetzen kurz verhindern. Dann gibt es eine klare Fehlermeldung, kein Retry.
 - **Bekannte Lücke laut Spec:** Version auf 2 zurücksetzen und Feld löschen ergibt nur eine Warnung. Sie wird dokumentiert und nicht behoben.
-- [ ] Soll die GUI einen Knopf „Versiegeln“ bekommen? Mein Vorschlag: nein. Die Spec verlangt es nicht, und Handänderungen sind ein CLI-Thema.
+- [x] Soll die GUI einen Knopf „Versiegeln“ bekommen? Mein Vorschlag: nein. Die Spec verlangt es nicht, und Handänderungen sind ein CLI-Thema.

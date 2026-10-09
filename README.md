@@ -20,7 +20,7 @@ ordner-cleanup index remove <pfad>
 - Konfiguration (optional): `%APPDATA%\ordner-cleanup\config.toml`; CLI-Flags haben Vorrang.
 - Netzlaufwerke und UNC-Pfade werden nur mit `--force` gescannt (in Phase 1 nicht unterstützt).
 - OneDrive-Cloud-Platzhalter werden nie geöffnet: Sie erscheinen nur mit Metadaten und höchstens als „wahrscheinliche Duplikate“.
-- Exit-Codes: `0` OK, `1` Fehler oder Abbruch, `2` OK mit Teilfehlern (z. B. Zugriff verweigert, gesperrte Dateien).
+- Exit-Codes: `0` OK, `1` Fehler oder Abbruch, `2` OK mit Teilfehlern (z. B. Zugriff verweigert, gesperrte Dateien), `3` Plan wurde nach dem Erstellen verändert (`apply`, nichts ausgeführt).
 - Der letzte Zugriffszeitstempel (Last Access) kann sich durch das Hashen ändern. Windows aktualisiert ihn standardmäßig kaum.
 
 ## Aufräumen: plan, apply, undo (Phase 2)
@@ -28,6 +28,7 @@ ordner-cleanup index remove <pfad>
 ```
 ordner-cleanup plan dedupe <pfad> [--keep oldest|newest|path:<absoluter ordner>] [--out <plan.json>]
 ordner-cleanup plan dedupe-dirs <pfad> [--keep oldest|newest|path:<absoluter ordner>] [--min-size <größe>] [--out <plan.json>]
+ordner-cleanup plan seal <plan.json> [--yes]
 ordner-cleanup apply <plan.json> [--yes] [--allow-large]
 ordner-cleanup undo <run-id> [--root <wurzel>] [--yes]
 ordner-cleanup runs [<wurzel>]

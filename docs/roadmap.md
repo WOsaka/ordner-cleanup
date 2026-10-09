@@ -76,7 +76,7 @@ Alle Phasen 1 bis 6d sind im Code umgesetzt. Die folgenden Ideen stammen aus den
 - Offene Handtests abarbeiten (GUI 5a bis 5e, geplante Läufe mit Toast, LLM-Spikes, VM/RDP), vor allem den **echten Cloud-only-Platzhalter**
 - ~~Rundreise-Property-Tests: zufälliger Baum → Plan → Apply → Undo ergibt den Ausgangsbaum bitgleich~~ erledigt: `tests/roundtrip_random.rs` (alle sechs Planer in zufälliger Reihenfolge, Idempotenz je Planer, Undo rückwärts; 8 Seeds in `cargo test`, weitere per `--ignored`)
 - Lasttest mit ca. 1 Mio. Dateien (Index-Größe, Speicher der GUI-Tabellen, inkrementeller Scan)
-- Plan-Integrität: Hash der Plan-Datei, vor dem Apply geprüft
+- ~~Plan-Integrität: Hash der Plan-Datei, vor dem Apply geprüft~~ umgesetzt (siehe unten)
 - Release 1.0 taggen
 
 ### 7.1 Lücken schließen
@@ -159,3 +159,4 @@ Kleine Sofortgewinne zwischendurch: Explorer-Kontextmenü, Inhalts-Hash als Cach
 | Phase 6c: GUI-Bedienung (Kennzahl-Kacheln, Aufräumen als Karten, Theme hell/dunkel, Tastaturkürzel, Skala) | [`features/gui-bedienung.md`](features/gui-bedienung.md), Plan: [`implementation-plans/gui-bedienung.md`](implementation-plans/gui-bedienung.md) | Umgesetzt (Stufe 1 bis 4, Schritte 1 bis 20); Handtests in `manual-tests.md` 5a bis 5d (Optik, DPI, Windows-Modus) offen |
 | Phase 6d: GUI-Hilfe (Kurztexte zu Seiten, Karten und Review, F1, Link zur Doku) | [`features/gui-hilfe.md`](features/gui-hilfe.md), Plan: [`implementation-plans/gui-hilfe.md`](implementation-plans/gui-hilfe.md) | Im Code umgesetzt (Schritte 1 bis 9); Handtests in `manual-tests.md` 5e offen |
 | 7.1: Duplikate ganzer Ordner (`plan dedupe-dirs`) | [`features/ordner-duplikate.md`](features/ordner-duplikate.md), Plan: [`implementation-plans/ordner-duplikate.md`](implementation-plans/ordner-duplikate.md) | Umgesetzt (`plan dedupe-dirs`, Bericht, GUI-Karte, Rundreise-Test); offen: Handtest auf echten Ordnern (`manual-tests.md` 1a) |
+| 7.0: Plan-Integrität (Prüfsumme der Plan-Datei, `plan seal`, Exit-Code 3) | [`features/plan-integritaet.md`](features/plan-integritaet.md), Plan: [`implementation-plans/plan-integritaet.md`](implementation-plans/plan-integritaet.md) | Umgesetzt (Plan-Format v3, Prüfung in CLI und GUI, `plan seal`); offen: Handtest mit Notepad und GUI (`manual-tests.md` 1b) |

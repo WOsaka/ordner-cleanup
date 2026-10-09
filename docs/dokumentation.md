@@ -197,9 +197,10 @@ ordner-cleanup plan junk       <pfad> [--category system,temp,downloads,installe
 ordner-cleanup plan empty-dirs <pfad> [--out <plan.json>]
 ordner-cleanup plan archive    <pfad> [--older-than 2y] [--out <plan.json>]
 ordner-cleanup plan versions   <pfad> [--min-age 30d] [--out <plan.json>]
+ordner-cleanup plan seal       <plan.json> [--yes]
 ```
 
-Ohne `--out` heißt die Datei `plan-<zeitstempel>.json` und liegt im aktuellen Ordner.
+Ohne `--out` heißt die Datei `plan-<zeitstempel>.json` und liegt im aktuellen Ordner. `plan seal` versiegelt einen von Hand geänderten Plan neu (siehe [6.1](#61-ablauf)).
 
 ### apply, undo, runs, purge
 
@@ -334,23 +335,31 @@ Mehrere gescannte Wurzeln: Ohne Pfad listet `report` die vorhandenen Wurzeln und
 scan  →  plan <aktion>  →  Plan prüfen  →  apply  →  (undo)  →  (purge)
 ```
 
-Voraussetzung: Die Wurzel ist gescannt. `plan` liest nur den Index. Der Plan ist eine JSON-Datei (`version: 2`) mit
+Voraussetzung: Die Wurzel ist gescannt. `plan` liest nur den Index. Der Plan ist eine JSON-Datei (`version: 3`) mit
 
+- `integrity`: Prüfsumme des Inhalts (`sha256:<64 Hex-Zeichen>`), als erstes Feld; `plan` nennt sie gekürzt in der Ausgabe
 - `kind`, `root`, `created` und den Aufrufparametern
 - `actions`: jede geplante Aktion mit `id`, `type`, `path`, `size`, `mtime`, `reason` und je nach Typ `hash`, `keep`, `target`
 - `skipped`: Kandidaten, die nicht geplant wurden, mit Grund
 
-Pläne der Version 1 (Phase 2) und ihre Journale funktionieren unverändert weiter.
+Pläne der Versionen 1 und 2 und ihre Journale funktionieren weiter. Sie haben keine Prüfsumme; `apply` (und die GUI im Bestätigungsdialog und in der Kopfzeile des Plans) warnt deshalb „Ungeschützter Plan (Format N): Änderungen an der Datei werden nicht erkannt.“
+
+**Prüfsumme:** Die Prüfsumme ist SHA-256 über den Plan in kanonischer Form (geparst und kompakt neu geschrieben, ohne `integrity`). Einrückung, Zeilenenden (CRLF/LF) und die Reihenfolge der JSON-Schlüssel ändern sie deshalb nicht; ein Editor, der die Datei nur neu formatiert, löst keinen Fehlalarm aus. Jede inhaltliche Änderung (ein Wert, eine entfernte oder hinzugefügte Aktion, ein Übersprungener) ändert sie. Ein Plan im Format 3 ohne `integrity` oder mit falsch formatiertem Wert ist ungültig; ein Plan im Format 1 oder 2 darf das Feld nicht tragen. Die Prüfsumme schützt vor Versehen (Editor, Sync-Konflikt, halber Schreibvorgang), nicht vor Absicht: Wer die Datei schreiben kann, kann sie auch neu versiegeln.
+
+**Plan von Hand ändern:** Wer einen Plan bewusst bearbeitet (z. B. Aktionen streicht), versiegelt ihn danach mit `plan seal <plan.json>`. Der Befehl zeigt Art, Wurzel, Anzahl der Aktionen und Übersprungenen, den bisherigen Zustand der Prüfsumme und die neue Prüfsumme, fragt `j/N` und ersetzt die Datei dann atomar. Ein Plan im Format 1 oder 2 wird dabei auf Format 3 gehoben. Ein strukturell ungültiger Plan wird nicht versiegelt. Ist die Prüfsumme schon richtig, meldet `plan seal` „Plan ist bereits versiegelt“ und lässt die Datei unverändert. Ohne Terminal braucht `plan seal` wie `apply` die Option `--yes`. Eine Option, die Prüfung beim `apply` abzuschalten, gibt es nicht.
+
+**Teilplan aus der GUI:** Werden in der Review Einträge abgewählt, entsteht eine neue Datei `<name>-auswahl-<zeitstempel>.json` mit eigener Prüfsumme; das Original bleibt unverändert. Vor dem Anwenden prüft die GUI, ob die geöffnete Plan-Datei auf der Platte noch dem geladenen Plan entspricht. Wurde sie inzwischen verändert, führt sie nichts aus und bietet „Plan neu laden“ an.
 
 ### 6.2 apply
 
 `apply <plan.json>` führt den Plan aus:
 
-1. Zeigt eine Übersicht und fragt einmal `j/N`. In nicht interaktiven Sitzungen (Skript, Pipe) bricht `apply` **ohne `--yes` ab**, statt zu raten.
-2. Prüft unabhängig vom Plan noch einmal alle Schutzregeln.
-3. Prüft **je Aktion**, ob Größe, Änderungszeit und (bei `dedupe`) Hash von Datei und behaltener Kopie noch zum Plan passen. Weicht etwas ab, wird nur diese Aktion als `stale` übersprungen, der Rest läuft weiter. Fehlt die behaltene Datei, passiert in der Gruppe nichts.
-4. Schreibt vor jeder Änderung einen Journal-Eintrag (mit `fsync`) und führt dann die Aktion aus.
-5. Gibt am Ende die Lauf-ID und eine Bilanz je Aktionstyp aus.
+1. Prüft die Prüfsumme der Plan-Datei. Weicht sie ab, bricht `apply` vor jeder Dateioperation ab („Plan wurde nach dem Erstellen verändert“, mit erwarteter und gefundener Prüfsumme, je 12 Zeichen), Exit-Code `3`, kein Lauf im Journal.
+2. Zeigt eine Übersicht und fragt einmal `j/N`. In nicht interaktiven Sitzungen (Skript, Pipe) bricht `apply` **ohne `--yes` ab**, statt zu raten.
+3. Prüft unabhängig vom Plan noch einmal alle Schutzregeln.
+4. Prüft **je Aktion**, ob Größe, Änderungszeit und (bei `dedupe`) Hash von Datei und behaltener Kopie noch zum Plan passen. Weicht etwas ab, wird nur diese Aktion als `stale` übersprungen, der Rest läuft weiter. Fehlt die behaltene Datei, passiert in der Gruppe nichts.
+5. Schreibt vor jeder Änderung einen Journal-Eintrag (mit `fsync`) und führt dann die Aktion aus.
+6. Gibt am Ende die Lauf-ID und eine Bilanz je Aktionstyp aus.
 
 Ein zweiter `apply` desselben Plans ändert nichts (Idempotenz). Ein belegtes Ziel wird nie überschrieben; es bekommt ein Suffix wie `datei (2).txt`.
 
@@ -597,6 +606,7 @@ dirs = ["D:\\Logs"]           # optional: nur direkt in diesen Ordnern
 | `0` | Alles erledigt |
 | `1` | Fehler oder Abbruch (auch „N“ bei der Rückfrage, Strg+C beim Scan) |
 | `2` | Erfolg mit Teilfehlern: z. B. Zugriff verweigert beim Scan, unvollständiger Scan im `report`, bei `apply`/`undo` übersprungene oder `stale` Aktionen, Fehler einzelner Aktionen, Kollisionen beim `undo` |
+| `3` | Plan wurde nach dem Erstellen verändert (Integritätsprüfung bei `apply` fehlgeschlagen); nichts ausgeführt |
 
 ---
 
@@ -605,6 +615,8 @@ dirs = ["D:\\Logs"]           # optional: nur direkt in diesen Ordnern
 **„Kein Scan für … vorhanden“:** `report` und `plan` brauchen vorher `scan` auf demselben Pfad. `index list` zeigt, was im Index steht.
 
 **`apply` bricht ohne Rückfrage ab:** In einer Sitzung ohne Terminal (Skript, Pipe) muss `--yes` gesetzt sein.
+
+**„Plan wurde nach dem Erstellen verändert“ (Exit-Code `3`):** Der Inhalt der Plan-Datei passt nicht mehr zu ihrer Prüfsumme, z. B. weil sie in einem Editor geändert, von einem Sync-Konflikt ersetzt oder nur halb geschrieben wurde. Es wurde nichts ausgeführt. Den Plan prüfen: War die Änderung gewollt, mit `plan seal <plan.json>` neu versiegeln; sonst einen neuen Plan erzeugen. Reine Formatierung (Einrückung, Zeilenenden) löst den Fehler nicht aus. Bekannte Lücke: Wer `version` auf `2` zurücksetzt und `integrity` löscht, bekommt nur die Warnung „ungeschützter Plan“; die Prüfung schützt vor Versehen, nicht vor Absicht.
 
 **Viele Aktionen sind `stale`:** Die Dateien haben sich seit dem Plan geändert. Neu scannen und neuen Plan erzeugen.
 

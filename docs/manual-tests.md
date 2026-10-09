@@ -25,6 +25,14 @@ Vorbereitung: `cargo build --release`, dann `target\release\ordner-cleanup.exe` 
 - [ ] GUI: Karte „Doppelte Ordner“ steht vor „Duplikate“, zeigt die Zahl nach dem Scan, Review zeigt Dateianzahl und behaltenen Ordner; Teilauswahl anwenden und zurückdrehen.
 - [ ] Laufzeit: `plan dedupe-dirs` auf einem großen echten Index (> 500.000 Dateien) bleibt unter etwa 15 s.
 
+## 1b. Plan-Integrität (Phase 7.0)
+
+- [ ] Plan erzeugen, in Notepad öffnen und unverändert speichern (auch „Speichern unter“ mit CRLF): `apply` läuft ohne Fehlalarm durch.
+- [ ] Plan in Notepad ändern (einen Wert oder eine Aktion löschen): `apply` bricht mit „Plan wurde nach dem Erstellen verändert“ ab, `$LASTEXITCODE` ist `3`, `runs` zeigt keinen neuen Lauf, im Ordner hat sich nichts geändert.
+- [ ] Danach `plan seal <plan.json>`: Übersicht stimmt (Aktionen, alte und neue Prüfsumme), „N“ lässt die Datei unverändert (Exit-Code `1`), „j“ versiegelt; `apply` läuft wieder durch.
+- [ ] GUI: Plan öffnen, Datei extern in Notepad ändern, „Anwenden“ drücken: Dialog „Plan wurde verändert“ mit „Plan neu laden“, nichts ausgeführt; „Plan neu laden“ zeigt den geänderten Plan bzw. eine Fehlermeldung.
+- [ ] Alter Plan aus einem früheren Release (Format 2): `apply` und GUI zeigen „Ungeschützter Plan (Format 2) …“, der Lauf geht weiter.
+
 ## 2. Geplante Läufe (Phase 5)
 
 - [ ] `schedule add <profil> --daily 09:00`, `schedule list` zeigt die Aufgabe, in der Windows-Aufgabenplanung ist sie sichtbar.

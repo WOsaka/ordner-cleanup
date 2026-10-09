@@ -1,6 +1,6 @@
 ---
 title: "Plan-Integrität (Hash der Plan-Datei, vor dem Apply geprüft)"
-status: approved       # draft | approved | implemented
+status: implemented    # draft | approved | implemented
 created: 2026-10-09
 updated: 2026-10-09
 ---
@@ -15,10 +15,10 @@ Zwischen `plan` und `apply` liegt bewusst ein Review. In dieser Zeit kann sich d
 
 ## Goals
 
-- [ ] Neue Pläne (Format v3) tragen ein Feld `integrity` mit dem SHA-256 ihres kanonischen Inhalts; `plan …` schreibt es automatisch.
-- [ ] `apply` (CLI und GUI) prüft den Hash vor jeder Dateioperation und bricht bei Abweichung mit klarer Meldung und eigenem Exit-Code ab.
-- [ ] Ältere Pläne (v1/v2) bleiben anwendbar, mit sichtbarer Warnung „ungeschützter Plan“.
-- [ ] Bewusste Handänderungen bleiben möglich über `plan seal <datei>`, ohne dass die Prüfung abschaltbar ist.
+- [x] Neue Pläne (Format v3) tragen ein Feld `integrity` mit dem SHA-256 ihres kanonischen Inhalts; `plan …` schreibt es automatisch.
+- [x] `apply` (CLI und GUI) prüft den Hash vor jeder Dateioperation und bricht bei Abweichung mit klarer Meldung und eigenem Exit-Code ab.
+- [x] Ältere Pläne (v1/v2) bleiben anwendbar, mit sichtbarer Warnung „ungeschützter Plan“.
+- [x] Bewusste Handänderungen bleiben möglich über `plan seal <datei>`, ohne dass die Prüfung abschaltbar ist.
 
 ## Out of Scope
 
