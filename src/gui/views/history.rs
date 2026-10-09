@@ -443,6 +443,7 @@ mod tests {
             Entry::UndoDone {
                 run: run(),
                 action: 1,
+                to: None,
             },
             Entry::RunEnd {
                 run: run(),

@@ -326,6 +326,7 @@ impl Restore<'_> {
                         self.journal.append(&Entry::UndoDone {
                             run: self.run.clone(),
                             action,
+                            to: None,
                         })?;
                         if let Some(parent) = to.parent().filter(|_| cleanup) {
                             quarantine::cleanup_empty_parents(self.env.fs, parent, stop);
@@ -379,6 +380,7 @@ impl Restore<'_> {
                 self.journal.append(&Entry::UndoDone {
                     run: self.run.clone(),
                     action,
+                    to: None,
                 })?;
                 Ok(RestoreStatus::Restored)
             }
@@ -563,6 +565,7 @@ pub fn undo_run(root: &Path, run: &RunId, env: &UndoEnv) -> Result<UndoOutcome, 
             Ok(()) => journal.append(&Entry::UndoDone {
                 run: run.clone(),
                 action: op.action,
+                to: None,
             })?,
             Err(e) => {
                 results[*index].status = RestoreStatus::Failed(format!(

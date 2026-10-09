@@ -104,6 +104,10 @@ pub enum Entry {
     UndoDone {
         run: RunId,
         action: u32,
+        /// Nur beim einzelnen Zurückholen, wenn die Datei unter anderem Namen als `from`
+        /// zurückkam.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to: Option<String>,
     },
     UndoConflict {
         run: RunId,
@@ -284,6 +288,33 @@ mod tests {
         for e in entries {
             w.append(e).unwrap();
         }
+    }
+
+    #[test]
+    fn undo_done_ohne_to_wird_gelesen_und_nicht_geschrieben() {
+        let alt = r#"{"t":"undo_done","run":"20261003-120000-ab12","action":4}"#;
+        let e: Entry = serde_json::from_str(alt).unwrap();
+        assert_eq!(
+            e,
+            Entry::UndoDone {
+                run: run(),
+                action: 4,
+                to: None
+            }
+        );
+        assert_eq!(serde_json::to_string(&e).unwrap(), alt);
+    }
+
+    #[test]
+    fn undo_done_mit_to_rundreist() {
+        let e = Entry::UndoDone {
+            run: run(),
+            action: 4,
+            to: Some(r"D:\Daten\a (2).txt".into()),
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains(r#""to":"#));
+        assert_eq!(serde_json::from_str::<Entry>(&json).unwrap(), e);
     }
 
     #[test]
