@@ -211,7 +211,11 @@ fn belegter_ursprung_ergibt_neuen_namen_und_undo_meldet_keine_kollision() {
         panic!("erwartet: umbenannt zurückgeholt, war {:?}", results[0].2);
     };
     let renamed = b.with_file_name("kopie1 (2).txt");
-    assert_eq!(Path::new(to), renamed);
+    // Das Journal speichert die lange Form des Pfads, das Temp-Verzeichnis kann Kurznamen (8.3) nennen.
+    assert_eq!(
+        std::fs::canonicalize(to).unwrap(),
+        std::fs::canonicalize(&renamed).unwrap()
+    );
     assert_eq!(std::fs::read_to_string(&b).unwrap(), "neue datei");
     assert_eq!(
         std::fs::read_to_string(&renamed).unwrap(),
