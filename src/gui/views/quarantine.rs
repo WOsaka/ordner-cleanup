@@ -1,22 +1,25 @@
 //! Ansicht „Quarantäne“: Inhalt, Größe und Ablauf; einzelne Einträge zurückholen.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Local, Utc};
 use eframe::egui;
 use egui_extras::{Column as TCol, TableBuilder};
 
-use crate::change::restore::QuarantineItem;
+use crate::change::restore::{HashCheck, ItemOutcome, ItemResult, QuarantineItem, RestorePreview};
 use crate::change::RunId;
 use crate::gui::format::{short_path, time_of, StatusStyle, Tone};
 use crate::gui::help::Topic;
-use crate::gui::shell::{Answer, Page, Route, Shell, TaskResult};
+use crate::gui::shell::{Answer, Dialog, Page, Route, Shell, TaskResult};
 use crate::gui::tasks::TaskKind;
 use crate::gui::texts;
 use crate::gui::theme;
 use crate::gui::widgets::help_button::heading_with_help;
 use crate::gui::widgets::table::{path_menu, status_cell, time_cell};
-use crate::ops::quarantine::{quarantine_list, QuarantineList};
+use crate::ops::quarantine::{
+    quarantine_list, restore_check, restore_execute, QuarantineList, Selected,
+};
 use crate::paths;
 
 pub const SEARCH_ID: &str = "quarantine-search";
@@ -196,7 +199,176 @@ pub fn item_status(item: &QuarantineItem) -> StatusStyle {
     }
 }
 
+/// Eine ausgewählte Zeile, wie sie den Rückfragen und der Vorschau dient.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingItem {
+    selected: Selected,
+    origin: String,
+    size: u64,
+}
+
+/// Eine Zeile der Rückfrage: woher, wohin, ob umbenannt, Ergebnis der Hash-Prüfung.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewLine {
+    pub origin: String,
+    pub target: String,
+    pub renamed: bool,
+    pub hash: HashCheck,
+}
+
+/// Die Vorschau zu einem ausgewählten Eintrag (Wurzel wie im Index verglichen).
+fn find_preview<'a>(
+    item: &PendingItem,
+    previews: &'a [(PathBuf, RestorePreview)],
+) -> Option<&'a RestorePreview> {
+    let key = paths::path_key(&item.selected.root);
+    previews
+        .iter()
+        .find(|(root, p)| {
+            p.run == item.selected.run
+                && p.action == item.selected.action
+                && paths::path_key(root) == key
+        })
+        .map(|(_, p)| p)
+}
+
+/// Ordnet die Vorschau der Auswahl zu (in der Reihenfolge der Auswahl). Einträge ohne Vorschau
+/// (inzwischen nicht mehr zurückholbar) fehlen.
+fn preview_lines(
+    items: &[PendingItem],
+    previews: &[(PathBuf, RestorePreview)],
+) -> Vec<PreviewLine> {
+    items
+        .iter()
+        .filter_map(|item| {
+            find_preview(item, previews).map(|p| PreviewLine {
+                origin: item.origin.clone(),
+                target: paths::display(&p.target),
+                renamed: p.renamed,
+                hash: p.hash,
+            })
+        })
+        .collect()
+}
+
+fn file_name(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned())
+}
+
+fn entries_text(count: usize) -> String {
+    match count {
+        1 => "1 Eintrag".to_string(),
+        n => format!("{} Einträge", texts::grouped(n as u64)),
+    }
+}
+
+/// Wie viele Ziele die Rückfrage einzeln aufzählt.
+const SHOWN_TARGETS: usize = 15;
+/// Wie viele Fehler- bzw. Fehlt-Zeilen die Ergebnismeldung aufzählt.
+const SHOWN_PROBLEMS: usize = 10;
+
+/// Text der Rückfrage vor dem Zurückholen.
+fn restore_confirm_text(count: usize, bytes: u64, lines: &[PreviewLine]) -> String {
+    let mut text = format!(
+        "{} ({}) zurückholen?\n\nZiele:",
+        entries_text(count),
+        texts::bytes(bytes)
+    );
+    for line in lines.iter().take(SHOWN_TARGETS) {
+        if line.renamed {
+            text.push_str(&format!(
+                "\n  {}  →  {}",
+                line.origin,
+                file_name(&line.target)
+            ));
+        } else {
+            text.push_str(&format!("\n  {}", line.target));
+        }
+    }
+    if lines.len() > SHOWN_TARGETS {
+        text.push_str(&format!(
+            "\n  … und {} weitere",
+            lines.len() - SHOWN_TARGETS
+        ));
+    }
+    let with = |check| lines.iter().filter(|l| l.hash == check).count();
+    let (changed, cloud) = (with(HashCheck::Mismatch), with(HashCheck::CloudOnly));
+    if changed > 0 {
+        text.push_str(&format!(
+            "\n\nWarnung: {changed} Datei(en) wurden in der Quarantäne verändert (anderer \
+             Inhalt als beim Verschieben). Sie werden trotzdem zurückgeholt."
+        ));
+    }
+    if cloud > 0 {
+        text.push_str(&format!(
+            "\n\nHinweis: {cloud} Datei(en) liegen nur in der Cloud und werden nicht \
+             heruntergeladen."
+        ));
+    }
+    text.push_str(
+        "\n\nBelegte Namen werden nie überschrieben; die Datei bekommt dann einen neuen Namen.",
+    );
+    text
+}
+
+/// Text der Meldung nach dem Zurückholen. `requested` ist die Zahl der gewählten Einträge;
+/// weniger Ergebnisse heißen: abgebrochen.
+fn restore_result_text(requested: usize, results: &[(PathBuf, RunId, ItemResult)]) -> String {
+    let outcomes = || results.iter().map(|(_, _, r)| r);
+    let count = |f: &dyn Fn(&ItemOutcome) -> bool| outcomes().filter(|r| f(&r.outcome)).count();
+    let restored = count(&|o| matches!(o, ItemOutcome::Restored { .. }));
+    let renamed = count(&|o| matches!(o, ItemOutcome::Restored { renamed: true, .. }));
+    let missing = count(&|o| matches!(o, ItemOutcome::Missing));
+    let failed = count(&|o| matches!(o, ItemOutcome::Failed(_)));
+    let already = count(&|o| matches!(o, ItemOutcome::AlreadyRestored));
+    let mut text = format!(
+        "{restored} zurückgeholt, davon {renamed} umbenannt, {missing} fehlen, {failed} Fehler"
+    );
+    if already > 0 {
+        text.push_str(&format!(", {already} schon zurück"));
+    }
+    if results.len() < requested {
+        text.push_str(&format!(
+            "\nAbgebrochen: {} von {requested} bearbeitet.",
+            results.len()
+        ));
+    }
+    for r in outcomes().take(usize::MAX) {
+        if let ItemOutcome::Restored { to, renamed: true } = &r.outcome {
+            text.push_str(&format!("\nUmbenannt: {}  →  {}", r.origin, file_name(to)));
+        }
+    }
+    let problems = |keep: fn(&ItemOutcome) -> Option<String>| -> Vec<String> {
+        outcomes()
+            .filter_map(|r| keep(&r.outcome).map(|prefix| format!("\n{prefix}: {}", r.origin)))
+            .collect()
+    };
+    let errors = problems(|o| match o {
+        ItemOutcome::Failed(e) => Some(format!("Fehler ({e})")),
+        _ => None,
+    });
+    for line in errors.iter().take(SHOWN_PROBLEMS) {
+        text.push_str(line);
+    }
+    if errors.len() > SHOWN_PROBLEMS {
+        text.push_str(&format!(
+            "\n… und {} weitere",
+            errors.len() - SHOWN_PROBLEMS
+        ));
+    }
+    let gone = problems(|o| matches!(o, ItemOutcome::Missing).then(|| "Fehlt".to_string()));
+    for line in gone.iter().take(SHOWN_PROBLEMS) {
+        text.push_str(line);
+    }
+    text
+}
+
 const TASK_LOAD: &str = "Quarantäne laden";
+const TASK_CHECK: &str = "Zurückholen prüfen";
+const TASK_RESTORE: &str = "Zurückholen";
+const ID_RESTORE: &str = "quarantine.restore";
 const ROW_H: f32 = 24.0;
 
 /// Geladene Einträge samt Hinweisen.
@@ -230,13 +402,125 @@ pub struct QuarantineView {
     sort: Sort,
     visible: Vec<usize>,
     visible_key: Option<VisibleKey>,
+    selected: HashSet<SelKey>,
+    pending: Option<Vec<PendingItem>>,
+}
+
+/// Identität eines Eintrags über Neuladen hinweg.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SelKey {
+    root_key: String,
+    run: RunId,
+    action: u32,
+}
+
+impl SelKey {
+    fn of(row: &Row) -> Self {
+        Self {
+            root_key: row.root_key.clone(),
+            run: row.item.run.clone(),
+            action: row.item.action,
+        }
+    }
 }
 
 impl QuarantineView {
+    /// Wählt alle sichtbaren Zeilen, die noch in der Quarantäne liegen.
+    fn select_filtered(&mut self, data: &Data) {
+        for &i in &self.visible {
+            let row = &data.rows[i];
+            if row.item.present {
+                self.selected.insert(SelKey::of(row));
+            }
+        }
+    }
+
+    fn clear_selection(&mut self) {
+        self.selected.clear();
+    }
+
+    /// Die ausgewählten Zeilen in Anzeigereihenfolge.
+    fn pending_items(&self, data: &Data) -> Vec<PendingItem> {
+        self.visible
+            .iter()
+            .map(|&i| &data.rows[i])
+            .filter(|r| self.selected.contains(&SelKey::of(r)))
+            .map(|r| PendingItem {
+                selected: Selected {
+                    root: r.root.clone(),
+                    run: r.item.run.clone(),
+                    action: r.item.action,
+                },
+                origin: r.item.origin.clone(),
+                size: r.item.size,
+            })
+            .collect()
+    }
+
+    /// „Zurückholen …“: erst prüfen (Ziele, Hash), dann fragen.
+    fn begin_restore(&mut self, data: &Data, shell: &mut Shell) {
+        let items = self.pending_items(data);
+        if items.is_empty() {
+            return;
+        }
+        let selection: Vec<Selected> = items.iter().map(|i| i.selected.clone()).collect();
+        self.pending = Some(items);
+        shell.spawn(Route::Quarantine, TASK_CHECK, TaskKind::Read, move |_| {
+            restore_check(&selection)
+        });
+    }
+
+    fn on_checked(&mut self, result: TaskResult, shell: &mut Shell) {
+        let previews = match result.map(|b| b.downcast::<Vec<(PathBuf, RestorePreview)>>()) {
+            Ok(Ok(previews)) => *previews,
+            Ok(Err(_)) => return,
+            Err(e) => {
+                self.pending = None;
+                return shell.show_error(TASK_CHECK, &e);
+            }
+        };
+        let Some(items) = self.pending.take() else {
+            return;
+        };
+        let items: Vec<PendingItem> = items
+            .into_iter()
+            .filter(|i| find_preview(i, &previews).is_some())
+            .collect();
+        if items.is_empty() {
+            return shell.message(TASK_RESTORE, texts::QUARANTINE_NOTHING_TO_RESTORE);
+        }
+        let lines = preview_lines(&items, &previews);
+        let bytes = items.iter().map(|i| i.size).sum();
+        let text = restore_confirm_text(items.len(), bytes, &lines);
+        self.pending = Some(items);
+        shell.confirm(Dialog::Confirm {
+            id: ID_RESTORE,
+            title: texts::QUARANTINE_RESTORE_TITLE.into(),
+            text,
+            ok_label: texts::QUARANTINE_RESTORE_OK.into(),
+            must_check: None,
+            checked: false,
+            danger: false,
+        });
+    }
+
+    fn on_restored(&mut self, result: TaskResult, shell: &mut Shell) {
+        match result.map(|b| b.downcast::<(usize, Vec<(PathBuf, RunId, ItemResult)>)>()) {
+            Ok(Ok(done)) => {
+                let (requested, results) = *done;
+                shell.message(TASK_RESTORE, &restore_result_text(requested, &results));
+                self.selected.clear();
+                shell.generation += 1;
+            }
+            Ok(Err(_)) => {}
+            Err(e) => shell.show_error(TASK_RESTORE, &e),
+        }
+    }
+
     /// Setzt die Liste (nach dem Laden); `generation` ist der Stand von `Shell::generation`.
     pub fn set_list(&mut self, list: QuarantineList, generation: u64) {
         let roots: Vec<PathBuf> = list.roots.iter().map(|r| r.root.clone()).collect();
-        let rows = list
+        let rows: Vec<Row> = list
             .roots
             .into_iter()
             .flat_map(|r| {
@@ -251,6 +535,14 @@ impl QuarantineView {
             if !roots.iter().any(|r| paths::path_key(r) == key) {
                 self.root = None;
             }
+        }
+        if !self.selected.is_empty() {
+            let present: HashSet<SelKey> = rows
+                .iter()
+                .filter(|r: &&Row| r.item.present)
+                .map(SelKey::of)
+                .collect();
+            self.selected.retain(|k| present.contains(k));
         }
         self.data = Some(Data {
             rows,
@@ -289,6 +581,9 @@ impl QuarantineView {
         let now = Utc::now();
         ui.label(totals_text(&totals(&data.rows, &self.visible), now));
         self.notes(ui, &data);
+        if !data.rows.is_empty() {
+            self.toolbar(ui, &data, shell);
+        }
         if data.rows.is_empty() {
             ui.add_space(crate::gui::theme::SPACE_M);
             ui.label(texts::QUARANTINE_EMPTY);
@@ -299,6 +594,29 @@ impl QuarantineView {
             self.table(ui, &data, shell);
         }
         self.data = Some(data);
+    }
+
+    fn toolbar(&mut self, ui: &mut egui::Ui, data: &Data, shell: &mut Shell) {
+        ui.horizontal(|ui| {
+            if ui.button(texts::QUARANTINE_SELECT_FILTERED).clicked() {
+                self.select_filtered(data);
+            }
+            let any = !self.selected.is_empty();
+            if ui
+                .add_enabled(any, egui::Button::new(texts::QUARANTINE_CLEAR_SELECTION))
+                .clicked()
+            {
+                self.clear_selection();
+            }
+            let busy = shell.is_running(Route::Quarantine);
+            let restore = ui.add_enabled(
+                any && !busy,
+                egui::Button::new(texts::quarantine_restore_button(self.selected.len())),
+            );
+            if restore.clicked() {
+                self.begin_restore(data, shell);
+            }
+        });
     }
 
     fn filter_bar(&mut self, ui: &mut egui::Ui, data: &Data) {
@@ -355,6 +673,14 @@ impl QuarantineView {
                 self.sort,
             );
             self.visible_key = Some(key);
+            if !self.selected.is_empty() {
+                let shown: HashSet<SelKey> = self
+                    .visible
+                    .iter()
+                    .map(|&i| SelKey::of(&data.rows[i]))
+                    .collect();
+                self.selected.retain(|k| shown.contains(k));
+            }
         }
     }
 
@@ -382,7 +708,9 @@ impl QuarantineView {
 
     fn table(&mut self, ui: &mut egui::Ui, data: &Data, shell: &mut Shell) {
         let avail = ui.available_height();
-        let flex = (ui.available_width() - 4.0 * 110.0 - 150.0).max(240.0);
+        let flex = (ui.available_width() - 26.0 - 4.0 * 110.0 - 150.0).max(240.0);
+        let mut toggled: Option<SelKey> = None;
+        let selected = &self.selected;
         let now = Local::now();
         let mut header_click: Option<SortColumn> = None;
         let sort = self.sort;
@@ -392,6 +720,7 @@ impl QuarantineView {
             .id_salt("quarantine-table-v1")
             .striped(true)
             .max_scroll_height(avail)
+            .column(TCol::exact(26.0))
             .column(TCol::exact(flex * 0.4))
             .column(TCol::exact(flex * 0.6))
             .column(TCol::exact(90.0))
@@ -399,6 +728,7 @@ impl QuarantineView {
             .column(TCol::exact(100.0))
             .column(TCol::remainder().clip(true))
             .header(ROW_H + 4.0, |mut h| {
+                h.col(|_| {});
                 for (title, column) in [
                     (texts::COL_NAME, Some(SortColumn::Name)),
                     (texts::COL_ORIGIN, None),
@@ -436,6 +766,15 @@ impl QuarantineView {
                 body.rows(ROW_H, visible.len(), |mut row| {
                     let r = &rows[visible[row.index()]];
                     let item = &r.item;
+                    row.col(|ui| {
+                        let mut on = selected.contains(&SelKey::of(r));
+                        let changed = ui
+                            .add_enabled(item.present, egui::Checkbox::new(&mut on, ""))
+                            .changed();
+                        if changed {
+                            toggled = Some(SelKey::of(r));
+                        }
+                    });
                     row.col(|ui| {
                         let name = if item.is_dir {
                             texts::quarantine_folder_name(&r.name)
@@ -476,17 +815,46 @@ impl QuarantineView {
         if let Some(column) = header_click {
             self.sort = self.sort.toggled(column);
         }
+        if let Some(key) = toggled {
+            if !self.selected.remove(&key) {
+                self.selected.insert(key);
+            }
+        }
     }
 
-    pub fn on_answer(&mut self, _id: &str, _answer: Answer, _shell: &mut Shell) {}
+    pub fn on_answer(&mut self, id: &str, answer: Answer, shell: &mut Shell) {
+        if id != ID_RESTORE {
+            return;
+        }
+        let Some(items) = self.pending.take() else {
+            return;
+        };
+        if !answer.ok {
+            return;
+        }
+        let selection: Vec<Selected> = items.into_iter().map(|i| i.selected).collect();
+        shell.spawn(
+            Route::Quarantine,
+            TASK_RESTORE,
+            TaskKind::Write,
+            move |ctx| {
+                let requested = selection.len();
+                let results = restore_execute(&selection, ctx)?;
+                Ok((requested, results))
+            },
+        );
+    }
 
     pub fn on_finished(&mut self, name: &str, result: TaskResult, shell: &mut Shell) {
-        if name == TASK_LOAD {
-            match result.map(|b| b.downcast::<QuarantineList>()) {
+        match name {
+            TASK_LOAD => match result.map(|b| b.downcast::<QuarantineList>()) {
                 Ok(Ok(list)) => self.set_list(*list, shell.generation),
                 Ok(Err(_)) => {}
                 Err(e) => shell.show_error(name, &e),
-            }
+            },
+            TASK_CHECK => self.on_checked(result, shell),
+            TASK_RESTORE => self.on_restored(result, shell),
+            _ => {}
         }
     }
 }
@@ -494,6 +862,7 @@ impl QuarantineView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ops::quarantine::RootItems;
     use chrono::TimeZone;
 
     const RUN_A: &str = "20261003-120000-ab12";
@@ -707,6 +1076,260 @@ mod tests {
             ..t
         };
         assert!(!totals_text(&none, now).contains("Ablauf"));
+    }
+
+    fn view_with(rows: Vec<Row>) -> (QuarantineView, Data) {
+        let mut view = QuarantineView::default();
+        let data = Data {
+            roots: vec![PathBuf::from(r"D:\Daten"), PathBuf::from(r"E:\Fotos")],
+            rows,
+            ..Data::default()
+        };
+        view.refresh_visible(&data);
+        (view, data)
+    }
+
+    #[test]
+    fn alle_gefilterten_waehlen_nimmt_nur_vorhandene_sichtbare_zeilen() {
+        let mut rows = rows();
+        rows[1].item.present = false;
+        let (mut view, data) = view_with(rows);
+        view.filter = "alpha".into();
+        view.refresh_visible(&data);
+        view.select_filtered(&data);
+        // „alpha.txt“ fehlt in der Quarantäne, „Alpha2.jpg“ ist da.
+        let picked = view.pending_items(&data);
+        assert_eq!(picked.len(), 1);
+        assert_eq!(picked[0].selected.action, 4);
+        assert_eq!(picked[0].selected.root, PathBuf::from(r"E:\Fotos"));
+        assert_eq!(picked[0].origin, r"E:\Fotos\Urlaub\Alpha2.jpg");
+        assert_eq!(picked[0].size, 200);
+        view.clear_selection();
+        assert!(view.pending_items(&data).is_empty());
+        assert_eq!(view.selected.len(), 0);
+    }
+
+    #[test]
+    fn auswahl_folgt_der_anzeigereihenfolge() {
+        let (mut view, data) = view_with(rows());
+        view.select_filtered(&data);
+        let actions: Vec<u32> = view
+            .pending_items(&data)
+            .iter()
+            .map(|p| p.selected.action)
+            .collect();
+        assert_eq!(actions, [3, 4, 1, 2], "Standard: neueste zuerst");
+    }
+
+    #[test]
+    fn auswahl_ueberlebt_neuladen_und_verliert_verschwundene_eintraege() {
+        let (mut view, data) = view_with(rows());
+        view.select_filtered(&data);
+        assert_eq!(view.selected.len(), 4);
+        // Nach dem Neuladen fehlt Aktion 2.
+        let remaining: Vec<Row> = rows().into_iter().filter(|r| r.item.action != 2).collect();
+        let list = QuarantineList {
+            roots: vec![
+                RootItems {
+                    root: PathBuf::from(r"D:\Daten"),
+                    items: remaining
+                        .iter()
+                        .filter(|r| r.root == Path::new(r"D:\Daten"))
+                        .map(|r| r.item.clone())
+                        .collect(),
+                },
+                RootItems {
+                    root: PathBuf::from(r"E:\Fotos"),
+                    items: remaining
+                        .iter()
+                        .filter(|r| r.root == Path::new(r"E:\Fotos"))
+                        .map(|r| r.item.clone())
+                        .collect(),
+                },
+            ],
+            unreadable: 0,
+            unreachable: vec![],
+        };
+        view.set_list(list, 1);
+        assert_eq!(view.selected.len(), 3);
+    }
+
+    fn line(origin: &str, target: &str, hash: HashCheck) -> PreviewLine {
+        PreviewLine {
+            origin: origin.into(),
+            target: target.into(),
+            renamed: origin != target,
+            hash,
+        }
+    }
+
+    #[test]
+    fn vorschau_wird_der_auswahl_zugeordnet() {
+        let items = vec![
+            PendingItem {
+                selected: Selected {
+                    root: PathBuf::from(r"D:\Daten"),
+                    run: RunId::parse(RUN_A).unwrap(),
+                    action: 2,
+                },
+                origin: r"D:\Daten\alpha.txt".into(),
+                size: 100,
+            },
+            PendingItem {
+                selected: Selected {
+                    root: PathBuf::from(r"D:\Daten"),
+                    run: RunId::parse(RUN_A).unwrap(),
+                    action: 1,
+                },
+                origin: r"D:\Daten\Zeta.TXT".into(),
+                size: 300,
+            },
+        ];
+        let previews = vec![
+            (
+                PathBuf::from(r"d:\daten"),
+                RestorePreview {
+                    run: RunId::parse(RUN_A).unwrap(),
+                    action: 1,
+                    target: PathBuf::from(r"D:\Daten\Zeta (2).TXT"),
+                    renamed: true,
+                    hash: HashCheck::Mismatch,
+                },
+            ),
+            (
+                PathBuf::from(r"D:\Daten"),
+                RestorePreview {
+                    run: RunId::parse(RUN_A).unwrap(),
+                    action: 2,
+                    target: PathBuf::from(r"D:\Daten\alpha.txt"),
+                    renamed: false,
+                    hash: HashCheck::Match,
+                },
+            ),
+        ];
+        let lines = preview_lines(&items, &previews);
+        assert_eq!(
+            lines,
+            [
+                line(
+                    r"D:\Daten\alpha.txt",
+                    r"D:\Daten\alpha.txt",
+                    HashCheck::Match
+                ),
+                line(
+                    r"D:\Daten\Zeta.TXT",
+                    r"D:\Daten\Zeta (2).TXT",
+                    HashCheck::Mismatch
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn rueckfrage_nennt_anzahl_ziele_umbenennung_und_warnungen() {
+        let mut lines: Vec<PreviewLine> = (0..20)
+            .map(|i| {
+                let path = format!(r"D:\Daten\datei{i}.txt");
+                line(&path, &path, HashCheck::NotApplicable)
+            })
+            .collect();
+        lines[0] = line(
+            r"D:\Daten\kopie.txt",
+            r"D:\Daten\kopie (2).txt",
+            HashCheck::Mismatch,
+        );
+        lines[1].hash = HashCheck::CloudOnly;
+        let text = restore_confirm_text(20, 20_480, &lines);
+        assert!(
+            text.starts_with(&format!("20 Einträge ({})", texts::bytes(20_480))),
+            "{text}"
+        );
+        assert!(
+            text.contains(r"D:\Daten\kopie.txt  →  kopie (2).txt"),
+            "{text}"
+        );
+        assert!(text.contains(r"D:\Daten\datei14.txt"), "{text}");
+        assert!(!text.contains(r"D:\Daten\datei15.txt"), "{text}");
+        assert!(text.contains("und 5 weitere"), "{text}");
+        assert!(
+            text.contains("Warnung") && text.contains("verändert"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Cloud") && text.contains("nicht heruntergeladen"),
+            "{text}"
+        );
+        assert!(text.contains("nie überschrieben"), "{text}");
+        let one = restore_confirm_text(1, 5, &lines[2..3]);
+        assert!(
+            one.starts_with(&format!("1 Eintrag ({})", texts::bytes(5))),
+            "{one}"
+        );
+        assert!(!one.contains("Warnung") && !one.contains("Cloud") && !one.contains("weitere"));
+    }
+
+    fn result(action: u32, origin: &str, outcome: ItemOutcome) -> (PathBuf, RunId, ItemResult) {
+        (
+            PathBuf::from(r"D:\Daten"),
+            RunId::parse(RUN_A).unwrap(),
+            ItemResult {
+                action,
+                origin: origin.into(),
+                outcome,
+            },
+        )
+    }
+
+    #[test]
+    fn ergebnistext_zaehlt_und_nennt_probleme() {
+        let results = vec![
+            result(
+                1,
+                r"D:\Daten\a.txt",
+                ItemOutcome::Restored {
+                    to: r"D:\Daten\a.txt".into(),
+                    renamed: false,
+                },
+            ),
+            result(
+                2,
+                r"D:\Daten\b.txt",
+                ItemOutcome::Restored {
+                    to: r"D:\Daten\b (2).txt".into(),
+                    renamed: true,
+                },
+            ),
+            result(3, r"D:\Daten\c.txt", ItemOutcome::Missing),
+            result(4, r"D:\Daten\d.txt", ItemOutcome::Failed("gesperrt".into())),
+            result(5, r"D:\Daten\e.txt", ItemOutcome::AlreadyRestored),
+        ];
+        let text = restore_result_text(5, &results);
+        assert!(
+            text.starts_with("2 zurückgeholt, davon 1 umbenannt, 1 fehlen, 1 Fehler"),
+            "{text}"
+        );
+        assert!(text.contains("1 schon zurück"), "{text}");
+        assert!(text.contains(r"D:\Daten\b.txt  →  b (2).txt"), "{text}");
+        assert!(
+            text.contains(r"Fehler (gesperrt): D:\Daten\d.txt"),
+            "{text}"
+        );
+        assert!(text.contains(r"Fehlt: D:\Daten\c.txt"), "{text}");
+        assert!(!text.contains("Abgebrochen"), "{text}");
+    }
+
+    #[test]
+    fn ergebnistext_meldet_abbruch_und_begrenzt_fehlerzeilen() {
+        let many: Vec<_> = (0..30)
+            .map(|i| result(i, &format!(r"D:\x{i}.txt"), ItemOutcome::Failed("e".into())))
+            .collect();
+        let text = restore_result_text(40, &many);
+        assert!(text.contains("Abgebrochen: 30 von 40 bearbeitet"), "{text}");
+        assert!(
+            text.contains(r"D:\x9.txt") && !text.contains(r"D:\x10.txt"),
+            "{text}"
+        );
+        assert!(text.contains("und 20 weitere"), "{text}");
     }
 
     #[test]

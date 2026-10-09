@@ -28,12 +28,22 @@ pub const QUARANTINE_SEARCH: &str = "Suchen in Name und Pfad";
 pub const QUARANTINE_EMPTY: &str = "Die Quarantäne ist leer.";
 pub const QUARANTINE_NO_MATCH: &str = "Keine Einträge für diese Auswahl.";
 pub const QUARANTINE_REMOVE_RUN_FILTER: &str = "Filter auf diesen Lauf entfernen";
+pub const QUARANTINE_SELECT_FILTERED: &str = "Alle gefilterten wählen";
+pub const QUARANTINE_CLEAR_SELECTION: &str = "Auswahl aufheben";
+pub const QUARANTINE_RESTORE_TITLE: &str = "Zurückholen";
+pub const QUARANTINE_RESTORE_OK: &str = "Zurückholen";
+pub const QUARANTINE_NOTHING_TO_RESTORE: &str =
+    "Die gewählten Einträge sind nicht mehr in der Quarantäne oder schon zurückgeholt.";
 pub const COL_NAME: &str = "Name";
 pub const COL_ORIGIN: &str = "Ursprünglicher Ort";
 pub const COL_SIZE: &str = "Größe";
 pub const COL_DATE: &str = "Lauf";
 pub const COL_EXPIRES: &str = "Läuft ab";
 pub const COL_STATUS: &str = "Status";
+
+pub fn quarantine_restore_button(selected: usize) -> String {
+    format!("Zurückholen … ({selected})")
+}
 
 pub fn quarantine_only_run(run: &str) -> String {
     format!("Nur Lauf {run}  ✕")
