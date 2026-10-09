@@ -282,7 +282,34 @@ impl Plan {
                 .or_default()
                 .push(o.id);
         }
+        // `dedupe-dirs`: behaltene Ordner (Schlüssel → Aktions-IDs), um Quellen darin zu finden.
+        let mut keep_dirs: HashMap<String, Vec<u32>> = HashMap::new();
+        if self.kind == PlanKind::DedupeDirs {
+            for o in self.actions.iter().filter(|o| o.is_dir) {
+                if let Some(keep) = &o.keep {
+                    keep_dirs
+                        .entry(paths::path_key(Path::new(keep)))
+                        .or_default()
+                        .push(o.id);
+                }
+            }
+        }
         for a in &self.actions {
+            if self.kind == PlanKind::DedupeDirs {
+                let own_key = paths::path_key(Path::new(&a.path));
+                if moved_with_dir(&keep_dirs, a.id, &own_key) {
+                    return invalid(format!(
+                        "Aktion {}: {} liegt im behaltenen Ordner einer anderen Aktion",
+                        a.id, a.path
+                    ));
+                }
+                if moved_with_dir(&dir_moves, a.id, &own_key) {
+                    return invalid(format!(
+                        "Aktion {}: {} liegt in einem Ordner, der selbst entfernt wird",
+                        a.id, a.path
+                    ));
+                }
+            }
             if let Some(keep) = &a.keep {
                 if sources.contains(&paths::path_key(Path::new(keep))) {
                     return invalid(format!(
@@ -1202,6 +1229,24 @@ mod tests {
             dir_action(2, r"D:\Daten\X", r"D:\Daten\B\k"),
         ]);
         assert!(invalid_message(&p).contains("behaltene Ordner"));
+    }
+
+    #[test]
+    fn quelle_im_behaltenen_ordner_einer_anderen_aktion_ist_ungueltig() {
+        let p = dirs_plan(vec![
+            dir_action(1, r"D:\Daten\X\k", r"D:\Daten\W"),
+            dir_action(2, r"D:\Daten\Y", r"D:\Daten\X"),
+        ]);
+        assert!(invalid_message(&p).contains("im behaltenen Ordner"));
+    }
+
+    #[test]
+    fn verschachtelte_quellen_sind_in_dedupe_dirs_ungueltig() {
+        let p = dirs_plan(vec![
+            dir_action(1, r"D:\Daten\B", r"D:\Daten\A"),
+            dir_action(2, r"D:\Daten\B\sub", r"D:\Daten\A\sub"),
+        ]);
+        assert!(invalid_message(&p).contains("selbst entfernt wird"));
     }
 
     #[test]
