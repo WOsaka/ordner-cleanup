@@ -17,7 +17,7 @@ use super::protect::Protector;
 use super::quarantine;
 use super::tree::{contains_protected, subtree_dirs, Tree};
 use super::SkipReason;
-use crate::analysis::folder_dups::{self, ExactGroup, FolderDupOptions};
+use crate::analysis::folder_dups::{self, depth, within, ExactGroup, FolderDupOptions};
 use crate::index::{FileHash, FileRow, Index, IndexError};
 use crate::paths;
 
@@ -27,25 +27,6 @@ pub struct DedupeDirsOptions {
     pub min_size: Option<u64>,
     /// Zusätzliche Kopie-Muster der Namens-Heuristik (`dedupe_dirs_copy_patterns`).
     pub copy_patterns: Vec<String>,
-}
-
-/// Tiefe eines Ordner-Schlüssels (Anzahl der Backslashes).
-fn depth(key: &str) -> usize {
-    key.matches('\\').count()
-}
-
-/// `key` liegt auf oder unter einem Ordner aus `set` (Ordner-Schlüssel mit abschließendem `\`).
-fn within(set: &HashSet<String>, key: &str) -> bool {
-    let mut current = key;
-    loop {
-        if set.contains(current) {
-            return true;
-        }
-        match current.trim_end_matches('\\').rfind('\\') {
-            Some(i) => current = &current[..=i],
-            None => return false,
-        }
-    }
 }
 
 fn dir_name(path: &str) -> &str {

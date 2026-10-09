@@ -47,6 +47,7 @@ pub fn build_report(
             huge_entries: config.huge_dir_entries,
         },
         problem_ctx: ProblemCtx::from_env(&config.onedrive_conflict_hostnames),
+        partial_threshold: config.dedupe_dirs_partial_threshold,
     };
     let mut warnings = Notes::default();
     let mut model = report::build(index, &root, &params)?;

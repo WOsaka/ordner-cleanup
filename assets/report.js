@@ -410,6 +410,33 @@
     })));
   }
 
+  function renderFolderDuplicates() {
+    const d = data.folder_duplicates;
+    const s = slot('folder-duplicates');
+    s.append(el('p', { class: 'hint', text: d.groups.length === 0
+      ? 'Keine doppelten Ordner gefunden.'
+      : plural(d.groups.length, 'Gruppe', 'Gruppen') + ' gleicher Ordner (gleicher Inhalt an gleichen Pfaden, Müll-Dateien zählen nicht), zusammen ' + bytes(d.total_reclaimable) + ' verschwendeter Platz. Erst doppelte Ordner bereinigen (plan dedupe-dirs), dann einzelne Duplikate (plan dedupe).' }));
+    if (d.groups.length) {
+      s.append(groupList(d.groups, (g) => ({
+        title: bytes(g.reclaimable) + ' verschwendet',
+        meta: plural(g.dirs.length, 'Kopie', 'Kopien') + ' à ' + bytes(g.bytes) + ' · ' + plural(g.files, 'Datei', 'Dateien'),
+        search: g.dirs.join(' '),
+        lines: g.dirs,
+      })));
+    }
+    const MIB = 1048576;
+    const partial = d.partial.filter((p) => p.shared_bytes >= MIB);
+    s.append(el('h3', { text: 'Teilweise gleich (ab ' + Math.round(d.partial_threshold * 100) + ' % gemeinsame Bytes)' }));
+    s.append(el('p', { class: 'hint', text: 'Nur ein Hinweis, kein Plan: Diese Ordner teilen viele Dateien, sind aber nicht gleich. Angezeigt werden die 50 mit den meisten gemeinsamen Bytes ab 1 MiB; die vollständige Liste steht in folder-partial.csv und im JSON.'
+      + (d.partial_incomplete ? ' Die Suche wurde wegen zu vieler Paare abgebrochen und ist unvollständig.' : '') }));
+    s.append(dataTable([
+      { label: 'Ordner A', get: (p) => p.a },
+      { label: 'Ordner B', get: (p) => p.b },
+      { label: 'Gemeinsam', num: true, get: (p) => p.shared_bytes, render: (p) => bytes(p.shared_bytes) },
+      { label: 'Anteil', num: true, get: (p) => p.ratio, render: (p) => Math.round(p.ratio * 100) + ' %' },
+    ], partial.slice(0, 50), { empty: 'Keine teilweise gleichen Ordner gefunden.' }));
+  }
+
   function renderProbable() {
     const s = slot('probable');
     s.append(el('p', { class: 'hint', text: 'Gleicher Name und gleiche Größe, aber mindestens eine Datei liegt nur in der Cloud. Der Inhalt wurde nicht verglichen, damit nichts heruntergeladen wird.' }));
@@ -648,6 +675,7 @@
 
   function renderNavCounts() {
     const counts = {
+      'folder-duplicates': data.folder_duplicates.groups.length,
       duplicates: data.duplicates.group_count,
       probable: data.probable_duplicates.length,
       similar: data.similar.length,
@@ -707,6 +735,7 @@
   renderTop();
   renderTypes();
   renderAge();
+  renderFolderDuplicates();
   renderDuplicates();
   renderProbable();
   renderSimilar();

@@ -3,6 +3,7 @@
 mod build;
 pub mod content;
 pub mod csv;
+mod folder;
 pub mod history;
 pub mod html;
 pub mod json;
@@ -12,6 +13,8 @@ pub mod terminal;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_folder;
 #[cfg(test)]
 mod tests_html;
 #[cfg(test)]
@@ -39,6 +42,7 @@ pub struct Report {
     pub file_types: FileTypes,
     pub age: AgeReport,
     pub duplicates: DuplicatesReport,
+    pub folder_duplicates: FolderDuplicatesReport,
     pub probable_duplicates: Vec<ProbableGroup>,
     pub similar: Vec<SimilarGroup>,
     pub structure: Vec<StructureItem>,
@@ -163,6 +167,41 @@ pub struct DuplicatesReport {
     pub group_count: usize,
     pub total_wasted: u64,
     pub groups: Vec<DupGroupItem>,
+}
+
+/// Gruppe gleicher Ordner (gleicher Inhalt an gleichen Pfaden, Junk ignoriert).
+#[derive(Debug, Clone, Serialize)]
+pub struct FolderDupGroup {
+    pub dirs: Vec<String>,
+    /// Verglichene Dateien je Ordner
+    pub files: u64,
+    /// Bytes je Ordner
+    pub bytes: u64,
+    /// `bytes` mal (Anzahl − 1), ohne Schutzregeln und Hardlinks
+    pub reclaimable: u64,
+}
+
+/// Zwei Ordner mit vielen gemeinsamen Dateien, aber nicht gleich (nur Hinweis).
+#[derive(Debug, Clone, Serialize)]
+pub struct PartialPair {
+    pub a: String,
+    pub b: String,
+    pub shared_bytes: u64,
+    pub ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FolderDuplicatesReport {
+    /// Nach Platzgewinn absteigend
+    pub groups: Vec<FolderDupGroup>,
+    pub total_reclaimable: u64,
+    /// Nach gemeinsamen Bytes absteigend, vollständig (das HTML zeigt die obersten 50)
+    pub partial: Vec<PartialPair>,
+    pub partial_threshold: f64,
+    /// Die Paarbildung wurde wegen zu vieler Paare abgebrochen
+    pub partial_incomplete: bool,
+    /// Ordner, die sich wegen Cloud-Platzhaltern, Links oder fehlender Hashes nicht vergleichen ließen
+    pub unverifiable: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

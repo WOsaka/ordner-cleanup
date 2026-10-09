@@ -20,6 +20,8 @@ pub struct ReportParams {
     pub old_after_days: i64,
     pub thresholds: Thresholds,
     pub problem_ctx: ProblemCtx,
+    /// Schwelle für „teilweise gleiche“ Ordner (`dedupe_dirs_partial_threshold`)
+    pub partial_threshold: f64,
 }
 
 fn name_of(path: &str) -> String {
@@ -298,6 +300,9 @@ pub fn build(index: &Index, root: &ReportRoot, p: &ReportParams) -> Result<Repor
         groups,
     };
 
+    // --- Doppelte Ordner ---
+    let folder_duplicates = super::folder::build(index, &root.dir_key, p.partial_threshold)?;
+
     // --- Wahrscheinliche Duplikate (Cloud-Beteiligung, nicht verifiziert) ---
     let mut by_name: BTreeMap<(String, u64), Vec<&FRow>> = BTreeMap::new();
     for f in real_files.iter().filter(|f| f.size > 0) {
@@ -459,6 +464,7 @@ pub fn build(index: &Index, root: &ReportRoot, p: &ReportParams) -> Result<Repor
             old_files,
         },
         duplicates,
+        folder_duplicates,
         probable_duplicates,
         similar: similar_groups,
         structure: structure_items,

@@ -4,13 +4,14 @@
 //! (Datei: Name, Größe, voller Hash; Unterordner: Name, Fingerabdruck). Der Name des Ordners
 //! selbst geht nicht ein. Junk-Dateien und leere Unterordner zählen nicht mit.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use xxhash_rust::xxh3::xxh3_128;
 
 use crate::change::junk::is_builtin_junk_name;
 use crate::change::tree::Tree;
 use crate::index::FileHash;
+use crate::paths;
 
 /// Optionen der Erkennung.
 #[derive(Debug, Clone)]
@@ -253,6 +254,256 @@ pub fn copy_name_score(name: &str, extra: &[String]) -> u8 {
         }
     }
     score
+}
+
+/// Tiefe eines Ordner-Schlüssels (Anzahl der Backslashes).
+pub fn depth(key: &str) -> usize {
+    key.matches('\\').count()
+}
+
+/// `key` liegt auf oder unter einem Ordner aus `set` (Ordner-Schlüssel mit abschließendem `\`).
+pub fn within(set: &HashSet<String>, key: &str) -> bool {
+    let mut current = key;
+    loop {
+        if set.contains(current) {
+            return true;
+        }
+        match current.trim_end_matches('\\').rfind('\\') {
+            Some(i) => current = &current[..=i],
+            None => return false,
+        }
+    }
+}
+
+/// Nur oberste Gruppen: Mitglieder, die in einem Ordner einer höheren Gruppe liegen, entfallen;
+/// bleiben weniger als zwei, entfällt die Gruppe. (Der Planer arbeitet ebenso von oben nach unten.)
+pub fn top_level_groups(groups: &[ExactGroup]) -> Vec<ExactGroup> {
+    let mut sorted: Vec<&ExactGroup> = groups.iter().collect();
+    sorted.sort_by(|a, b| {
+        let top = |g: &ExactGroup| g.members.iter().map(|m| depth(m)).min().unwrap_or(0);
+        top(a)
+            .cmp(&top(b))
+            .then(b.bytes.cmp(&a.bytes))
+            .then_with(|| a.members.cmp(&b.members))
+    });
+    let mut covered: HashSet<String> = HashSet::new();
+    let mut result = Vec::new();
+    for group in sorted {
+        let members: Vec<String> = group
+            .members
+            .iter()
+            .filter(|m| !within(&covered, m))
+            .cloned()
+            .collect();
+        if members.len() < 2 {
+            continue;
+        }
+        covered.extend(members.iter().cloned());
+        result.push(ExactGroup {
+            members,
+            ..group.clone()
+        });
+    }
+    result
+}
+
+/// Duplikat-Gruppen mit mehr Mitgliedern werden für die Paarbildung übersprungen (dieselbe
+/// Lizenzdatei hundertfach würde die Paaranzahl quadratisch wachsen lassen).
+pub const MAX_PARTIAL_GROUP: usize = 32;
+/// Obergrenze für Ordnerpaare; danach bricht die Paarbildung ab (Bericht: „unvollständig“).
+pub const MAX_PARTIAL_PAIRS: usize = 200_000;
+
+#[derive(Debug, Clone)]
+pub struct PartialOptions {
+    pub root_key: String,
+    /// Mindestanteil gemeinsamer Bytes am kleineren Ordner.
+    pub threshold: f64,
+    pub max_group: usize,
+    pub max_pairs: usize,
+}
+
+impl PartialOptions {
+    pub fn new(root_key: String, threshold: f64) -> Self {
+        Self {
+            root_key,
+            threshold,
+            max_group: MAX_PARTIAL_GROUP,
+            max_pairs: MAX_PARTIAL_PAIRS,
+        }
+    }
+}
+
+/// Zwei Ordner mit vielen gemeinsamen Dateien (gleicher Hash, Pfad egal).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PartialPair {
+    /// Ordner-Schlüssel, `a < b`.
+    pub a: String,
+    pub b: String,
+    pub shared_bytes: u64,
+    /// Gemeinsame Bytes geteilt durch die Bytes des kleineren Ordners.
+    pub ratio: f64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PartialResult {
+    /// Sortiert nach gemeinsamen Bytes absteigend.
+    pub pairs: Vec<PartialPair>,
+    /// Die Paarbildung wurde wegen `max_pairs` abgebrochen.
+    pub incomplete: bool,
+}
+
+fn parent_of<'a>(tree: &'a Tree, key: &str) -> Option<&'a str> {
+    tree.row(key).and_then(|r| r.parent_key.as_deref())
+}
+
+fn ordered(a: &str, b: &str) -> (String, String) {
+    if a <= b {
+        (a.to_string(), b.to_string())
+    } else {
+        (b.to_string(), a.to_string())
+    }
+}
+
+/// Ordner, die über gemeinsame Dateien verwandt sind, aber keine exakten Kopien: nur ein Hinweis
+/// im Bericht, nie Teil eines Plans. Arbeitet nur auf dem Index.
+pub fn partial_pairs(
+    tree: &Tree,
+    hashes: &HashMap<String, FileHash>,
+    exact: &[ExactGroup],
+    opts: &PartialOptions,
+) -> PartialResult {
+    let skip_dir = |key: &str| key == opts.root_key || key.contains("\\.ordner-cleanup\\");
+
+    // Hash → (Ordner, Größe) der zählenden Dateien; wirksame Bytes je Ordner (ohne Junk).
+    let mut by_hash: HashMap<&[u8], Vec<(&str, u64)>> = HashMap::new();
+    let mut own: HashMap<&str, u64> = HashMap::new();
+    for key in tree.dir_keys() {
+        for file in tree.files(key) {
+            let size = file.size.max(0) as u64;
+            if size == 0 || is_ignored_name(&file.name) {
+                continue;
+            }
+            *own.entry(key).or_default() += size;
+            if let Some(h) = hashes.get(&file.key) {
+                by_hash.entry(&h.hash).or_default().push((key, size));
+            }
+        }
+    }
+    let mut effective: HashMap<&str, u64> = own.clone();
+    let mut order: Vec<&str> = tree.dir_keys().collect();
+    order.sort_by_key(|k| std::cmp::Reverse(k.len()));
+    for key in order {
+        let bytes = effective.get(key).copied().unwrap_or(0);
+        if let Some(parent) = parent_of(tree, key) {
+            *effective.entry(tree_key(tree, parent)).or_default() += bytes;
+        }
+    }
+
+    let group_of: HashMap<&str, usize> = exact
+        .iter()
+        .enumerate()
+        .flat_map(|(i, g)| g.members.iter().map(move |m| (m.as_str(), i)))
+        .collect();
+
+    let mut shared: HashMap<(String, String), u64> = HashMap::new();
+    let mut incomplete = false;
+    'groups: for members in by_hash.values() {
+        if members.len() < 2 || members.len() > opts.max_group {
+            continue;
+        }
+        let size = members[0].1;
+        // Wie viele Mitglieder liegen unter jedem Ordner (Wurzel ausgenommen).
+        let mut count: HashMap<&str, u64> = HashMap::new();
+        for (dir, _) in members {
+            let mut current = Some(*dir);
+            while let Some(d) = current.filter(|d| *d != opts.root_key) {
+                *count.entry(d).or_default() += 1;
+                current = parent_of(tree, d);
+            }
+        }
+        let mut pairs: HashSet<(String, String)> = HashSet::new();
+        for (i, (da, _)) in members.iter().enumerate() {
+            for (db, _) in &members[i + 1..] {
+                let (mut x, mut y) = (*da, *db);
+                loop {
+                    if skip_dir(x) || skip_dir(y) || paths::is_under(x, y) || paths::is_under(y, x)
+                    {
+                        break;
+                    }
+                    pairs.insert(ordered(x, y));
+                    match (parent_of(tree, x), parent_of(tree, y)) {
+                        (Some(px), Some(py)) => {
+                            x = tree_key(tree, px);
+                            y = tree_key(tree, py);
+                        }
+                        _ => break,
+                    }
+                }
+            }
+        }
+        for (a, b) in pairs {
+            let both = count
+                .get(a.as_str())
+                .copied()
+                .unwrap_or(0)
+                .min(count.get(b.as_str()).copied().unwrap_or(0));
+            *shared.entry((a, b)).or_default() += both * size;
+            if shared.len() > opts.max_pairs {
+                incomplete = true;
+                break 'groups;
+            }
+        }
+    }
+
+    let ratio_of = |a: &str, b: &str, bytes: u64| -> f64 {
+        let smaller = effective
+            .get(a)
+            .copied()
+            .unwrap_or(0)
+            .min(effective.get(b).copied().unwrap_or(0));
+        if smaller == 0 {
+            0.0
+        } else {
+            bytes as f64 / smaller as f64
+        }
+    };
+    let candidates: HashMap<(String, String), f64> = shared
+        .iter()
+        .filter(|((a, b), _)| {
+            !matches!((group_of.get(a.as_str()), group_of.get(b.as_str())), (Some(x), Some(y)) if x == y)
+        })
+        .map(|((a, b), bytes)| ((a.clone(), b.clone()), ratio_of(a, b, *bytes)))
+        .filter(|(_, ratio)| *ratio >= opts.threshold)
+        .collect();
+
+    let mut pairs: Vec<PartialPair> = candidates
+        .iter()
+        .filter(|((a, b), _)| {
+            // Nur oberste Paare: Liegt das Paar der Elternordner auch über der Schwelle, entfällt dieses.
+            match (parent_of(tree, a), parent_of(tree, b)) {
+                (Some(pa), Some(pb)) if pa != pb => !candidates.contains_key(&ordered(pa, pb)),
+                _ => true,
+            }
+        })
+        .map(|((a, b), ratio)| PartialPair {
+            a: a.clone(),
+            b: b.clone(),
+            shared_bytes: shared[&(a.clone(), b.clone())],
+            ratio: *ratio,
+        })
+        .collect();
+    pairs.sort_by(|x, y| {
+        y.shared_bytes
+            .cmp(&x.shared_bytes)
+            .then_with(|| x.a.cmp(&y.a))
+            .then_with(|| x.b.cmp(&y.b))
+    });
+    PartialResult { pairs, incomplete }
+}
+
+/// Der im Baum gespeicherte Schlüssel (mit der Lebensdauer des Baums) zu einem Schlüsseltext.
+fn tree_key<'a>(tree: &'a Tree, key: &str) -> &'a str {
+    tree.row(key).map_or("", |r| r.key.as_str())
 }
 
 #[cfg(test)]
@@ -565,5 +816,157 @@ mod tests {
         assert!(
             copy_name_score("Kopie von Projekt (2)", &[]) > copy_name_score("Projekt (2)", &[])
         );
+    }
+
+    // --- teilweise gleiche Ordner (nur Bericht) ---
+
+    fn partial(tree: &Tree, hashes: &HashMap<String, FileHash>, threshold: f64) -> PartialResult {
+        let analysis = run(tree, hashes);
+        partial_pairs(
+            tree,
+            hashes,
+            &analysis.groups,
+            &PartialOptions::new(k(ROOT), threshold),
+        )
+    }
+
+    fn pair_names(result: &PartialResult) -> Vec<(String, String)> {
+        result
+            .pairs
+            .iter()
+            .map(|p| (p.a.clone(), p.b.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn paar_mit_85_prozent_gemeinsamen_bytes_wird_gemeldet_75_nicht() {
+        let (tree, hashes) = build(
+            &[],
+            &[
+                (r"D:\Daten\A\gross.bin", 85, 1),
+                (r"D:\Daten\A\nur_a.bin", 15, 2),
+                (r"D:\Daten\B\gross.bin", 85, 1),
+                (r"D:\Daten\B\nur_b.bin", 15, 3),
+            ],
+        );
+        let result = partial(&tree, &hashes, 0.8);
+        assert_eq!(pair_names(&result), [(k(r"D:\Daten\A"), k(r"D:\Daten\B"))]);
+        assert_eq!(result.pairs[0].shared_bytes, 85);
+        assert!((result.pairs[0].ratio - 0.85).abs() < 1e-9);
+
+        let (tree, hashes) = build(
+            &[],
+            &[
+                (r"D:\Daten\A\gross.bin", 75, 1),
+                (r"D:\Daten\A\nur_a.bin", 25, 2),
+                (r"D:\Daten\B\gross.bin", 75, 1),
+                (r"D:\Daten\B\nur_b.bin", 25, 3),
+            ],
+        );
+        assert!(partial(&tree, &hashes, 0.8).pairs.is_empty());
+    }
+
+    #[test]
+    fn exakte_gruppen_erscheinen_nicht_als_teilweise_gleich() {
+        let (tree, hashes) = build(
+            &[],
+            &[(r"D:\Daten\A\a.bin", 50, 1), (r"D:\Daten\B\a.bin", 50, 1)],
+        );
+        assert!(partial(&tree, &hashes, 0.8).pairs.is_empty());
+    }
+
+    #[test]
+    fn nur_oberste_paare_unterordner_paare_im_gelisteten_paar_entfallen() {
+        let (tree, hashes) = build(
+            &[],
+            &[
+                (r"D:\Daten\A\sub\gross.bin", 85, 1),
+                (r"D:\Daten\A\nur_a.bin", 15, 2),
+                (r"D:\Daten\B\sub\gross.bin", 85, 1),
+                (r"D:\Daten\B\nur_b.bin", 15, 3),
+            ],
+        );
+        let result = partial(&tree, &hashes, 0.8);
+        assert_eq!(
+            pair_names(&result),
+            [(k(r"D:\Daten\A"), k(r"D:\Daten\B"))],
+            "A\\sub/B\\sub ist exakt gleich und im Paar A/B enthalten"
+        );
+    }
+
+    #[test]
+    fn dateien_im_selben_ordner_oder_ordner_in_ordner_bilden_kein_paar() {
+        let (tree, hashes) = build(
+            &[],
+            &[
+                (r"D:\Daten\A\x.bin", 50, 1),
+                (r"D:\Daten\A\y.bin", 50, 1),
+                (r"D:\Daten\A\sub\z.bin", 50, 1),
+            ],
+        );
+        assert!(partial(&tree, &hashes, 0.5).pairs.is_empty());
+    }
+
+    #[test]
+    fn sehr_grosse_duplikat_gruppen_werden_fuer_die_paarbildung_uebersprungen() {
+        let mut files: Vec<(String, i64, u8)> = (0..=MAX_PARTIAL_GROUP)
+            .map(|i| (format!(r"D:\Daten\L{i}\lizenz.txt"), 50, 1))
+            .collect();
+        files.push((r"D:\Daten\A\x.bin".to_string(), 50, 2));
+        files.push((r"D:\Daten\B\x.bin".to_string(), 50, 2));
+        let refs: Vec<(&str, i64, u8)> =
+            files.iter().map(|(p, s, h)| (p.as_str(), *s, *h)).collect();
+        let (tree, hashes) = build(&[], &refs);
+        let result = partial(&tree, &hashes, 0.5);
+        assert!(
+            result
+                .pairs
+                .iter()
+                .all(|p| !p.a.contains(r"\l") || !p.b.contains(r"\l")),
+            "Lizenz-Ordner bilden keine Paare"
+        );
+    }
+
+    #[test]
+    fn zu_viele_paare_brechen_ab_und_werden_als_unvollstaendig_vermerkt() {
+        let (tree, hashes) = build(
+            &[],
+            &[
+                (r"D:\Daten\A\g.bin", 85, 1),
+                (r"D:\Daten\A\n.bin", 15, 2),
+                (r"D:\Daten\B\g.bin", 85, 1),
+                (r"D:\Daten\B\m.bin", 15, 3),
+                (r"D:\Daten\C\g.bin", 85, 1),
+            ],
+        );
+        let analysis = run(&tree, &hashes);
+        let result = partial_pairs(
+            &tree,
+            &hashes,
+            &analysis.groups,
+            &PartialOptions {
+                max_pairs: 1,
+                ..PartialOptions::new(k(ROOT), 0.5)
+            },
+        );
+        assert!(result.incomplete);
+    }
+
+    #[test]
+    fn oberste_gruppen_lassen_unterordner_paare_gedeckter_ordner_weg() {
+        let (tree, hashes) = build(
+            &[],
+            &[
+                (r"D:\Daten\A\sub\b.txt", 7, 2),
+                (r"D:\Daten\A\x.txt", 7, 9),
+                (r"D:\Daten\B\sub\b.txt", 7, 2),
+                (r"D:\Daten\B\x.txt", 7, 9),
+            ],
+        );
+        let a = run(&tree, &hashes);
+        assert_eq!(a.groups.len(), 2);
+        let top = top_level_groups(&a.groups);
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].members, [k(r"D:\Daten\A"), k(r"D:\Daten\B")]);
     }
 }
