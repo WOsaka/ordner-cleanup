@@ -397,6 +397,17 @@ fn verlauf_zeichnet_bei_schmaler_und_breiter_flaeche_alle_knoepfe() {
             2,
             "Breite {width}"
         );
+        // Die Knöpfe einer Zeile liegen nebeneinander, nicht übereinander.
+        let details = harness.query_all_by_label("Details").next().unwrap().rect();
+        let undo = harness
+            .query_all_by_label_contains("Rückgängig")
+            .next()
+            .unwrap()
+            .rect();
+        assert!(
+            undo.min.x >= details.max.x - 1.0 && (undo.center().y - details.center().y).abs() < 4.0,
+            "Breite {width}: Details {details:?}, Rückgängig {undo:?}"
+        );
     }
 }
 

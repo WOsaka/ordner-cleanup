@@ -244,6 +244,7 @@ impl HistoryView {
                             .id_salt("runs-table")
                             .striped(true)
                             .vscroll(false)
+                            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                             .column(Column::exact(COL_WHEN))
                             .column(Column::exact(cols.root))
                             .column(Column::exact(COL_WHAT))
