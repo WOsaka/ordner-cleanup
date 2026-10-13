@@ -11,21 +11,6 @@ Strukturierung und Bereinigung von Ordnersystemen auf dem PC (Analyse, Aufräume
 - Lint/Format: `cargo clippy -- -D warnings` / `cargo fmt`
 - Start lokal: `cargo run -- <scan|report|plan|apply|undo|runs|purge> …`
 
-## Projektstruktur
-
-```
-.claude/
-  commands/         # Custom Slash Commands (Skills)
-    feature/        # Feature-Workflow
-    debug/          # Debugging-Workflow
-  templates/        # MD-Vorlagen für die Skills
-docs/
-  roadmap.md              # Feature-Ideen & Priorisierung
-  features/               # Feature-Specs (.md)
-  implementation-plans/   # Implementierungspläne (.md)
-  bugs/                   # Bug-Analysen und Fix-Pläne (.md)
-```
-
 ## Workflow
 
 ### Feature-Entwicklung
