@@ -36,7 +36,7 @@ Vorbereitung: `cargo build --release`, dann `target\release\ordner-cleanup.exe` 
 ## 1c. Quarantäne-Ansicht (Phase 7.4)
 
 - [ ] Nach einem echten Aufräumlauf (Duplikate, Müll) zeigt die Seite „Quarantäne“ (`Strg+6`, Seitenleiste) genau die verschobenen Dateien: Name, ursprünglicher Ort, Größe, Lauf, „Läuft ab“, Status „in Quarantäne“. Summenzeile (Anzahl, Größe, nächster Ablauf) stimmt mit „Verlauf“ überein.
-- [ ] Optik prüfen: hell und dunkel, 100 % und 150 % Skalierung, schmales Fenster (Spalten werden abgeschnitten, nichts überlappt), Tabelle scrollt flüssig.
+- [ ] Optik prüfen (Verlauf-Tabelle schmal/breit und Detailzeilen am 2026-10-14 geprüft, siehe `bugs/history-quarantine-layout-fix-plan.md`; Quarantäne-Seite noch offen): hell und dunkel, 100 % und 150 % Skalierung, schmales Fenster (Spalten werden abgeschnitten, nichts überlappt), Tabelle scrollt flüssig.
 - [ ] Suche (Name und Pfadteil, Groß-/Kleinschreibung egal), Wurzel-Auswahl und Klick auf die Spaltenköpfe (Name, Größe, Lauf, Läuft ab; zweiter Klick kehrt um).
 - [ ] Eine Datei auswählen, **Zurückholen …**: Rückfrage nennt das Ziel; nach „Zurückholen“ liegt die Datei am alten Ort, der Eintrag verschwindet aus der Liste, „Verlauf“ zeigt die geringere Größe und unveränderten Status „Vollständig“.
 - [ ] Ursprungspfad vorher von Hand neu belegen (andere Datei mit demselben Namen): Rückfrage zeigt „→ name (2).ext“, die vorhandene Datei bleibt unverändert, die zurückgeholte hat den neuen Namen. In „Verlauf“ → Details steht „zurückgeholt als …“.

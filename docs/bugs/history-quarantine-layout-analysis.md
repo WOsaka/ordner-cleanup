@@ -1,8 +1,8 @@
 ---
 title: "Bug: Verlauf-Tabelle (Spaltenbreiten, schmale Ansicht), Detailtext ohne Umbruch, Summenzeile der Quarantäne nicht sichtbar"
-status: analysed
+status: fixed
 created: 2026-10-13
-updated: 2026-10-13
+updated: 2026-10-14
 ---
 
 # Bug: Verlauf-Tabelle und Detailtext, Summenzeile der Quarantäne

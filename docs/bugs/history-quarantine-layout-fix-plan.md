@@ -1,8 +1,8 @@
 ---
 title: "Fix-Plan: Verlauf-Tabelle (Spalten, schmale Ansicht) und Umbruch der Detailzeilen"
-status: approved
+status: fixed
 created: 2026-10-13
-updated: 2026-10-13
+updated: 2026-10-14
 analysis: history-quarantine-layout-analysis.md
 ---
 
@@ -84,4 +84,4 @@ Code umgesetzt auf `dev`: `run_columns` und `TableBuilder` mit horizontaler `Scr
 - Abweichung zu Test 2: Der Umbruch von `wrapped_mono` ist als kittest (`tests/gui_smoke.rs`, `wrapped_mono_bricht_pfade_ohne_leerzeichen_am_rand_um`) statt als Unit-Test geschrieben, weil er das Layout der Schrift braucht.
 - Unit-Tests `run_columns` (`history.rs`), kittest `verlauf_zeichnet_bei_schmaler_und_breiter_flaeche_alle_knoepfe` (500 und 1600 px).
 - `cargo test` (1913 Tests grün), `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` sauber.
-- **Offen:** Handtest (Punkt 5 oben). Danach `status: fixed`.
+- **Handtest (2026-10-14) bestanden:** Verlauf in schmalem und breitem Fenster sowie Details mit langem Pfad vom Nutzer geprüft und für gut befunden. Status `fixed`.
