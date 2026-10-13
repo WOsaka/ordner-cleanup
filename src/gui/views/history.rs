@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use chrono::Local;
 use eframe::egui;
+use egui_extras::{Column, TableBuilder};
 
 use super::undo_flow::{UndoFlow, TASK_CHECK as UNDO_CHECK, TASK_UNDO};
 use crate::change::journal::{self, Entry};
@@ -18,7 +19,7 @@ use crate::gui::shell::{Answer, Dialog, Goto, Page, Route, Shell, TaskResult};
 use crate::gui::tasks::TaskKind;
 use crate::gui::texts;
 use crate::gui::widgets::help_button::heading_with_help;
-use crate::gui::widgets::table::{short_path_cell, status_cell};
+use crate::gui::widgets::table::{short_path_cell, status_cell, wrapped_mono};
 use crate::index::RootInfo;
 use crate::ops::admin::{index_remove, index_roots};
 use crate::ops::runs::{purge_candidates, purge_execute, runs, PurgeCandidate, PurgeCheck};
@@ -107,6 +108,41 @@ fn can_view_content(run: &RunSummary) -> bool {
     run.bytes > 0 && !matches!(run.status, RunStatus::Purged | RunStatus::Unreadable)
 }
 
+const RUN_ROW_H: f32 = 24.0;
+const COL_WHEN: f32 = 130.0;
+const COL_WHAT: f32 = 140.0;
+const COL_RESULT: f32 = 150.0;
+const COL_SIZE: f32 = 90.0;
+const COL_EXPIRES: f32 = 100.0;
+const COL_BUTTONS: f32 = 330.0;
+const COL_ROOT_MIN: f32 = 220.0;
+const COL_GAP: f32 = 8.0;
+const COLUMN_COUNT: f32 = 7.0;
+/// Ungefähre Zeichenbreite des Standardtexts, um die Pfadkürzung an die Spalte anzupassen.
+const CHAR_WIDTH: f32 = 7.5;
+
+/// Spaltenbreiten der Lauf-Tabelle: Alle Spalten bis auf „Ordner“ haben feste Breiten, „Ordner“
+/// bekommt den Rest, mindestens aber `COL_ROOT_MIN`. Ist das Fenster schmaler als `total`,
+/// scrollt die Tabelle waagerecht.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RunColumns {
+    pub root: f32,
+    pub root_chars: usize,
+    pub total: f32,
+}
+
+pub fn run_columns(avail: f32) -> RunColumns {
+    let fixed = COL_WHEN + COL_WHAT + COL_RESULT + COL_SIZE + COL_EXPIRES + COL_BUTTONS;
+    let gaps = COL_GAP * COLUMN_COUNT;
+    let avail = if avail.is_finite() { avail } else { 0.0 };
+    let root = (avail - fixed - gaps).max(COL_ROOT_MIN);
+    RunColumns {
+        root,
+        root_chars: (((root - COL_GAP) / CHAR_WIDTH) as usize).max(20),
+        total: fixed + gaps + root,
+    }
+}
+
 struct HistoryData {
     runs: Vec<(PathBuf, Vec<RunSummary>)>,
     roots: Vec<RootInfo>,
@@ -136,6 +172,22 @@ pub struct HistoryView {
 }
 
 impl HistoryView {
+    /// Setzt Läufe und Detailzeilen ohne Laden (Tests der Oberfläche).
+    #[doc(hidden)]
+    pub fn set_runs(
+        &mut self,
+        runs: Vec<(PathBuf, Vec<RunSummary>)>,
+        detail: Option<(RunId, Vec<DetailRow>)>,
+        generation: u64,
+    ) {
+        self.data = Some(HistoryData {
+            runs,
+            roots: Vec::new(),
+        });
+        self.detail = detail;
+        self.loaded_generation = Some(generation);
+    }
+
     fn reload(&mut self, shell: &mut Shell) {
         self.loaded_generation = Some(shell.generation);
         shell.spawn(Route::History, TASK_LOAD, TaskKind::Read, |_| load());
@@ -175,59 +227,96 @@ impl HistoryView {
         let mut want_view: Option<(PathBuf, RunId)> = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
             let now = Local::now();
-            egui::Grid::new("runs").striped(true).show(ui, |ui| {
-                for h in ["Wann", "Ordner", "Was", "Ergebnis", "Größe", "Läuft ab", ""] {
-                    ui.strong(h);
-                }
-                ui.end_row();
-                for (root, list) in &data.runs {
-                    if self.filter_root.as_ref().is_some_and(|f| f != root) {
-                        continue;
-                    }
-                    for r in list {
-                        let row = run_row(now, root, r);
-                        ui.label(&row.when)
-                            .on_hover_text(format!("{}\nLauf {}", row.when_tooltip, row.run_id));
-                        short_path_cell(ui, &row.root_full, 40, shell);
-                        ui.label(&row.kind);
-                        status_cell(ui, &row.status);
-                        ui.label(&row.size);
-                        ui.label(&row.expires);
-                        ui.horizontal(|ui| {
-                            if ui.button("Details").clicked() {
-                                want_detail = Some((root.clone(), r.run.clone()));
-                            }
-                            if ui
-                                .add_enabled(
-                                    can_view_content(r),
-                                    egui::Button::new(texts::HISTORY_VIEW_CONTENT),
-                                )
-                                .on_hover_text(texts::HISTORY_VIEW_CONTENT_TIP)
-                                .clicked()
-                            {
-                                want_view = Some((root.clone(), r.run.clone()));
-                            }
-                            if ui
-                                .add_enabled(row.can_undo, egui::Button::new("Rückgängig …"))
-                                .clicked()
-                            {
-                                want_undo = Some((root.clone(), r.run.clone()));
-                            }
-                        });
-                        ui.end_row();
-                    }
-                }
-            });
-            if data.runs.is_empty() {
+            let shown: Vec<(&PathBuf, &RunSummary)> = data
+                .runs
+                .iter()
+                .filter(|(root, _)| self.filter_root.as_ref().is_none_or(|f| f == root))
+                .flat_map(|(root, list)| list.iter().map(move |r| (root, r)))
+                .collect();
+            if shown.is_empty() {
                 ui.label("Noch keine Läufe.");
+            } else {
+                let cols = run_columns(ui.available_width());
+                egui::ScrollArea::horizontal()
+                    .id_salt("runs-h")
+                    .show(ui, |ui| {
+                        TableBuilder::new(ui)
+                            .id_salt("runs-table")
+                            .striped(true)
+                            .vscroll(false)
+                            .column(Column::exact(COL_WHEN))
+                            .column(Column::exact(cols.root))
+                            .column(Column::exact(COL_WHAT))
+                            .column(Column::exact(COL_RESULT))
+                            .column(Column::exact(COL_SIZE))
+                            .column(Column::exact(COL_EXPIRES))
+                            .column(Column::exact(COL_BUTTONS))
+                            .header(RUN_ROW_H, |mut h| {
+                                for title in
+                                    ["Wann", "Ordner", "Was", "Ergebnis", "Größe", "Läuft ab", ""]
+                                {
+                                    h.col(|ui| {
+                                        ui.strong(title);
+                                    });
+                                }
+                            })
+                            .body(|body| {
+                                body.rows(RUN_ROW_H, shown.len(), |mut table_row| {
+                                    let (root, r) = shown[table_row.index()];
+                                    let row = run_row(now, root, r);
+                                    table_row.col(|ui| {
+                                        ui.label(&row.when).on_hover_text(format!(
+                                            "{}
+Lauf {}",
+                                            row.when_tooltip, row.run_id
+                                        ));
+                                    });
+                                    table_row.col(|ui| {
+                                        short_path_cell(ui, &row.root_full, cols.root_chars, shell);
+                                    });
+                                    table_row.col(|ui| {
+                                        ui.label(&row.kind);
+                                    });
+                                    table_row.col(|ui| status_cell(ui, &row.status));
+                                    table_row.col(|ui| {
+                                        ui.label(&row.size);
+                                    });
+                                    table_row.col(|ui| {
+                                        ui.label(&row.expires);
+                                    });
+                                    table_row.col(|ui| {
+                                        if ui.button("Details").clicked() {
+                                            want_detail = Some((root.clone(), r.run.clone()));
+                                        }
+                                        if ui
+                                            .add_enabled(
+                                                can_view_content(r),
+                                                egui::Button::new(texts::HISTORY_VIEW_CONTENT),
+                                            )
+                                            .on_hover_text(texts::HISTORY_VIEW_CONTENT_TIP)
+                                            .clicked()
+                                        {
+                                            want_view = Some((root.clone(), r.run.clone()));
+                                        }
+                                        if ui
+                                            .add_enabled(
+                                                row.can_undo,
+                                                egui::Button::new("Rückgängig …"),
+                                            )
+                                            .clicked()
+                                        {
+                                            want_undo = Some((root.clone(), r.run.clone()));
+                                        }
+                                    });
+                                });
+                            });
+                    });
             }
             if let Some((run, rows)) = &self.detail {
                 ui.add_space(crate::gui::theme::SPACE_M);
                 ui.heading(format!("Lauf {run}"));
                 for row in rows {
-                    ui.label(
-                        egui::RichText::new(format!("{}  [{}]", row.text, row.status)).monospace(),
-                    );
+                    wrapped_mono(ui, &format!("{}  [{}]", row.text, row.status));
                 }
             }
             ui.add_space(crate::gui::theme::SPACE_L);
@@ -547,5 +636,26 @@ mod tests {
             is_dir: false,
         }];
         assert_eq!(detail_rows(&entries)[0].status, "offen");
+    }
+
+    #[test]
+    fn breite_spalte_bekommt_den_rest_schmale_scrollt() {
+        let wide = run_columns(1400.0);
+        assert!(wide.root > 400.0, "{wide:?}");
+        assert!(wide.root_chars >= 50, "{wide:?}");
+        assert!((wide.total - 1400.0).abs() < 1.0, "{wide:?}");
+        let narrow = run_columns(400.0);
+        assert_eq!(narrow.root, COL_ROOT_MIN);
+        assert!(narrow.total > 400.0, "{narrow:?}");
+        assert!(narrow.root_chars >= 20, "{narrow:?}");
+    }
+
+    #[test]
+    fn spaltenrechnung_bleibt_bei_unsinnigen_breiten_im_mindestmass() {
+        for avail in [0.0, -50.0, f32::NAN, f32::INFINITY] {
+            let c = run_columns(avail);
+            assert_eq!(c.root, COL_ROOT_MIN, "{avail}");
+            assert!(c.total.is_finite() && c.root_chars >= 20, "{avail}: {c:?}");
+        }
     }
 }

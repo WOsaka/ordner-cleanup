@@ -326,3 +326,91 @@ fn leere_quarantaene_sagt_es() {
     harness.run();
     harness.get_by_label("Die Quarantäne ist leer.");
 }
+
+fn history_runs() -> Vec<(
+    std::path::PathBuf,
+    Vec<ordner_cleanup::change::undo::RunSummary>,
+)> {
+    use ordner_cleanup::change::undo::{RunStatus, RunSummary};
+    use ordner_cleanup::change::RunId;
+    let run = |id: &str, bytes: u64| RunSummary {
+        run: RunId::parse(id).unwrap(),
+        started: Some("2026-10-13T20:40:25Z".into()),
+        moved: 4,
+        counts: Default::default(),
+        bytes,
+        status: RunStatus::Complete,
+        expires: None,
+    };
+    vec![(
+        std::path::PathBuf::from(r"D:\ordner-test\ein-sehr-langer-ordnername\testordner"),
+        vec![
+            run("20261013-224025-d391", 106_000),
+            run("20261013-224025-aed3", 550_000),
+        ],
+    )]
+}
+
+fn history_detail() -> (
+    ordner_cleanup::change::RunId,
+    Vec<ordner_cleanup::gui::views::history::DetailRow>,
+) {
+    use ordner_cleanup::gui::views::history::DetailRow;
+    let from = r"D:\ordner-test\testordner\Downloads\Thumbs.db";
+    let to = r"D:\ordner-test\testordner\.ordner-cleanup\quarantine\20261013-224025-d391\Downloads\Thumbs.db";
+    (
+        ordner_cleanup::change::RunId::parse("20261013-224025-d391").unwrap(),
+        vec![DetailRow {
+            action: 1,
+            text: format!("{from} → {to}"),
+            status: r"zurückgeholt als D:\ordner-test\testordner\Downloads\Thumbs (2).db".into(),
+        }],
+    )
+}
+
+#[test]
+fn verlauf_zeichnet_bei_schmaler_und_breiter_flaeche_alle_knoepfe() {
+    use ordner_cleanup::gui::views::history::HistoryView;
+    struct State {
+        shell: Shell,
+        view: HistoryView,
+    }
+    for width in [500.0_f32, 1600.0] {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut view = HistoryView::default();
+        let shell = Shell::new(eframe::egui::Context::default());
+        view.set_runs(history_runs(), Some(history_detail()), shell.generation);
+        let mut harness = Harness::builder()
+            .with_size(eframe::egui::vec2(width, 700.0))
+            .build_ui_state(
+                |ui, s: &mut State| s.view.ui(ui, &mut s.shell),
+                State { shell, view },
+            );
+        harness.run();
+        assert_eq!(
+            harness.query_all_by_label_contains("Rückgängig").count(),
+            2,
+            "Breite {width}"
+        );
+        assert_eq!(
+            harness.query_all_by_label("Details").count(),
+            2,
+            "Breite {width}"
+        );
+    }
+}
+
+#[test]
+fn wrapped_mono_bricht_pfade_ohne_leerzeichen_am_rand_um() {
+    let text = format!(r"D:\{}", "ordner\\".repeat(30));
+    let mut harness = Harness::builder()
+        .with_size(eframe::egui::vec2(300.0, 400.0))
+        .build_ui(|ui| {
+            ordner_cleanup::gui::widgets::table::wrapped_mono(ui, &text);
+        });
+    harness.run();
+    let node = harness.get_by_label_contains(r"D:\ordner");
+    let rect = node.rect();
+    assert!(rect.width() <= 300.0, "Breite {}", rect.width());
+    assert!(rect.height() > 30.0, "mehrzeilig, Höhe {}", rect.height());
+}

@@ -81,3 +81,16 @@ pub fn time_cell(ui: &mut egui::Ui, time: &(String, String)) {
         response.on_hover_text(&time.1);
     }
 }
+
+/// Mehrzeiliger Text in Monospace, der auch ohne Leerzeichen (Pfade) am Rand umbricht und
+/// markierbar bleibt.
+pub fn wrapped_mono(ui: &mut egui::Ui, text: &str) {
+    let mut job = egui::text::LayoutJob::simple(
+        text.to_owned(),
+        egui::TextStyle::Monospace.resolve(ui.style()),
+        ui.visuals().text_color(),
+        ui.available_width(),
+    );
+    job.wrap.break_anywhere = true;
+    ui.add(egui::Label::new(job));
+}
