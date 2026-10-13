@@ -11,26 +11,26 @@ Vorbereitung: `cargo build --release`, dann `target\release\ordner-cleanup.exe` 
 
 ## 1. Cloud-only und OneDrive (Phase 2, 3, GUI)
 
-- [ ] OneDrive-Ordner mit mindestens einer echten Cloud-only-Datei (Platzhalter „Speicherplatz freigeben“) scannen: Datei wird weder gelesen noch gehasht, es startet kein Download.
-- [ ] `plan dedupe`/`plan junk` auf diesem Ordner: Platzhalter tauchen nicht als Aktion auf.
-- [ ] In der GUI „Öffnen“ auf eine Cloud-only-Datei: Meldung statt Download.
-- [ ] OneDrive-Ordner mit mehr als der Obergrenze: Apply verlangt in der CLI `--allow-large`, in der GUI den Haken im Dialog.
+- [x] OneDrive-Ordner mit mindestens einer echten Cloud-only-Datei (Platzhalter „Speicherplatz freigeben“) scannen: Datei wird weder gelesen noch gehasht, es startet kein Download.
+- [x] `plan dedupe`/`plan junk` auf diesem Ordner: Platzhalter tauchen nicht als Aktion auf.
+- [x] In der GUI „Öffnen“ auf eine Cloud-only-Datei: Meldung statt Download.
+- [x] OneDrive-Ordner mit mehr als der Obergrenze: Apply verlangt in der CLI `--allow-large`, in der GUI den Haken im Dialog.
 
 ## 1a. Doppelte Ordner (Phase 7.1)
 
-- [ ] Echter Ordner mit einer Kopie („Kopie von …“ oder „… (2)“): `plan dedupe-dirs` wählt die Kopie zum Entfernen, der Originalordner bleibt; Review, Apply und `undo` stellen alles her (Pfade, Inhalt, Zeiten).
+- [x] Echter Ordner mit einer Kopie („Kopie von …“ oder „… (2)“): `plan dedupe-dirs` wählt die Kopie zum Entfernen, der Originalordner bleibt; Review, Apply und `undo` stellen alles her (Pfade, Inhalt, Zeiten).
 - [ ] Namens-Heuristik an echten Ordnern prüfen: Fehltreffer (z. B. „Altbau“, „Backup-Strategie“) notieren; Muster ggf. in `dedupe_dirs_copy_patterns` ergänzen oder die Liste in `analysis/folder_dups.rs` anpassen.
-- [ ] OneDrive-Ordner mit einer Cloud-only-Datei in einer der Kopien: der Ordner taucht nicht als Aktion auf, es startet kein Download.
-- [ ] Bericht: Abschnitt „Ordner-Duplikate“ zeigt die Gruppen und teilweise gleiche Ordner plausibel (Schwelle in den Einstellungen ändern und neu bauen).
-- [ ] GUI: Karte „Doppelte Ordner“ steht vor „Duplikate“, zeigt die Zahl nach dem Scan, Review zeigt Dateianzahl und behaltenen Ordner; Teilauswahl anwenden und zurückdrehen.
+- [x] OneDrive-Ordner mit einer Cloud-only-Datei in einer der Kopien: der Ordner taucht nicht als Aktion auf, es startet kein Download.
+- [x] Bericht: Abschnitt „Ordner-Duplikate“ zeigt die Gruppen und teilweise gleiche Ordner plausibel (Schwelle in den Einstellungen ändern und neu bauen).
+- [x] GUI: Karte „Doppelte Ordner“ steht vor „Duplikate“, zeigt die Zahl nach dem Scan, Review zeigt Dateianzahl und behaltenen Ordner; Teilauswahl anwenden und zurückdrehen.
 - [ ] Laufzeit: `plan dedupe-dirs` auf einem großen echten Index (> 500.000 Dateien) bleibt unter etwa 15 s.
 
 ## 1b. Plan-Integrität (Phase 7.0)
 
-- [ ] Plan erzeugen, in Notepad öffnen und unverändert speichern (auch „Speichern unter“ mit CRLF): `apply` läuft ohne Fehlalarm durch.
-- [ ] Plan in Notepad ändern (einen Wert oder eine Aktion löschen): `apply` bricht mit „Plan wurde nach dem Erstellen verändert“ ab, `$LASTEXITCODE` ist `3`, `runs` zeigt keinen neuen Lauf, im Ordner hat sich nichts geändert.
-- [ ] Danach `plan seal <plan.json>`: Übersicht stimmt (Aktionen, alte und neue Prüfsumme), „N“ lässt die Datei unverändert (Exit-Code `1`), „j“ versiegelt; `apply` läuft wieder durch.
-- [ ] GUI: Plan öffnen, Datei extern in Notepad ändern, „Anwenden“ drücken: Dialog „Plan wurde verändert“ mit „Plan neu laden“, nichts ausgeführt; „Plan neu laden“ zeigt den geänderten Plan bzw. eine Fehlermeldung.
+- [x] Plan erzeugen, in Notepad öffnen und unverändert speichern (auch „Speichern unter“ mit CRLF): `apply` läuft ohne Fehlalarm durch.
+- [x] Plan in Notepad ändern (einen Wert oder eine Aktion löschen): `apply` bricht mit „Plan wurde nach dem Erstellen verändert“ ab, `$LASTEXITCODE` ist `3`, `runs` zeigt keinen neuen Lauf, im Ordner hat sich nichts geändert.
+- [x] Danach `plan seal <plan.json>`: Übersicht stimmt (Aktionen, alte und neue Prüfsumme), „N“ lässt die Datei unverändert (Exit-Code `1`), „j“ versiegelt; `apply` läuft wieder durch.
+- [x] GUI: Plan öffnen, Datei extern in Notepad ändern, „Anwenden“ drücken: Dialog „Plan wurde verändert“ mit „Plan neu laden“, nichts ausgeführt; „Plan neu laden“ zeigt den geänderten Plan bzw. eine Fehlermeldung.
 - [ ] Alter Plan aus einem früheren Release (Format 2): `apply` und GUI zeigen „Ungeschützter Plan (Format 2) …“, der Lauf geht weiter.
 
 ## 1c. Quarantäne-Ansicht (Phase 7.4)
@@ -183,3 +183,9 @@ Auffälligkeiten:
 5. **Bedienung:** Beim ersten Teilplan-Test wurde nichts abgewählt (109 von 109 angewendet); kein Fehler.
 6. **Build:** Beim ersten `cargo build --release` stürzte rustc beim Kompilieren von `ordner-cleanup-bg` mit `STATUS_HEAP_CORRUPTION` ab, der zweite Lauf war erfolgreich (Compiler-Absturz, kein Codefehler). Ein Heap-Absturz kann auch auf defekten Arbeitsspeicher hindeuten; als unauffällig gilt er erst nach Nachprüfung. In der Folgesitzung am selben Tag liefen auf demselben Rechner viele Builds und rund 1.500 Tests ohne erneuten Absturz. Offen: einmal den Windows-Speicherdiagnose-Test (`mdsched`) laufen lassen, bis dahin die übrigen Beobachtungen dieses Eintrags mit Vorbehalt lesen. Am selben Tag brach außerdem einmal `cargo clippy` (clippy-driver, Exit-Code 101, Meldung nicht erfasst) ab; drei Wiederholungen liefen sauber. Zwei sporadische, nicht reproduzierbare Abstürze von Rust-Werkzeugen auf einem Rechner sprechen eher für ein Hardware- oder Umgebungsproblem als für einen Codefehler. Zeigt sich ein Absturz erneut, Meldung sichern und Bug-Analyse unter `docs/bugs/` anlegen.
 
+
+### 13.10.2026, Windows 11 Pro, Release-Build, Block A und B (Cloud-only, Ordner-Duplikate, Plan-Integrität)
+
+Testdaten: `D:\ordner-test\testordner` (synthetisch) und `%OneDrive%\ordner-test` mit drei Cloud-only-Dateien (Attribut `RECALL_ON_DATA_ACCESS`, vor und nach Scan und Plänen unverändert). Geprüft: Scan, `plan dedupe`/`junk`/`dedupe-dirs` ohne Platzhalter-Aktion, GUI-Kontextmenü „Öffnen“ ausgegraut, Obergrenze (CLI `--allow-large`, GUI-Haken), `dedupe-dirs` mit Apply und Undo (Baum bitgleich), Plan-Integrität (CRLF ohne Fehlalarm, Änderung = Exit-Code 3, `plan seal`, GUI-Dialog), GUI-Karte und Bericht. Alles wie erwartet.
+
+Offen aus Block A und B: Namens-Heuristik an echten Ordnern (nur `Altbau` geprüft), Laufzeit bei mehr als 500.000 Dateien, Plan im Format 2, Phase 4 mit Platzhalter.
