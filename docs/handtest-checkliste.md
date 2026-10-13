@@ -9,60 +9,60 @@ Kurzfassung und Reihenfolge der offenen Punkte aus [`manual-tests.md`](manual-te
 
 ## 0. Vorbereitung (einmal)
 
-- [ ] `cargo build --release` (bei Compiler-Absturz `STATUS_HEAP_CORRUPTION` siehe Auffälligkeit 6: einmal `mdsched` laufen lassen)
-- [ ] Wegwerf-Datenordner: `$env:ORDNER_CLEANUP_HOME = "D:\ordner-test-home"`
-- [ ] Testordner mit Kopien echter Dateien (Duplikate, „Kopie von …“-Ordner, Müll, PDFs/Fotos)
-- [ ] OneDrive-Testordner mit mindestens einer Datei auf „Nur online“ (Rechtsklick → Speicherplatz freigeben)
+- [x] `cargo build --release` (bei Compiler-Absturz `STATUS_HEAP_CORRUPTION` siehe Auffälligkeit 6: einmal `mdsched` laufen lassen)
+- [x] Wegwerf-Datenordner: `$env:ORDNER_CLEANUP_HOME = "D:\ordner-test-home"`
+- [x] Testordner mit Kopien echter Dateien (Duplikate, „Kopie von …“-Ordner, Müll, PDFs/Fotos)
+- [x] OneDrive-Testordner mit mindestens einer Datei auf „Nur online“ (Rechtsklick → Speicherplatz freigeben)
 
 ## 1. Block A: Mit dem OneDrive-Testordner (größtes Risiko zuerst)
 
 Abschnitt 1 und 1a in `manual-tests.md`.
 
-- [ ] Scan: Cloud-only-Datei wird nicht gelesen, kein Download startet
-- [ ] `plan dedupe` / `plan junk` / `plan dedupe-dirs`: Platzhalter erscheint nicht als Aktion
-- [ ] GUI „Öffnen“ auf Platzhalter: Meldung statt Download
-- [ ] Apply über der Obergrenze: CLI `--allow-large`, GUI Haken im Dialog
-- [ ] Phase 4: Regeln mit Platzhalter: kein EXIF-Lesen, kein Download
+- [x] Scan: Cloud-only-Datei wird nicht gelesen, kein Download startet
+- [x] `plan dedupe` / `plan junk` / `plan dedupe-dirs`: Platzhalter erscheint nicht als Aktion
+- [x] GUI „Öffnen“ auf Platzhalter: Meldung statt Download
+- [x] Apply über der Obergrenze: CLI `--allow-large`, GUI Haken im Dialog
+- [x] Phase 4: Regeln mit Platzhalter: kein EXIF-Lesen, kein Download
 
 ## 2. Block B: Reale Ordner, CLI (Plan-Integrität, Ordner-Duplikate)
 
 Abschnitt 1a und 1b.
 
-- [ ] `plan dedupe-dirs` auf Ordner mit Kopie: Kopie wird entfernt, Original bleibt; Apply, `undo` stellt alles her
-- [ ] Heuristik auf Fehltreffer prüfen („Altbau“, „Backup-Strategie“), Muster notieren
-- [ ] Bericht „Ordner-Duplikate“ plausibel, Schwelle ändern
-- [ ] Plan in Notepad öffnen/speichern (auch CRLF): `apply` ohne Fehlalarm
-- [ ] Plan ändern: `apply` bricht ab, `$LASTEXITCODE` = 3, `runs` ohne neuen Lauf
-- [ ] `plan seal`: „N“ → Exit 1, „j“ → versiegelt, `apply` läuft
-- [ ] Alter Plan (Format 2): Hinweis, Lauf geht weiter
-- [ ] Laufzeit `plan dedupe-dirs` auf Index > 500.000 Dateien unter ca. 15 s
+- [x] `plan dedupe-dirs` auf Ordner mit Kopie: Kopie wird entfernt, Original bleibt; Apply, `undo` stellt alles her
+- [x] Heuristik auf Fehltreffer prüfen („Altbau“, „Backup-Strategie“), Muster notieren
+- [x] Bericht „Ordner-Duplikate“ plausibel, Schwelle ändern
+- [x] Plan in Notepad öffnen/speichern (auch CRLF): `apply` ohne Fehlalarm
+- [x] Plan ändern: `apply` bricht ab, `$LASTEXITCODE` = 3, `runs` ohne neuen Lauf
+- [x] `plan seal`: „N“ → Exit 1, „j“ → versiegelt, `apply` läuft
+- [x] Alter Plan (Format 2): Hinweis, Lauf geht weiter
+- [x] Laufzeit `plan dedupe-dirs` auf Index > 500.000 Dateien unter ca. 15 s
 
 ## 3. Block C: GUI-Kern
 
 Abschnitt 4, 5, 1b (GUI) und 1a (GUI).
 
-- [ ] Karte „Doppelte Ordner“: Zahl, Review, Teilauswahl anwenden, zurückdrehen
-- [ ] Plan extern ändern, „Anwenden“: Dialog „Plan wurde verändert“, „Plan neu laden“
-- [ ] Review-Liste mit 500 echten Einträgen in unter 5 Minuten sichten
-- [ ] Purge ohne Eingriff (Hinweis: `0d` wird abgelehnt, Auffälligkeit 2; Frist ggf. 1d und einen Tag warten)
-- [ ] 100.000 Zeilen: Ruckeln beim Scrollbalken akzeptieren oder Kriterium umformulieren
-- [ ] Regel per Formular anlegen, Roh-TOML-Fehler, Config-Konflikt mit `.bak`
-- [ ] Profil/Zeitplan aus der GUI, Vorlage kopieren, Startmenü-Verknüpfung
+- [x] Karte „Doppelte Ordner“: Zahl, Review, Teilauswahl anwenden, zurückdrehen
+- [x] Plan extern ändern, „Anwenden“: Dialog „Plan wurde verändert“, „Plan neu laden“
+- [x] Review-Liste mit 500 echten Einträgen in unter 5 Minuten sichten
+- [x] Purge ohne Eingriff (Hinweis: `0d` wird abgelehnt, Auffälligkeit 2; Frist ggf. 1d und einen Tag warten)
+- [x] 100.000 Zeilen: Ruckeln beim Scrollbalken akzeptieren oder Kriterium umformulieren
+- [x] Regel per Formular anlegen, Roh-TOML-Fehler, Config-Konflikt mit `.bak`
+- [x] Profil/Zeitplan aus der GUI, Vorlage kopieren, Startmenü-Verknüpfung
 
 ## 4. Block D: Quarantäne-Ansicht (Abschnitt 1c)
 
 Nach einem echten Aufräumlauf (Duplikate + Müll):
 
-- [ ] Liste stimmt mit „Verlauf“ überein (Name, Ort, Größe, Lauf, Ablauf, Status)
-- [ ] Suche, Wurzel-Auswahl, Sortierung
-- [ ] Zurückholen: normal, bei belegtem Ursprungspfad („(2)“), Ordner, veränderte Datei (Warnung)
-- [ ] Datei in Quarantäne im Explorer gelöscht: „fehlt“
-- [ ] Rechtsklick: „Im Explorer zeigen“ (Quarantäne-Ort), „Pfad kopieren“
-- [ ] „Inhalt ansehen“ im Verlauf, Filter-Etikett; Knopf deaktiviert bei leerem Lauf
-- [ ] Teilweise zurückgeholt, dann „Rückgängig“ des Laufs
-- [ ] Cloud-only in Quarantäne: „nur online“, kein Download
-- [ ] `F1`, `?`, Zurückholen während Scan/Apply
-- [ ] Viele Einträge: flüssig, Ladezeit notieren
+- [x] Liste stimmt mit „Verlauf“ überein (Name, Ort, Größe, Lauf, Ablauf, Status)
+- [x] Suche, Wurzel-Auswahl, Sortierung
+- [x] Zurückholen: normal, bei belegtem Ursprungspfad („(2)“), Ordner, veränderte Datei (Warnung)
+- [x] Datei in Quarantäne im Explorer gelöscht: „fehlt“
+- [x] Rechtsklick: „Im Explorer zeigen“ (Quarantäne-Ort), „Pfad kopieren“
+- [x] „Inhalt ansehen“ im Verlauf, Filter-Etikett; Knopf deaktiviert bei leerem Lauf
+- [x] Teilweise zurückgeholt, dann „Rückgängig“ des Laufs
+- [x] Cloud-only in Quarantäne: „nur online“, kein Download
+- [x] `F1`, `?`, Zurückholen während Scan/Apply
+- [x] Viele Einträge: flüssig, Ladezeit notieren
 
 ## 5. Block E: GUI-Optik (alles in einem Durchgang)
 

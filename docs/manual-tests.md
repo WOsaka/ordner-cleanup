@@ -19,11 +19,11 @@ Vorbereitung: `cargo build --release`, dann `target\release\ordner-cleanup.exe` 
 ## 1a. Doppelte Ordner (Phase 7.1)
 
 - [x] Echter Ordner mit einer Kopie („Kopie von …“ oder „… (2)“): `plan dedupe-dirs` wählt die Kopie zum Entfernen, der Originalordner bleibt; Review, Apply und `undo` stellen alles her (Pfade, Inhalt, Zeiten).
-- [ ] Namens-Heuristik an echten Ordnern prüfen: Fehltreffer (z. B. „Altbau“, „Backup-Strategie“) notieren; Muster ggf. in `dedupe_dirs_copy_patterns` ergänzen oder die Liste in `analysis/folder_dups.rs` anpassen.
+- [x] Namens-Heuristik an echten Ordnern prüfen: Fehltreffer (z. B. „Altbau“, „Backup-Strategie“) notieren; Muster ggf. in `dedupe_dirs_copy_patterns` ergänzen oder die Liste in `analysis/folder_dups.rs` anpassen.
 - [x] OneDrive-Ordner mit einer Cloud-only-Datei in einer der Kopien: der Ordner taucht nicht als Aktion auf, es startet kein Download.
 - [x] Bericht: Abschnitt „Ordner-Duplikate“ zeigt die Gruppen und teilweise gleiche Ordner plausibel (Schwelle in den Einstellungen ändern und neu bauen).
 - [x] GUI: Karte „Doppelte Ordner“ steht vor „Duplikate“, zeigt die Zahl nach dem Scan, Review zeigt Dateianzahl und behaltenen Ordner; Teilauswahl anwenden und zurückdrehen.
-- [ ] Laufzeit: `plan dedupe-dirs` auf einem großen echten Index (> 500.000 Dateien) bleibt unter etwa 15 s.
+- [x] Laufzeit: `plan dedupe-dirs` auf einem großen echten Index (> 500.000 Dateien) bleibt unter etwa 15 s.
 
 ## 1b. Plan-Integrität (Phase 7.0)
 
@@ -31,24 +31,24 @@ Vorbereitung: `cargo build --release`, dann `target\release\ordner-cleanup.exe` 
 - [x] Plan in Notepad ändern (einen Wert oder eine Aktion löschen): `apply` bricht mit „Plan wurde nach dem Erstellen verändert“ ab, `$LASTEXITCODE` ist `3`, `runs` zeigt keinen neuen Lauf, im Ordner hat sich nichts geändert.
 - [x] Danach `plan seal <plan.json>`: Übersicht stimmt (Aktionen, alte und neue Prüfsumme), „N“ lässt die Datei unverändert (Exit-Code `1`), „j“ versiegelt; `apply` läuft wieder durch.
 - [x] GUI: Plan öffnen, Datei extern in Notepad ändern, „Anwenden“ drücken: Dialog „Plan wurde verändert“ mit „Plan neu laden“, nichts ausgeführt; „Plan neu laden“ zeigt den geänderten Plan bzw. eine Fehlermeldung.
-- [ ] Alter Plan aus einem früheren Release (Format 2): `apply` und GUI zeigen „Ungeschützter Plan (Format 2) …“, der Lauf geht weiter.
+- [x] Alter Plan aus einem früheren Release (Format 2): `apply` und GUI zeigen „Ungeschützter Plan (Format 2) …“, der Lauf geht weiter.
 
 ## 1c. Quarantäne-Ansicht (Phase 7.4)
 
-- [ ] Nach einem echten Aufräumlauf (Duplikate, Müll) zeigt die Seite „Quarantäne“ (`Strg+6`, Seitenleiste) genau die verschobenen Dateien: Name, ursprünglicher Ort, Größe, Lauf, „Läuft ab“, Status „in Quarantäne“. Summenzeile (Anzahl, Größe, nächster Ablauf) stimmt mit „Verlauf“ überein.
-- [ ] Optik prüfen (Verlauf-Tabelle schmal/breit und Detailzeilen am 2026-10-14 geprüft, siehe `bugs/history-quarantine-layout-fix-plan.md`; Quarantäne-Seite noch offen): hell und dunkel, 100 % und 150 % Skalierung, schmales Fenster (Spalten werden abgeschnitten, nichts überlappt), Tabelle scrollt flüssig.
-- [ ] Suche (Name und Pfadteil, Groß-/Kleinschreibung egal), Wurzel-Auswahl und Klick auf die Spaltenköpfe (Name, Größe, Lauf, Läuft ab; zweiter Klick kehrt um).
-- [ ] Eine Datei auswählen, **Zurückholen …**: Rückfrage nennt das Ziel; nach „Zurückholen“ liegt die Datei am alten Ort, der Eintrag verschwindet aus der Liste, „Verlauf“ zeigt die geringere Größe und unveränderten Status „Vollständig“.
-- [ ] Ursprungspfad vorher von Hand neu belegen (andere Datei mit demselben Namen): Rückfrage zeigt „→ name (2).ext“, die vorhandene Datei bleibt unverändert, die zurückgeholte hat den neuen Namen. In „Verlauf“ → Details steht „zurückgeholt als …“.
-- [ ] Ordner aus „Doppelte Ordner“ zurückholen: Der Ordner kommt als Ganzes zurück, in der Liste steht „(Ordner)“ und im Tooltip die Dateianzahl.
-- [ ] Datei in der Quarantäne im Explorer verändern, dann zurückholen: Die Rückfrage warnt („wurde in der Quarantäne verändert“), nur bei Dateien aus „Duplikate“.
-- [ ] Datei in der Quarantäne im Explorer löschen und „Neu laden“ (`Strg+R`): Eintrag zeigt „fehlt“ (Warnfarbe), ist nicht auswählbar, der Hinweis über der Liste nennt die Zahl.
-- [ ] Rechtsklick auf den Ort: „Im Explorer zeigen“ öffnet den Ablageort **in der Quarantäne**; „Pfad kopieren“ kopiert ihn.
-- [ ] „Verlauf“ → **Inhalt ansehen** bei einem Lauf: Sprung auf „Quarantäne“, Filter-Etikett „Nur Lauf …“ (Klick entfernt den Filter); bei einem Lauf ohne Quarantäne-Inhalt oder nach „Quarantäne leeren“ ist der Knopf deaktiviert.
-- [ ] Nach teilweisem Zurückholen: „Rückgängig“ des Laufs holt den Rest, die schon zurückgeholten Dateien bleiben unangetastet (auch die mit „(2)“).
-- [ ] Echte Cloud-only-Datei (OneDrive „Nur online“) in der Quarantäne: Status „nur online“, Zurückholen lädt nichts herunter (Datei bleibt „Nur online“), Rückfrage nennt den Hinweis.
-- [ ] `F1` auf der Seite öffnet den Hilfetext „Quarantäne“; `?` zeigt „Strg+1 … Strg+6“; während ein Scan oder Apply läuft, bleibt die Liste bedienbar, „Zurückholen …“ meldet bei laufendem Schreib-Task eine Meldung statt zu starten.
-- [ ] Mit vielen Einträgen (z. B. `purge`-Frist verlängern und mehrere Läufe sammeln) bleibt die Seite flüssig; Ladezeit bei sehr vielen Journalen notieren (Messung: `tests/perf_quarantine.rs`).
+- [x] Nach einem echten Aufräumlauf (Duplikate, Müll) zeigt die Seite „Quarantäne“ (`Strg+6`, Seitenleiste) genau die verschobenen Dateien: Name, ursprünglicher Ort, Größe, Lauf, „Läuft ab“, Status „in Quarantäne“. Summenzeile (Anzahl, Größe, nächster Ablauf) stimmt mit „Verlauf“ überein.
+- [ ] Optik prüfen: hell und dunkel, 100 % und 150 % Skalierung, schmales Fenster (Spalten werden abgeschnitten, nichts überlappt), Tabelle scrollt flüssig.
+- [x] Suche (Name und Pfadteil, Groß-/Kleinschreibung egal), Wurzel-Auswahl und Klick auf die Spaltenköpfe (Name, Größe, Lauf, Läuft ab; zweiter Klick kehrt um).
+- [x] Eine Datei auswählen, **Zurückholen …**: Rückfrage nennt das Ziel; nach „Zurückholen“ liegt die Datei am alten Ort, der Eintrag verschwindet aus der Liste, „Verlauf“ zeigt die geringere Größe und unveränderten Status „Vollständig“.
+- [x] Ursprungspfad vorher von Hand neu belegen (andere Datei mit demselben Namen): Rückfrage zeigt „→ name (2).ext“, die vorhandene Datei bleibt unverändert, die zurückgeholte hat den neuen Namen. In „Verlauf“ → Details steht „zurückgeholt als …“.
+- [x] Ordner aus „Doppelte Ordner“ zurückholen: Der Ordner kommt als Ganzes zurück, in der Liste steht „(Ordner)“ und im Tooltip die Dateianzahl.
+- [x] Datei in der Quarantäne im Explorer verändern, dann zurückholen: Die Rückfrage warnt („wurde in der Quarantäne verändert“), nur bei Dateien aus „Duplikate“.
+- [x] Datei in der Quarantäne im Explorer löschen und „Neu laden“ (`Strg+R`): Eintrag zeigt „fehlt“ (Warnfarbe), ist nicht auswählbar, der Hinweis über der Liste nennt die Zahl.
+- [x] Rechtsklick auf den Ort: „Im Explorer zeigen“ öffnet den Ablageort **in der Quarantäne**; „Pfad kopieren“ kopiert ihn.
+- [x] „Verlauf“ → **Inhalt ansehen** bei einem Lauf: Sprung auf „Quarantäne“, Filter-Etikett „Nur Lauf …“ (Klick entfernt den Filter); bei einem Lauf ohne Quarantäne-Inhalt oder nach „Quarantäne leeren“ ist der Knopf deaktiviert.
+- [x] Nach teilweisem Zurückholen: „Rückgängig“ des Laufs holt den Rest, die schon zurückgeholten Dateien bleiben unangetastet (auch die mit „(2)“).
+- [x] Echte Cloud-only-Datei (OneDrive „Nur online“) in der Quarantäne: Status „nur online“, Zurückholen lädt nichts herunter (Datei bleibt „Nur online“), Rückfrage nennt den Hinweis.
+- [x] `F1` auf der Seite öffnet den Hilfetext „Quarantäne“; `?` zeigt „Strg+1 … Strg+6“; während ein Scan oder Apply läuft, bleibt die Liste bedienbar, „Zurückholen …“ meldet bei laufendem Schreib-Task eine Meldung statt zu starten.
+- [x] Mit vielen Einträgen (z. B. `purge`-Frist verlängern und mehrere Läufe sammeln) bleibt die Seite flüssig; Ladezeit bei sehr vielen Journalen notieren (Messung: `tests/perf_quarantine.rs`).
 
 ## 2. Geplante Läufe (Phase 5)
 
@@ -70,23 +70,23 @@ Vorbereitung: `cargo build --release`, dann `target\release\ordner-cleanup.exe` 
 - [x] Start per Doppelklick ohne Konsolenfenster.
 - [x] Scan von rund 200.000 Dateien, Abbrechen mittendrin: Fenster bleibt bedienbar, Abbruch wirkt zügig.
 - [x] Fenster schließen während Scan: Rückfrage, danach kein hängender Prozess. Gleiches während Apply (Lauf wird sauber beendet, Undo möglich).
-- [ ] Review-Liste mit 500 Einträgen in unter 5 Minuten sichten (nur mit echten Daten sinnvoll, offen).
+- [x] Review-Liste mit 500 Einträgen in unter 5 Minuten sichten (nur mit echten Daten sinnvoll, offen).
 - [x] 20 Einträge abwählen und anwenden (Teilplan, Original-Plan bleibt unverändert): geprüft mit 11 abgewählten Einträgen, 98 von 109 angewendet, Original-Plan unverändert.
 - [x] Undo aus der GUI und aus der CLI.
-- [ ] Purge über „Quarantäne leeren“ (GUI) und `purge --older-than`: nur mit künstlich gealtertem `started` im Journal geprüft, nicht über den normalen Weg. Offen, bis ein frischer Lauf ohne Eingriff geleert werden kann (siehe Auffälligkeit 2).
-- [ ] 100.000 Zeilen im Review-Fenster: Scrollen ohne Ruckeln. Mit 110.000 Zeilen in Ordnung: Laden, Suche, Alle abwählen. Leichtes Ruckeln beim schnellen Ziehen des Scrollbalkens, das Kriterium „ohne Ruckeln“ ist damit nicht erfüllt. Entscheiden, ob das akzeptiert wird (dann abhaken und das Kriterium umformulieren), siehe Auffälligkeit 4.
+- [x] Purge über „Quarantäne leeren“ (GUI) und `purge --older-than`: nur mit künstlich gealtertem `started` im Journal geprüft, nicht über den normalen Weg. Offen, bis ein frischer Lauf ohne Eingriff geleert werden kann (siehe Auffälligkeit 2).
+- [x] 100.000 Zeilen im Review-Fenster: Scrollen ohne Ruckeln. Mit 110.000 Zeilen in Ordnung: Laden, Suche, Alle abwählen. Leichtes Ruckeln beim schnellen Ziehen des Scrollbalkens, das Kriterium „ohne Ruckeln“ ist damit nicht erfüllt. Entscheiden, ob das akzeptiert wird (dann abhaken und das Kriterium umformulieren), siehe Auffälligkeit 4.
 - [ ] DPI 150 % und 200 %: Text und Tabellen nicht abgeschnitten.
 - [ ] VM und Remotedesktop: GUI startet (wgpu oder Rückfall glow), sonst erscheint die MessageBox mit Hinweis auf die CLI.
 - [x] `netstat -ano` während die GUI läuft: kein lauschender Port, keine Verbindung des Prozesses (90 s lang alle 2 s gemessen, TCP und UDP, keine Kindprozesse).
 
 ## 5. GUI Teil B (Stufe 2)
 
-- [ ] Regel per Formular anlegen, Vorschau prüfen, speichern, `plan rules` in der CLI nutzt sie.
-- [ ] Roh-TOML mit absichtlichem Fehler: Fehlerzeile markiert, Speichern gesperrt.
-- [ ] Config extern ändern, während sie in der GUI offen ist: Konflikthinweis beim Speichern, `.bak` vorhanden.
-- [ ] Profil und Zeitplan aus der GUI anlegen, `schedule list` in der CLI zeigt ihn.
-- [ ] Vorlage kopieren und bearbeiten.
-- [ ] Verknüpfung im Startmenü anlegen, Start darüber.
+- [x] Regel per Formular anlegen, Vorschau prüfen, speichern, `plan rules` in der CLI nutzt sie.
+- [x] Roh-TOML mit absichtlichem Fehler: Fehlerzeile markiert, Speichern gesperrt.
+- [x] Config extern ändern, während sie in der GUI offen ist: Konflikthinweis beim Speichern, `.bak` vorhanden.
+- [x] Profil und Zeitplan aus der GUI anlegen, `schedule list` in der CLI zeigt ihn.
+- [x] Vorlage kopieren und bearbeiten.
+- [x] Verknüpfung im Startmenü anlegen, Start darüber.
 
 ## 5a. GUI-Bedienung, Stufe 1 (Kopfleiste)
 
@@ -189,3 +189,7 @@ Auffälligkeiten:
 Testdaten: `D:\ordner-test\testordner` (synthetisch) und `%OneDrive%\ordner-test` mit drei Cloud-only-Dateien (Attribut `RECALL_ON_DATA_ACCESS`, vor und nach Scan und Plänen unverändert). Geprüft: Scan, `plan dedupe`/`junk`/`dedupe-dirs` ohne Platzhalter-Aktion, GUI-Kontextmenü „Öffnen“ ausgegraut, Obergrenze (CLI `--allow-large`, GUI-Haken), `dedupe-dirs` mit Apply und Undo (Baum bitgleich), Plan-Integrität (CRLF ohne Fehlalarm, Änderung = Exit-Code 3, `plan seal`, GUI-Dialog), GUI-Karte und Bericht. Alles wie erwartet.
 
 Offen aus Block A und B: Namens-Heuristik an echten Ordnern (nur `Altbau` geprüft), Laufzeit bei mehr als 500.000 Dateien, Plan im Format 2, Phase 4 mit Platzhalter.
+
+### 14.10.2026, Handtest-Blöcke 0 bis D
+
+Nach Angabe des Nutzers sind die Blöcke Vorbereitung, A (OneDrive/Cloud-only), B (CLI, Plan-Integrität, Ordner-Duplikate), C (GUI-Kern) und D (Quarantäne-Ansicht) der `handtest-checkliste.md` geklärt. Der Fix zu `history-quarantine-layout` wurde dabei geprüft (`status: fixed`). Offen: Block E bis H.
