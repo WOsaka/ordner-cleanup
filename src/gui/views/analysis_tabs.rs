@@ -73,9 +73,9 @@ fn file_table(ui: &mut egui::Ui, id: &str, items: &[FileItem], shell: &mut Shell
         .id_salt(id)
         .striped(true)
         .max_scroll_height(360.0)
-        .column(Column::remainder().clip(true))
-        .column(Column::auto())
-        .column(Column::auto())
+        .column(Column::remainder().at_least(200.0).clip(true))
+        .column(Column::exact(90.0))
+        .column(Column::exact(110.0))
         .header(ROW_H, |mut h| {
             for t in ["Pfad", "Größe", "Alter"] {
                 h.col(|ui| {
@@ -100,34 +100,56 @@ fn file_table(ui: &mut egui::Ui, id: &str, items: &[FileItem], shell: &mut Shell
         });
 }
 
+/// Kleine Verteilungstabelle (Name, Anzahl, Größe) unter einer Überschrift.
+fn distribution(ui: &mut egui::Ui, id: &str, title: &str, rows: &[(&str, u64, u64)]) {
+    heading(ui, title);
+    egui::Grid::new(id)
+        .striped(true)
+        .spacing([16.0, 4.0])
+        .show(ui, |ui| {
+            for (name, count, size) in rows {
+                ui.label(*name);
+                ui.label(texts::grouped(*count));
+                ui.label(texts::bytes(*size));
+                ui.end_row();
+            }
+        });
+}
+
+/// Unter dieser Breite stehen die drei Verteilungen untereinander statt nebeneinander.
+const SIDE_BY_SIDE_MIN_WIDTH: f32 = 780.0;
+
 pub fn types_and_age(ui: &mut egui::Ui, report: &Report, shell: &mut Shell) {
-    heading(ui, "Nach Endung");
-    egui::Grid::new("by-ext").striped(true).show(ui, |ui| {
-        for t in report.file_types.by_extension.iter().take(30) {
-            ui.label(&t.key);
-            ui.label(texts::grouped(t.count));
-            ui.label(texts::bytes(t.size));
-            ui.end_row();
-        }
-    });
-    heading(ui, "Nach Kategorie");
-    egui::Grid::new("by-cat").striped(true).show(ui, |ui| {
-        for t in &report.file_types.by_category {
-            ui.label(&t.key);
-            ui.label(texts::grouped(t.count));
-            ui.label(texts::bytes(t.size));
-            ui.end_row();
-        }
-    });
-    heading(ui, "Nach Alter");
-    egui::Grid::new("by-age").striped(true).show(ui, |ui| {
-        for a in &report.age.classes {
-            ui.label(&a.label);
-            ui.label(texts::grouped(a.count));
-            ui.label(texts::bytes(a.size));
-            ui.end_row();
-        }
-    });
+    let ext: Vec<(&str, u64, u64)> = report
+        .file_types
+        .by_extension
+        .iter()
+        .take(30)
+        .map(|t| (t.key.as_str(), t.count, t.size))
+        .collect();
+    let cat: Vec<(&str, u64, u64)> = report
+        .file_types
+        .by_category
+        .iter()
+        .map(|t| (t.key.as_str(), t.count, t.size))
+        .collect();
+    let age: Vec<(&str, u64, u64)> = report
+        .age
+        .classes
+        .iter()
+        .map(|a| (a.label.as_str(), a.count, a.size))
+        .collect();
+    if ui.available_width() >= SIDE_BY_SIDE_MIN_WIDTH {
+        ui.columns(3, |cols| {
+            distribution(&mut cols[0], "by-ext", "Nach Endung", &ext);
+            distribution(&mut cols[1], "by-cat", "Nach Kategorie", &cat);
+            distribution(&mut cols[2], "by-age", "Nach Alter", &age);
+        });
+    } else {
+        distribution(ui, "by-ext", "Nach Endung", &ext);
+        distribution(ui, "by-cat", "Nach Kategorie", &cat);
+        distribution(ui, "by-age", "Nach Alter", &age);
+    }
     heading(
         ui,
         &format!("Größte Dateien (Top {})", report.top_files.len()),
