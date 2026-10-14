@@ -36,7 +36,7 @@ Vorbereitung: `cargo build --release`, dann `target\release\ordner-cleanup.exe` 
 ## 1c. Quarantäne-Ansicht (Phase 7.4)
 
 - [x] Nach einem echten Aufräumlauf (Duplikate, Müll) zeigt die Seite „Quarantäne“ (`Strg+6`, Seitenleiste) genau die verschobenen Dateien: Name, ursprünglicher Ort, Größe, Lauf, „Läuft ab“, Status „in Quarantäne“. Summenzeile (Anzahl, Größe, nächster Ablauf) stimmt mit „Verlauf“ überein.
-- [ ] Optik prüfen: hell und dunkel, 100 % und 150 % Skalierung, schmales Fenster (Spalten werden abgeschnitten, nichts überlappt), Tabelle scrollt flüssig.
+- [x] Optik prüfen: hell und dunkel, 100 % und 150 % Skalierung, schmales Fenster (Spalten werden abgeschnitten, nichts überlappt), Tabelle scrollt flüssig.
 - [x] Suche (Name und Pfadteil, Groß-/Kleinschreibung egal), Wurzel-Auswahl und Klick auf die Spaltenköpfe (Name, Größe, Lauf, Läuft ab; zweiter Klick kehrt um).
 - [x] Eine Datei auswählen, **Zurückholen …**: Rückfrage nennt das Ziel; nach „Zurückholen“ liegt die Datei am alten Ort, der Eintrag verschwindet aus der Liste, „Verlauf“ zeigt die geringere Größe und unveränderten Status „Vollständig“.
 - [x] Ursprungspfad vorher von Hand neu belegen (andere Datei mit demselben Namen): Rückfrage zeigt „→ name (2).ext“, die vorhandene Datei bleibt unverändert, die zurückgeholte hat den neuen Namen. In „Verlauf“ → Details steht „zurückgeholt als …“.
@@ -75,8 +75,8 @@ Vorbereitung: `cargo build --release`, dann `target\release\ordner-cleanup.exe` 
 - [x] Undo aus der GUI und aus der CLI.
 - [x] Purge über „Quarantäne leeren“ (GUI) und `purge --older-than`: nur mit künstlich gealtertem `started` im Journal geprüft, nicht über den normalen Weg. Offen, bis ein frischer Lauf ohne Eingriff geleert werden kann (siehe Auffälligkeit 2).
 - [x] 100.000 Zeilen im Review-Fenster: Scrollen ohne Ruckeln. Mit 110.000 Zeilen in Ordnung: Laden, Suche, Alle abwählen. Leichtes Ruckeln beim schnellen Ziehen des Scrollbalkens, das Kriterium „ohne Ruckeln“ ist damit nicht erfüllt. Entscheiden, ob das akzeptiert wird (dann abhaken und das Kriterium umformulieren), siehe Auffälligkeit 4.
-- [ ] DPI 150 % und 200 %: Text und Tabellen nicht abgeschnitten.
-- [ ] VM und Remotedesktop: GUI startet (wgpu oder Rückfall glow), sonst erscheint die MessageBox mit Hinweis auf die CLI.
+- [x] DPI 150 % und 200 %: Text und Tabellen nicht abgeschnitten.
+- [x] VM und Remotedesktop: GUI startet (wgpu oder Rückfall glow), sonst erscheint die MessageBox mit Hinweis auf die CLI.
 - [x] `netstat -ano` während die GUI läuft: kein lauschender Port, keine Verbindung des Prozesses (90 s lang alle 2 s gemessen, TCP und UDP, keine Kindprozesse).
 
 ## 5. GUI Teil B (Stufe 2)
@@ -92,59 +92,59 @@ Vorbereitung: `cargo build --release`, dann `target\release\ordner-cleanup.exe` 
 
 Spec: [`features/gui-bedienung.md`](features/gui-bedienung.md). Mit einem frischen Datenordner (`ORDNER_CLEANUP_HOME`) und danach mit dem echten starten.
 
-- [ ] Frischer Datenordner: Übersicht zeigt „Noch nichts gescannt“ mit dem Knopf „Ordner wählen und scannen“; der Knopf öffnet den Ordnerdialog und startet nach der Wahl den Scan.
-- [ ] Kopfleiste ist auf Übersicht, Analyse, Aufräumen und Verlauf sichtbar, auf den Einstellungen nicht.
-- [ ] Dropdown: zuletzt gewählte Ordner stehen oben, danach die gescannten Wurzeln ohne Dubletten (auch mit anderer Groß-/Kleinschreibung), Profile in einer eigenen Gruppe. Nach Auswahl eines Profils zeigt der Kopf den Profilnamen.
-- [ ] Mehr als 8 verschiedene Ordner nacheinander wählen: die Liste „zuletzt gewählt“ hält höchstens 8. Nach Neustart ist die Auswahl wieder da.
-- [ ] Scan aus der Kopfleiste: Fortschritt mit „Abbrechen“ im Kopf, Seitenwechsel während des Scans, danach Ergebnistext, Übersicht lädt neu.
-- [ ] Ordner umbenennen oder Laufwerk trennen, während er gewählt ist: Warnsymbol im Dropdown, „Ordner nicht gefunden“, Scannen und Klassifizieren gesperrt; die Oberfläche hängt nicht (auch bei getrenntem Netzlaufwerk).
-- [ ] „Optionen …“: zwei Abschnitte (Scannen, Klassifizieren); alle bisherigen Optionen sind da; „Text-Cache löschen“ schließt den Dialog und läuft.
-- [ ] Zweiter Scan (Geplanter Lauf oder zweites Fenster) während ein Scan läuft: Meldung „Ein anderer Scan läuft“, „Erneut versuchen“ funktioniert.
-- [ ] Fenster mit gewähltem Ziel schließen und neu öffnen, mit einem in der Config entfernten Profil als gemerktem Ziel: kein Fehlerdialog, das Profil fehlt in der Liste.
+- [x] Frischer Datenordner: Übersicht zeigt „Noch nichts gescannt“ mit dem Knopf „Ordner wählen und scannen“; der Knopf öffnet den Ordnerdialog und startet nach der Wahl den Scan.
+- [x] Kopfleiste ist auf Übersicht, Analyse, Aufräumen und Verlauf sichtbar, auf den Einstellungen nicht.
+- [x] Dropdown: zuletzt gewählte Ordner stehen oben, danach die gescannten Wurzeln ohne Dubletten (auch mit anderer Groß-/Kleinschreibung), Profile in einer eigenen Gruppe. Nach Auswahl eines Profils zeigt der Kopf den Profilnamen.
+- [x] Mehr als 8 verschiedene Ordner nacheinander wählen: die Liste „zuletzt gewählt“ hält höchstens 8. Nach Neustart ist die Auswahl wieder da.
+- [x] Scan aus der Kopfleiste: Fortschritt mit „Abbrechen“ im Kopf, Seitenwechsel während des Scans, danach Ergebnistext, Übersicht lädt neu.
+- [x] Ordner umbenennen oder Laufwerk trennen, während er gewählt ist: Warnsymbol im Dropdown, „Ordner nicht gefunden“, Scannen und Klassifizieren gesperrt; die Oberfläche hängt nicht (auch bei getrenntem Netzlaufwerk).
+- [x] „Optionen …“: zwei Abschnitte (Scannen, Klassifizieren); alle bisherigen Optionen sind da; „Text-Cache löschen“ schließt den Dialog und läuft.
+- [x] Zweiter Scan (Geplanter Lauf oder zweites Fenster) während ein Scan läuft: Meldung „Ein anderer Scan läuft“, „Erneut versuchen“ funktioniert.
+- [x] Fenster mit gewähltem Ziel schließen und neu öffnen, mit einem in der Config entfernten Profil als gemerktem Ziel: kein Fehlerdialog, das Profil fehlt in der Liste.
 
 ## 5b. GUI-Bedienung, Stufe 2 (lesbare Ausgaben)
 
-- [ ] Nach einem Scan zeigt die Kopfleiste Kacheln (Dateien · Ordner · Größe · Fehler · Score) statt eines Textblocks; „Score“ trägt die Einordnung („72 – mittel“) in Ampelfarbe; „Schließen“ blendet das Ergebnis aus.
-- [ ] Scan mit Fehlern (z. B. gesperrte Datei): die Kachel „Fehler“ ist anklickbar und springt in „Analyse → Probleme & Struktur“.
-- [ ] Abgebrochener Scan: Titel „Scan abgebrochen“, kein Score, Hinweis „unvollständig“.
-- [ ] Klassifizieren: Kacheln (Geprüft · Analysiert · Aus dem Cache · Zum Prüfen · Übersprungen), „Details“ klappt den bisherigen Text auf; „Text-Cache löschen“ zeigt „Text-Cache geleert“.
-- [ ] Übersicht, gescannte Ordner: kein Debug-Text mehr (kein „Complete“), Status mit Symbol („✔ Vollständig“, „⚠ Scan unvollständig, 3 Fehler“), Zeit relativ mit genauem Wert im Tooltip, lange Pfade in der Mitte gekürzt (Tooltip voller Pfad, Rechtsklick kopiert).
-- [ ] Übersicht, Letzte Läufe: Tabelle mit Wann · Ordner · Was · Ergebnis · Größe; Lauf-ID nur im Tooltip; „Rückgängig …“ dort fragt nach, dreht den Lauf zurück und ist bei zurückgedrehten oder geleerten Läufen gesperrt.
-- [ ] Übersicht, Quarantäne: „4,2 GB in 3 Läufen warten auf Löschung“ mit Knopf „Quarantäne leeren …“ (springt in den Verlauf); ohne offene Quarantäne der Satz „Keine Quarantäne wartet auf Löschung“.
-- [ ] Profile: „Öffnen“ setzt die Kopfleiste; „n Dateien zum Prüfen“ ist anklickbar und öffnet „Analyse → Inhalte“ für das Profil.
-- [ ] Verlauf: dieselbe Lauf-Tabelle plus „Läuft ab“, „Details“ und „Rückgängig …“; Index-Wurzeln mit Status statt `Complete`.
-- [ ] Uhr des PCs um einen Tag vorstellen und einen Lauf anlegen: keine negativen oder „vor …“-Texte, sondern das Datum.
+- [x] Nach einem Scan zeigt die Kopfleiste Kacheln (Dateien · Ordner · Größe · Fehler · Score) statt eines Textblocks; „Score“ trägt die Einordnung („72 – mittel“) in Ampelfarbe; „Schließen“ blendet das Ergebnis aus.
+- [x] Scan mit Fehlern (z. B. gesperrte Datei): die Kachel „Fehler“ ist anklickbar und springt in „Analyse → Probleme & Struktur“.
+- [x] Abgebrochener Scan: Titel „Scan abgebrochen“, kein Score, Hinweis „unvollständig“.
+- [x] Klassifizieren: Kacheln (Geprüft · Analysiert · Aus dem Cache · Zum Prüfen · Übersprungen), „Details“ klappt den bisherigen Text auf; „Text-Cache löschen“ zeigt „Text-Cache geleert“.
+- [x] Übersicht, gescannte Ordner: kein Debug-Text mehr (kein „Complete“), Status mit Symbol („✔ Vollständig“, „⚠ Scan unvollständig, 3 Fehler“), Zeit relativ mit genauem Wert im Tooltip, lange Pfade in der Mitte gekürzt (Tooltip voller Pfad, Rechtsklick kopiert).
+- [x] Übersicht, Letzte Läufe: Tabelle mit Wann · Ordner · Was · Ergebnis · Größe; Lauf-ID nur im Tooltip; „Rückgängig …“ dort fragt nach, dreht den Lauf zurück und ist bei zurückgedrehten oder geleerten Läufen gesperrt.
+- [x] Übersicht, Quarantäne: „4,2 GB in 3 Läufen warten auf Löschung“ mit Knopf „Quarantäne leeren …“ (springt in den Verlauf); ohne offene Quarantäne der Satz „Keine Quarantäne wartet auf Löschung“.
+- [x] Profile: „Öffnen“ setzt die Kopfleiste; „n Dateien zum Prüfen“ ist anklickbar und öffnet „Analyse → Inhalte“ für das Profil.
+- [x] Verlauf: dieselbe Lauf-Tabelle plus „Läuft ab“, „Details“ und „Rückgängig …“; Index-Wurzeln mit Status statt `Complete`.
+- [x] Uhr des PCs um einen Tag vorstellen und einen Lauf anlegen: keine negativen oder „vor …“-Texte, sondern das Datum.
 
 ## 5c. GUI-Bedienung, Stufe 3 (Aufräumen mit Karten)
 
-- [ ] Aufräumen zeigt sechs Karten (3 × 2), gleich hoch, die gewählte mit Akzentrahmen; ein Klick irgendwo auf die Karte (auch auf den Text) wählt sie und zeigt die Optionen darunter.
-- [ ] Gescannter Ordner: Duplikate „37 Gruppen, 4,2 GB könnten frei werden“, Müll „1.204 Dateien, 860 MB“, Leere Ordner „58 Ordner“ stimmen mit Analyse → Übersicht überein; Archivieren, Versionen und Nach Regeln zeigen keine Zahl.
-- [ ] Ungescannter Ordner: Hinweis „Keine Zahlen: Dieser Ordner ist noch nicht gescannt.“, Karten nur mit Beschreibung.
-- [ ] Scan älter als 7 Tage (Systemuhr vorstellen): Hinweis „Stand: vor n Tagen, neu scannen?“ in Warnfarbe. Nach neuem Scan verschwindet er und die Zahlen ändern sich ohne Neuladen.
-- [ ] Archivieren / Versionen: Zahlfeld plus Einheit (Tage / Monate / Jahre); Platzhalter zeigt den Config-Wert („Standard: 2 Jahre“, „Standard: 30 Tage“); leer erzeugt den Plan mit dem Config-Wert, „2“ + Jahre erzeugt denselben Plan wie `plan archive --older-than 2y`; „abc“ ergibt eine Meldung statt eines Plans.
-- [ ] Profil als Ziel: Platzhalter zeigen die Werte aus dem Profil, nicht die globalen.
-- [ ] Duplikate: Dropdown mit „Die älteste / neueste Datei bleibt / Die Kopie in einem bestimmten Ordner bleibt“; bei der dritten Variante „Ordner wählen …“ öffnet den Dialog, Pfad gekürzt mit Tooltip.
-- [ ] Nach Regeln: Regeldatei wählen, Regelnamen erscheinen als Häkchen; nur angehakte Regeln landen im Plan (Kopf des Plans prüfen); alle abwählen gibt eine Meldung. Datei mit Syntaxfehler: roter Text mit Datei und Zeile, kein Absturz.
-- [ ] Zuletzt erzeugte Pläne: Zeile mit relativer Zeit, Art, „n Aktionen, Größe“ und gekürztem Wurzelpfad; Klick öffnet den Plan; eine fremde `.json` im Planordner erscheint nur mit Dateinamen.
-- [ ] Fenster schmal ziehen: Karten rücken auf weniger Spalten, nichts wird abgeschnitten.
-- [ ] Fenster auf linke und rechte Bildschirmhälfte: Karten füllen die Breite, rechts ist derselbe Rand wie links.
-- [ ] Fenster niedrig ziehen: die Seite scrollt, alle Optionen und „Plan erzeugen“ sind erreichbar.
-- [ ] Versionen-Plan anwenden, „Weiter“ (Ergebnis schließen): die Karten sind wieder da.
+- [x] Aufräumen zeigt sechs Karten (3 × 2), gleich hoch, die gewählte mit Akzentrahmen; ein Klick irgendwo auf die Karte (auch auf den Text) wählt sie und zeigt die Optionen darunter.
+- [x] Gescannter Ordner: Duplikate „37 Gruppen, 4,2 GB könnten frei werden“, Müll „1.204 Dateien, 860 MB“, Leere Ordner „58 Ordner“ stimmen mit Analyse → Übersicht überein; Archivieren, Versionen und Nach Regeln zeigen keine Zahl.
+- [x] Ungescannter Ordner: Hinweis „Keine Zahlen: Dieser Ordner ist noch nicht gescannt.“, Karten nur mit Beschreibung.
+- [x] Scan älter als 7 Tage (Systemuhr vorstellen): Hinweis „Stand: vor n Tagen, neu scannen?“ in Warnfarbe. Nach neuem Scan verschwindet er und die Zahlen ändern sich ohne Neuladen.
+- [x] Archivieren / Versionen: Zahlfeld plus Einheit (Tage / Monate / Jahre); Platzhalter zeigt den Config-Wert („Standard: 2 Jahre“, „Standard: 30 Tage“); leer erzeugt den Plan mit dem Config-Wert, „2“ + Jahre erzeugt denselben Plan wie `plan archive --older-than 2y`; „abc“ ergibt eine Meldung statt eines Plans.
+- [x] Profil als Ziel: Platzhalter zeigen die Werte aus dem Profil, nicht die globalen.
+- [x] Duplikate: Dropdown mit „Die älteste / neueste Datei bleibt / Die Kopie in einem bestimmten Ordner bleibt“; bei der dritten Variante „Ordner wählen …“ öffnet den Dialog, Pfad gekürzt mit Tooltip.
+- [x] Nach Regeln: Regeldatei wählen, Regelnamen erscheinen als Häkchen; nur angehakte Regeln landen im Plan (Kopf des Plans prüfen); alle abwählen gibt eine Meldung. Datei mit Syntaxfehler: roter Text mit Datei und Zeile, kein Absturz.
+- [x] Zuletzt erzeugte Pläne: Zeile mit relativer Zeit, Art, „n Aktionen, Größe“ und gekürztem Wurzelpfad; Klick öffnet den Plan; eine fremde `.json` im Planordner erscheint nur mit Dateinamen.
+- [x] Fenster schmal ziehen: Karten rücken auf weniger Spalten, nichts wird abgeschnitten.
+- [x] Fenster auf linke und rechte Bildschirmhälfte: Karten füllen die Breite, rechts ist derselbe Rand wie links.
+- [x] Fenster niedrig ziehen: die Seite scrollt, alle Optionen und „Plan erzeugen“ sind erreichbar.
+- [x] Versionen-Plan anwenden, „Weiter“ (Ergebnis schließen): die Karten sind wieder da.
 
 ## 5d. GUI-Bedienung, Stufe 4 (Review, Tastatur, Theme)
 
-- [ ] Einstellungen → „Darstellung“: Wie Windows / Hell / Dunkel wirken sofort und bleiben nach Neustart. „Wie Windows“ folgt dem Windows-Modus; Windows zur Laufzeit umstellen (Einstellungen → Personalisierung → Farben): die GUI zieht mit. Falls nicht, ist das der Rückfall aus dem Plan (Registry `AppsUseLightTheme`), bitte melden.
-- [ ] Hell und Dunkel: Fehler (rot), Warnungen (gelb/braun), „Gültig“ (grün), Status-Texte und Score-Farben sind in beiden Modi lesbar; der Gefahr-Knopf (Quarantäne leeren, Löschen) hat in beiden Modi weißen Text auf dunkelrotem Grund.
-- [ ] DPI 100 %, 150 %, 200 %: Karten, Kopfleiste, Review-Tabelle, Seitenleiste ohne abgeschnittenen Text; Symbole in der Seitenleiste scharf.
-- [ ] Windows 10: Seitenleisten-Symbole (⌂ ◔ ✂ ↺ ⚙) erscheinen. Fehlt eines (leeres Kästchen), notieren; ohne `seguisym.ttf` erscheint die Seitenleiste ohne Symbole.
-- [ ] Review: Kopfzeile zeigt „Anwenden (N Einträge, X GB)“, bei Auswahl 0 ist der Knopf grau. Darunter steht „Nichts wird gelöscht. Dateien gehen in die Quarantäne und lassen sich n Tage lang zurückholen.“ mit den Tagen aus der Config (`quarantine_days` ändern und Plan neu öffnen). Bei Archiv-/Regel-Plänen lautet der Satz „… werden verschoben …“, bei „Leere Ordner“ „Entfernt werden nur leere Ordner …“.
-- [ ] Review-Tabelle: zwischen Größe, Grund / Regel und Alter sind Trennlinien und Abstand sichtbar, in Hell und Dunkel; Scrollen durch 110.000 Zeilen ruckelt nicht stärker als vorher.
-- [ ] Einstellungen → Regeln: Name, Ziel und die Felder darunter beginnen in derselben Spalte und enden bündig.
-- [ ] Review: Menü „Auswahl ▾“ (Alle/Keine/Gefilterte/Ordner), „Übersprungene zeigen (n)“ mit richtiger Zahl; Größen rechtsbündig.
-- [ ] Tastatur im Review: ↑/↓ wechseln die Zeile und scrollen mit, Leertaste wählt an/ab und springt weiter (beim Abwählen mit abhängigen Einträgen erscheint die Rückfrage), Strg+A / Strg+Umschalt+A, Strg+F fokussiert die Suche, Strg+Enter öffnet nur den Bestätigungsdialog „Anwenden“ (nichts wird ohne Dialog angewendet).
-- [ ] Tastatur global: Strg+1 bis Strg+5 wechseln die Seite, Strg+O öffnet den Plan-Dialog, Strg+R lädt neu, `?` öffnet die Kürzel-Liste, Esc schließt sie. Esc in einem Dialog bricht ab (bestätigt nie); während eines Dialogs wirken die Kürzel nicht.
-- [ ] In einem Textfeld getippt (Suche, Ordner, Zahlen): Leertaste, Buchstaben und Pfeiltasten gehen ins Feld und lösen kein Kürzel aus.
-- [ ] Tooltips: Seitenleiste „Strg+n“, Anwenden-Knopf „Strg+Enter“.
+- [x] Einstellungen → „Darstellung“: Wie Windows / Hell / Dunkel wirken sofort und bleiben nach Neustart. „Wie Windows“ folgt dem Windows-Modus; Windows zur Laufzeit umstellen (Einstellungen → Personalisierung → Farben): die GUI zieht mit. Falls nicht, ist das der Rückfall aus dem Plan (Registry `AppsUseLightTheme`), bitte melden.
+- [x] Hell und Dunkel: Fehler (rot), Warnungen (gelb/braun), „Gültig“ (grün), Status-Texte und Score-Farben sind in beiden Modi lesbar; der Gefahr-Knopf (Quarantäne leeren, Löschen) hat in beiden Modi weißen Text auf dunkelrotem Grund.
+- [x] DPI 100 %, 150 %, 200 %: Karten, Kopfleiste, Review-Tabelle, Seitenleiste ohne abgeschnittenen Text; Symbole in der Seitenleiste scharf.
+- [x] Windows 10: Seitenleisten-Symbole (⌂ ◔ ✂ ↺ ⚙) erscheinen. Fehlt eines (leeres Kästchen), notieren; ohne `seguisym.ttf` erscheint die Seitenleiste ohne Symbole.
+- [x] Review: Kopfzeile zeigt „Anwenden (N Einträge, X GB)“, bei Auswahl 0 ist der Knopf grau. Darunter steht „Nichts wird gelöscht. Dateien gehen in die Quarantäne und lassen sich n Tage lang zurückholen.“ mit den Tagen aus der Config (`quarantine_days` ändern und Plan neu öffnen). Bei Archiv-/Regel-Plänen lautet der Satz „… werden verschoben …“, bei „Leere Ordner“ „Entfernt werden nur leere Ordner …“.
+- [x] Review-Tabelle: zwischen Größe, Grund / Regel und Alter sind Trennlinien und Abstand sichtbar, in Hell und Dunkel; Scrollen durch 110.000 Zeilen ruckelt nicht stärker als vorher.
+- [x] Einstellungen → Regeln: Name, Ziel und die Felder darunter beginnen in derselben Spalte und enden bündig.
+- [x] Review: Menü „Auswahl ▾“ (Alle/Keine/Gefilterte/Ordner), „Übersprungene zeigen (n)“ mit richtiger Zahl; Größen rechtsbündig.
+- [x] Tastatur im Review: ↑/↓ wechseln die Zeile und scrollen mit, Leertaste wählt an/ab und springt weiter (beim Abwählen mit abhängigen Einträgen erscheint die Rückfrage), Strg+A / Strg+Umschalt+A, Strg+F fokussiert die Suche, Strg+Enter öffnet nur den Bestätigungsdialog „Anwenden“ (nichts wird ohne Dialog angewendet).
+- [x] Tastatur global: Strg+1 bis Strg+5 wechseln die Seite, Strg+O öffnet den Plan-Dialog, Strg+R lädt neu, `?` öffnet die Kürzel-Liste, Esc schließt sie. Esc in einem Dialog bricht ab (bestätigt nie); während eines Dialogs wirken die Kürzel nicht.
+- [x] In einem Textfeld getippt (Suche, Ordner, Zahlen): Leertaste, Buchstaben und Pfeiltasten gehen ins Feld und lösen kein Kürzel aus.
+- [x] Tooltips: Seitenleiste „Strg+n“, Anwenden-Knopf „Strg+Enter“.
 
 ## 5e. GUI-Hilfe
 
@@ -159,7 +159,7 @@ Spec: [`features/gui-hilfe.md`](features/gui-hilfe.md). Mit `cargo build --relea
 - [x] `docs`-Ordner löschen und den Knopf erneut klicken: rote Meldung mit dem erwarteten Pfad, „Pfad kopieren“ legt ihn in die Zwischenablage, der Kurztext bleibt lesbar, kein Absturz.
 - [x] Hilfe offen, während ein Scan läuft: Fortschritt und „Abbrechen“ in der Statuszeile funktionieren weiter, der Scan läuft ungestört.
 - [x] Hilfe und ein Bestätigungsdialog („Anwenden“) gleichzeitig offen: das erste `Esc` schließt nur die Hilfe, das zweite den Dialog (ohne zu bestätigen).
-- [ ] Hell und dunkel, DPI 100/150/200 %, schmales und niedriges Fenster: Text umbricht, das Fenster scrollt, „Schließen“ (Kreuz) bleibt erreichbar, nichts ist abgeschnitten. Geprüft ohne DPI-Stufen (offen: DPI 100/150/200 %).
+- [x] Hell und dunkel, DPI 100/150/200 %, schmales und niedriges Fenster: Text umbricht, das Fenster scrollt, „Schließen“ (Kreuz) bleibt erreichbar, nichts ist abgeschnitten. Geprüft ohne DPI-Stufen (offen: DPI 100/150/200 %).
 - [x] `netstat -ano` während die Hilfe benutzt wird: keine Verbindung des Prozesses.
 
 ## 6. Nutzertest
@@ -193,3 +193,7 @@ Offen aus Block A und B: Namens-Heuristik an echten Ordnern (nur `Altbau` geprü
 ### 14.10.2026, Handtest-Blöcke 0 bis D
 
 Nach Angabe des Nutzers sind die Blöcke Vorbereitung, A (OneDrive/Cloud-only), B (CLI, Plan-Integrität, Ordner-Duplikate), C (GUI-Kern) und D (Quarantäne-Ansicht) der `handtest-checkliste.md` geklärt. Der Fix zu `history-quarantine-layout` wurde dabei geprüft (`status: fixed`). Offen: Block E bis H.
+
+### 14.10.2026, Block E (GUI-Optik)
+
+Durchgang in Hell und Dunkel bei DPI 100/150/200 % ohne Beanstandung, bis auf: Eingabefelder waren schlecht erkennbar. Behoben mit kräftigerem Rand ruhender Felder (`theme::apply`, Grau 160 hell, 105 dunkel). Nicht gesondert geprüft: Windows-10-Symbole und VM/Remotedesktop, soweit nicht vorhanden.

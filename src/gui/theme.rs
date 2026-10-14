@@ -69,8 +69,23 @@ pub const CHOICES: [(ThemeChoice, &str); 3] = [
     (egui::ThemePreference::Dark, "Dunkel"),
 ];
 
-/// Übernimmt die gewählte Darstellung.
+/// Randfarbe ruhender Eingabefelder und Knöpfe; kräftiger als der egui-Standard, damit sich
+/// Felder vom Hintergrund abheben.
+pub fn field_border(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_gray(105)
+    } else {
+        Color32::from_gray(160)
+    }
+}
+
+/// Übernimmt die gewählte Darstellung und zieht den Rand ruhender Felder nach.
 pub fn apply(ctx: &egui::Context, choice: ThemeChoice) {
+    for (theme, dark) in [(egui::Theme::Light, false), (egui::Theme::Dark, true)] {
+        ctx.style_mut_of(theme, |style| {
+            style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, field_border(dark));
+        });
+    }
     ctx.set_theme(choice);
 }
 

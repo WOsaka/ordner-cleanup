@@ -68,18 +68,18 @@ Nach einem echten Aufräumlauf (Duplikate + Müll):
 
 Abschnitte 5a bis 5e, 4, 1c. Eine Runde mit Hell/Dunkel × DPI 100/150/200 %, dabei alle Seiten durchklicken.
 
-- [ ] Frischer Datenordner: „Noch nichts gescannt“, Kopfleiste, Dropdown, max. 8 zuletzt gewählte
-- [ ] Ordner umbenennen/Laufwerk trennen: Warnsymbol, Oberfläche hängt nicht
-- [ ] Kacheln nach Scan/Klassifizieren, Fehler-Kachel, abgebrochener Scan
-- [ ] Übersicht: Läufe, Quarantäne-Satz, Profile; Uhr +1 Tag: keine negativen Texte
-- [ ] Aufräumen: sechs Karten, Zahlen, Veraltet-Hinweis (> 7 Tage), Zahlfelder, Profil-Platzhalter, Regeln-Häkchen
-- [ ] Karten bei schmalem, niedrigem, halbem Fenster
-- [ ] Review: Kopfzeile, Hinweissatz je Plan-Art, Trennlinien, Tastatur (Pfeile, Leertaste, Strg+A/F/Enter)
-- [ ] Globale Kürzel Strg+1 bis Strg+6, in Textfeldern kein Kürzel
-- [ ] Einstellungen → Darstellung: Wie Windows/Hell/Dunkel, Umschalten zur Laufzeit
-- [ ] Hilfe (5e): Optik in Hell/Dunkel und DPI 100/150/200 %
-- [ ] Seitenleisten-Symbole auf Windows 10 (falls vorhanden)
-- [ ] VM und Remotedesktop: GUI startet (wgpu oder glow) oder MessageBox
+- [x] Frischer Datenordner: „Noch nichts gescannt“, Kopfleiste, Dropdown, max. 8 zuletzt gewählte
+- [x] Ordner umbenennen/Laufwerk trennen: Warnsymbol, Oberfläche hängt nicht
+- [x] Kacheln nach Scan/Klassifizieren, Fehler-Kachel, abgebrochener Scan
+- [x] Übersicht: Läufe, Quarantäne-Satz, Profile; Uhr +1 Tag: keine negativen Texte
+- [x] Aufräumen: sechs Karten, Zahlen, Veraltet-Hinweis (> 7 Tage), Zahlfelder, Profil-Platzhalter, Regeln-Häkchen
+- [x] Karten bei schmalem, niedrigem, halbem Fenster
+- [x] Review: Kopfzeile, Hinweissatz je Plan-Art, Trennlinien, Tastatur (Pfeile, Leertaste, Strg+A/F/Enter)
+- [x] Globale Kürzel Strg+1 bis Strg+6, in Textfeldern kein Kürzel
+- [x] Einstellungen → Darstellung: Wie Windows/Hell/Dunkel, Umschalten zur Laufzeit
+- [x] Hilfe (5e): Optik in Hell/Dunkel und DPI 100/150/200 %
+- [x] Seitenleisten-Symbole auf Windows 10 (falls vorhanden)
+- [x] VM und Remotedesktop: GUI startet (wgpu oder glow) oder MessageBox
 
 ## 6. Block F: Geplante Läufe (Abschnitt 2)
 
