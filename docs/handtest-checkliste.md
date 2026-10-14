@@ -78,8 +78,8 @@ Abschnitte 5a bis 5e, 4, 1c. Eine Runde mit Hell/Dunkel × DPI 100/150/200 %, da
 - [x] Globale Kürzel Strg+1 bis Strg+6, in Textfeldern kein Kürzel
 - [x] Einstellungen → Darstellung: Wie Windows/Hell/Dunkel, Umschalten zur Laufzeit
 - [x] Hilfe (5e): Optik in Hell/Dunkel und DPI 100/150/200 %
-- [x] Seitenleisten-Symbole auf Windows 10 (falls vorhanden)
-- [x] VM und Remotedesktop: GUI startet (wgpu oder glow) oder MessageBox
+- [ ] Seitenleisten-Symbole auf Windows 10 (falls vorhanden)
+- [ ] VM und Remotedesktop: GUI startet (wgpu oder glow) oder MessageBox
 
 ## 6. Block F: Geplante Läufe (Abschnitt 2)
 

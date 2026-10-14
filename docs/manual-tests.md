@@ -76,7 +76,7 @@ Vorbereitung: `cargo build --release`, dann `target\release\ordner-cleanup.exe` 
 - [x] Purge über „Quarantäne leeren“ (GUI) und `purge --older-than`: nur mit künstlich gealtertem `started` im Journal geprüft, nicht über den normalen Weg. Offen, bis ein frischer Lauf ohne Eingriff geleert werden kann (siehe Auffälligkeit 2).
 - [x] 100.000 Zeilen im Review-Fenster: Scrollen ohne Ruckeln. Mit 110.000 Zeilen in Ordnung: Laden, Suche, Alle abwählen. Leichtes Ruckeln beim schnellen Ziehen des Scrollbalkens, das Kriterium „ohne Ruckeln“ ist damit nicht erfüllt. Entscheiden, ob das akzeptiert wird (dann abhaken und das Kriterium umformulieren), siehe Auffälligkeit 4.
 - [x] DPI 150 % und 200 %: Text und Tabellen nicht abgeschnitten.
-- [x] VM und Remotedesktop: GUI startet (wgpu oder Rückfall glow), sonst erscheint die MessageBox mit Hinweis auf die CLI.
+- [ ] VM und Remotedesktop: GUI startet (wgpu oder Rückfall glow), sonst erscheint die MessageBox mit Hinweis auf die CLI.
 - [x] `netstat -ano` während die GUI läuft: kein lauschender Port, keine Verbindung des Prozesses (90 s lang alle 2 s gemessen, TCP und UDP, keine Kindprozesse).
 
 ## 5. GUI Teil B (Stufe 2)
@@ -136,7 +136,7 @@ Spec: [`features/gui-bedienung.md`](features/gui-bedienung.md). Mit einem frisch
 - [x] Einstellungen → „Darstellung“: Wie Windows / Hell / Dunkel wirken sofort und bleiben nach Neustart. „Wie Windows“ folgt dem Windows-Modus; Windows zur Laufzeit umstellen (Einstellungen → Personalisierung → Farben): die GUI zieht mit. Falls nicht, ist das der Rückfall aus dem Plan (Registry `AppsUseLightTheme`), bitte melden.
 - [x] Hell und Dunkel: Fehler (rot), Warnungen (gelb/braun), „Gültig“ (grün), Status-Texte und Score-Farben sind in beiden Modi lesbar; der Gefahr-Knopf (Quarantäne leeren, Löschen) hat in beiden Modi weißen Text auf dunkelrotem Grund.
 - [x] DPI 100 %, 150 %, 200 %: Karten, Kopfleiste, Review-Tabelle, Seitenleiste ohne abgeschnittenen Text; Symbole in der Seitenleiste scharf.
-- [x] Windows 10: Seitenleisten-Symbole (⌂ ◔ ✂ ↺ ⚙) erscheinen. Fehlt eines (leeres Kästchen), notieren; ohne `seguisym.ttf` erscheint die Seitenleiste ohne Symbole.
+- [ ] Windows 10: Seitenleisten-Symbole (⌂ ◔ ✂ ↺ ⚙) erscheinen. Fehlt eines (leeres Kästchen), notieren; ohne `seguisym.ttf` erscheint die Seitenleiste ohne Symbole.
 - [x] Review: Kopfzeile zeigt „Anwenden (N Einträge, X GB)“, bei Auswahl 0 ist der Knopf grau. Darunter steht „Nichts wird gelöscht. Dateien gehen in die Quarantäne und lassen sich n Tage lang zurückholen.“ mit den Tagen aus der Config (`quarantine_days` ändern und Plan neu öffnen). Bei Archiv-/Regel-Plänen lautet der Satz „… werden verschoben …“, bei „Leere Ordner“ „Entfernt werden nur leere Ordner …“.
 - [x] Review-Tabelle: zwischen Größe, Grund / Regel und Alter sind Trennlinien und Abstand sichtbar, in Hell und Dunkel; Scrollen durch 110.000 Zeilen ruckelt nicht stärker als vorher.
 - [x] Einstellungen → Regeln: Name, Ziel und die Felder darunter beginnen in derselben Spalte und enden bündig.
@@ -196,4 +196,4 @@ Nach Angabe des Nutzers sind die Blöcke Vorbereitung, A (OneDrive/Cloud-only), 
 
 ### 14.10.2026, Block E (GUI-Optik)
 
-Durchgang in Hell und Dunkel bei DPI 100/150/200 % ohne Beanstandung, bis auf: Eingabefelder waren schlecht erkennbar. Behoben mit kräftigerem Rand ruhender Felder (`theme::apply`, Grau 160 hell, 105 dunkel). Nicht gesondert geprüft: Windows-10-Symbole und VM/Remotedesktop, soweit nicht vorhanden.
+Durchgang in Hell und Dunkel bei DPI 100/150/200 % ohne Beanstandung, bis auf: Eingabefelder waren schlecht erkennbar. Behoben mit kräftigerem Rand ruhender Felder (`theme::apply`, Grau 160 hell, 105 dunkel). Nicht geprüft und weiter offen: Windows-10-Symbole, VM/Remotedesktop.
