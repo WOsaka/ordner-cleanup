@@ -83,11 +83,11 @@ Abschnitte 5a bis 5e, 4, 1c. Eine Runde mit Hell/Dunkel × DPI 100/150/200 %, da
 
 ## 6. Block F: Geplante Läufe (Abschnitt 2)
 
-- [ ] `schedule add <profil> --daily 09:00`, `schedule list`, Aufgabenplanung zeigt sie
-- [ ] `schtasks /run`: Lauf in `runs`, Bericht und Pläne unter `plans\<profil>`
-- [ ] Toast bei mehr neuen Dateien „zum Prüfen“
-- [ ] Parallel zu GUI-Scan: „Ein anderer Scan läuft“, Lauf als übersprungen
-- [ ] `schedule remove`
+- [x] `schedule add <profil> --daily 09:00`, `schedule list`, Aufgabenplanung zeigt sie
+- [x] `schtasks /run`: Lauf in `runs`, Bericht und Pläne unter `plans\<profil>`
+- [x] Toast bei mehr neuen Dateien „zum Prüfen“
+- [x] Parallel zu GUI-Scan: „Ein anderer Scan läuft“, Lauf als übersprungen
+- [x] `schedule remove`
 
 ## 7. Block G: Klassifikation und LLM (Abschnitt 3)
 

@@ -52,11 +52,11 @@ Vorbereitung: `cargo build --release`, dann `target\release\ordner-cleanup.exe` 
 
 ## 2. Geplante Läufe (Phase 5)
 
-- [ ] `schedule add <profil> --daily 09:00`, `schedule list` zeigt die Aufgabe, in der Windows-Aufgabenplanung ist sie sichtbar.
-- [ ] Aufgabe manuell starten (`schtasks /run`): Lauf erscheint in `runs`/Übersicht, Bericht und Pläne unter `plans\<profil>`.
-- [ ] Toast erscheint, wenn mehr neue Dateien „zum Prüfen“ da sind als beim letzten Lauf.
-- [ ] Geplanter Lauf parallel zu einem GUI-Scan: GUI meldet „Ein anderer Scan läuft“, Lauf wird als übersprungen protokolliert.
-- [ ] `schedule remove` räumt die Aufgabe weg.
+- [x] `schedule add <profil> --daily 09:00`, `schedule list` zeigt die Aufgabe, in der Windows-Aufgabenplanung ist sie sichtbar.
+- [x] Aufgabe manuell starten (`schtasks /run`): Lauf erscheint in `runs`/Übersicht, Bericht und Pläne unter `plans\<profil>`.
+- [x] Toast erscheint, wenn mehr neue Dateien „zum Prüfen“ da sind als beim letzten Lauf.
+- [x] Geplanter Lauf parallel zu einem GUI-Scan: GUI meldet „Ein anderer Scan läuft“, Lauf wird als übersprungen protokolliert.
+- [x] `schedule remove` räumt die Aufgabe weg.
 
 ## 3. Klassifikation (Phase 6a)
 
@@ -197,3 +197,7 @@ Nach Angabe des Nutzers sind die Blöcke Vorbereitung, A (OneDrive/Cloud-only), 
 ### 14.10.2026, Block E (GUI-Optik)
 
 Durchgang in Hell und Dunkel bei DPI 100/150/200 % ohne Beanstandung, bis auf: Eingabefelder waren schlecht erkennbar. Behoben mit kräftigerem Rand ruhender Felder (`theme::apply`, Grau 160 hell, 105 dunkel). Nicht geprüft und weiter offen: Windows-10-Symbole, VM/Remotedesktop.
+
+### 14.10.2026, Block F (geplante Läufe)
+
+`schedule add/list/remove`, `schtasks /run` (Lauf in `runs`, Bericht unter `reports\downloads`; das Profil hatte `plans = keine`, daher keine Pläne), Toast und Parallellauf mit GUI-Scan (`skipped-locked`, CLI-Test mit Exit-Code 3 bestätigt). Hinweis: Ein Parallellauf-Test mit GUI unter anderem `ORDNER_CLEANUP_HOME` prüft nichts, weil die geplante Aufgabe die Variable nicht erbt und eine andere `scan.lock` nutzt. In Git-Bash `schtasks` mit `MSYS_NO_PATHCONV=1` aufrufen.
